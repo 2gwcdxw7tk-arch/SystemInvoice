@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 
 import { env } from "@/lib/env";
 import { query } from "@/lib/db/postgres";
+import type { CashRegisterAssignment } from "@/lib/db/cash-registers";
+import { listCashRegistersForAdmin } from "@/lib/db/cash-registers";
 
 export type AdminUser = {
   id: number;
@@ -33,6 +35,13 @@ export function computePinSignature(pin: string): string {
   return crypto.createHash("sha256").update(pin).digest("hex");
 }
 
+export type AdminSessionContext = {
+  roles: string[];
+  permissions: string[];
+  cashRegisters: CashRegisterAssignment[];
+  defaultCashRegister: CashRegisterAssignment | null;
+};
+
 type MockAuditEntry = {
   loginType: "admin" | "waiter";
   identifier: string;
@@ -57,7 +66,7 @@ type MockWaiterRecord = WaiterUser & {
 type MockContext = {
   adminCredentials: { username: string; password: string };
   waiterCredentials: { code: string; pin: string };
-  admins: Array<AdminUser & { passwordHash: string }>;
+  admins: Array<AdminUser & { passwordHash: string; roles: string[]; permissions: string[] }>;
   waiters: MockWaiterRecord[];
   auditLog: MockAuditEntry[];
 };
@@ -83,6 +92,8 @@ const mockContext: MockContext | null = env.useMockData
             username: normalizeIdentifier(adminCredentials.username),
             displayName: "Administradora Demo",
             passwordHash: bcrypt.hashSync(adminCredentials.password, 10),
+            roles: ["FACTURADOR"],
+            permissions: ["cash.register.open", "cash.register.close", "invoice.issue", "cash.report.view"],
           },
         ],
         waiters: [
@@ -200,11 +211,47 @@ async function upsertLoginAudit(params: {
   );
 }
 
+export type VerifyAdminCredentialsResult = {
+  success: boolean;
+  user?: AdminUser;
+  message: string;
+  context?: AdminSessionContext;
+};
+
+function dedupeUpper(values: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    const code = value.trim().toUpperCase();
+    if (!code) continue;
+    if (!seen.has(code)) {
+      seen.add(code);
+      normalized.push(code);
+    }
+  }
+  return normalized;
+}
+
+function dedupePermissions(values: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    const code = value.trim();
+    if (!code) continue;
+    const key = code.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.push(code);
+    }
+  }
+  return normalized;
+}
+
 export async function verifyAdminCredentials(
   username: string,
   password: string,
   meta: { ipAddress?: string | null; userAgent?: string | null }
-): Promise<{ success: boolean; user?: AdminUser; message: string }> {
+): Promise<VerifyAdminCredentialsResult> {
   if (env.useMockData && mockContext) {
     const normalizedUsername = normalizeIdentifier(username);
     const record = mockContext.admins.find((admin) => admin.username === normalizedUsername);
@@ -236,12 +283,23 @@ export async function verifyAdminCredentials(
       return { success: false, message: "Credenciales no válidas" };
     }
 
+    const cashRegisters = await listCashRegistersForAdmin(record.id);
+    const defaultCashRegister = cashRegisters.find((register) => register.isDefault) ?? cashRegisters[0] ?? null;
+    const roles = dedupeUpper(record.roles ?? []);
+    const permissions = dedupePermissions(record.permissions ?? []);
+
     return {
       success: true,
       user: {
         id: record.id,
         username: record.username,
         displayName: record.displayName,
+      },
+      context: {
+        roles,
+        permissions,
+        cashRegisters,
+        defaultCashRegister,
       },
       message: "Acceso concedido",
     };
@@ -301,12 +359,42 @@ export async function verifyAdminCredentials(
     query("UPDATE app.admin_users SET last_login_at = NOW() WHERE id = $1", [record.id]),
   ]);
 
+  const cashRegisters = await listCashRegistersForAdmin(record.id);
+  const defaultCashRegister = cashRegisters.find((register) => register.isDefault) ?? cashRegisters[0] ?? null;
+
+  const [rolesResult, permissionsResult] = await Promise.all([
+    query<{ code: string }>(
+      `SELECT DISTINCT UPPER(r.code) AS code
+         FROM app.admin_user_roles aur
+         INNER JOIN app.roles r ON r.id = aur.role_id AND r.is_active = TRUE
+         WHERE aur.admin_user_id = $1`,
+      [record.id]
+    ),
+    query<{ permission_code: string }>(
+      `SELECT DISTINCT rp.permission_code
+         FROM app.role_permissions rp
+         INNER JOIN app.admin_user_roles aur ON aur.role_id = rp.role_id
+         INNER JOIN app.roles r ON r.id = aur.role_id AND r.is_active = TRUE
+         WHERE aur.admin_user_id = $1`,
+      [record.id]
+    ),
+  ]);
+
+  const roles = dedupeUpper(rolesResult.rows.map((row) => row.code));
+  const permissions = dedupePermissions(permissionsResult.rows.map((row) => row.permission_code));
+
   return {
     success: true,
     user: {
       id: record.id,
       username: record.username,
       displayName: record.display_name,
+    },
+    context: {
+      roles,
+      permissions,
+      cashRegisters,
+      defaultCashRegister,
     },
     message: "Acceso concedido",
   };

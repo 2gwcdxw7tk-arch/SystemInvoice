@@ -36,29 +36,39 @@ Plataforma de facturación electrónica construida con Next.js 15 (App Router) y
 
 La conexión se maneja desde `src/lib/db/postgres.ts` usando un pool global.
 
-Variables importantes (`.env.local`):
+Consulta la sección **Variables de entorno** para conocer el propósito de cada ajuste y sus valores sugeridos.
 
-```
-NEXT_PUBLIC_COMPANY_NAME="Facturador POS"
-NEXT_PUBLIC_COMPANY_ACRONYM=FAC
-NEXT_PUBLIC_LOCAL_CURRENCY_CODE=MXN
-NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL=$
-NEXT_PUBLIC_FOREIGN_CURRENCY_CODE=USD
-NEXT_PUBLIC_FOREIGN_CURRENCY_SYMBOL=$
-NEXT_PUBLIC_VAT_RATE=15 # IVA configurable: usa 15 o 0.15; default 15% si se omite (checkbox aplicar/exento)
-NEXT_PUBLIC_SERVICE_RATE=10 # Servicio (%): usa 10 o 0.10; default 10% si se omite (toggle con/sin cargo)
-DEFAULT_PRICE_LIST_CODE=BASE # Lista de precios por defecto para cálculo de precios vigentes
-NEXT_APP_URL="http://localhost:3000" # URL base usada para redirecciones de login/logout
-DB_CONNECTION_STRING="postgres://postgres:super_seguro@localhost:5432/facturador"
-MOCK_DATA=false
-SESSION_SECRET="cambia-esta-clave-super-secreta-32caracteres"
-```
+Para inicializar la base de datos desde cero, importa `database/schema_master.sql` en tu instancia de PostgreSQL (ejemplo: `psql -f database/schema_master.sql`).
 
 El endpoint `GET /api/health` ejecuta un `SELECT 1` para validar la conectividad.
 
+## Variables de entorno
+
+| Variable | Descripción | Ejemplo |
+| --- | --- | --- |
+| `NEXT_PUBLIC_COMPANY_NAME` | Nombre comercial mostrado en la interfaz y en tickets | `Facturador POS` |
+| `NEXT_PUBLIC_COMPANY_ACRONYM` | Sigla corta para badges y encabezados | `FAC` |
+| `NEXT_APP_URL` | URL base usada en redirecciones, enlaces absolutos y correos | `http://localhost:3000` |
+| `NEXT_PUBLIC_LOCAL_CURRENCY_CODE` | Código ISO de la moneda principal | `MXN` |
+| `NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL` | Símbolo de moneda principal | `$` |
+| `NEXT_PUBLIC_FOREIGN_CURRENCY_CODE` | Código ISO de la moneda secundaria | `USD` |
+| `NEXT_PUBLIC_FOREIGN_CURRENCY_SYMBOL` | Símbolo de moneda secundaria | `$` |
+| `NEXT_PUBLIC_VAT_RATE` | IVA por defecto (acepta `0.16` o `16`) | `15` |
+| `NEXT_PUBLIC_SERVICE_RATE` | Cargo de servicio por defecto (acepta `0.10` o `10`) | `10` |
+| `DEFAULT_PRICE_LIST_CODE` | Lista de precios a usar en catálogos y facturas | `BASE` |
+| `DEFAULT_SALES_WAREHOUSE_CODE` | Almacén por defecto para consumos de facturación (fallback para artículos sin almacén asignado) | `PRINCIPAL` |
+| `DB_CONNECTION_STRING` | Cadena de conexión PostgreSQL con esquema `app` | `postgres://postgres:super_seguro@localhost:5432/facturador` |
+| `MOCK_DATA` | Activa modo demo en memoria (sin persistencia real) | `false` |
+| `SESSION_SECRET` | Clave aleatoria (>=32 caracteres) para firmar cookies | `cambia-esta-clave-super-secreta-32caracteres` |
+| `NODE_ENV` | Entorno de ejecución (afecta habilitación de Next.js) | `development` |
+
+- Tanto `NEXT_PUBLIC_VAT_RATE` como `NEXT_PUBLIC_SERVICE_RATE` aceptan valores en porcentaje (`15`) o en forma decimal (`0.15`).
+- Genera `SESSION_SECRET` con una cadena segura antes de desplegar a producción.
+- Cuando `MOCK_DATA=true`, toda la información se mantiene en memoria y no se escriben registros en PostgreSQL.
+
 ### Endpoint de facturación (`POST /api/invoices`)
 
-Permite persistir una factura con múltiples formas de pago. Si `MOCK_DATA=true`, la información se almacena en memoria; caso contrario se escribe en las tablas `app.invoices` y `app.invoice_payments` (ver `database/schema_master.sql`).
+Permite persistir una factura con múltiples formas de pago siempre que el usuario facturador tenga una apertura de caja activa. Si `MOCK_DATA=true`, la información se almacena en memoria; caso contrario se escribe en las tablas `app.invoices`, `app.invoice_items`, `app.invoice_payments` y queda vinculada a la sesión de caja mediante `cash_register_session_id` (ver `database/schema_master.sql`).
 
 Contrato JSON (actualizado con cliente e items):
 
@@ -94,13 +104,26 @@ Respuesta exitosa:
 
 Validaciones clave:
 - `invoice_number` único.
+- El endpoint devuelve `409` si el administrador tiene rol `FACTURADOR` pero no existe una apertura de caja `OPEN` asociada a su usuario.
 - Suma de `payments.amount` puede ser mayor, igual o menor que `total_amount` (permite cambio o saldo). El cálculo del cambio/pending balance se realiza en el cliente.
 - `vat_rate` acepta porcentaje decimal (ej. 0.15) generado desde `NEXT_PUBLIC_VAT_RATE` y puede ser 0 si el cliente es exento (checkbox UI).
 - Servicio se calcula en el cliente con `NEXT_PUBLIC_SERVICE_RATE` cuando se activa el toggle "Con cargo".
 - `customer_name` y `customer_tax_id` permiten personalizar la identificación fiscal en la factura y ticket.
 - `items` guarda el desglose de líneas en `app.invoice_items` (cantidad, descripción, precio unitario, total). 
+- Las facturas originadas desde `/facturacion` quedan asociadas a `cash_register_id`, `cash_register_session_id` e `issuer_admin_user_id` para reportes de jornada.
 
 Errores devuelven `{ success: false, message: string }` con estado 400 (validación) o 500 (error interno).
+
+### Gestión de cajas y jornadas (`/api/cajas/*`)
+
+Los usuarios con rol `FACTURADOR` deben abrir una caja antes de emitir facturas. El flujo completo se expone vía endpoints protegidos:
+
+- `GET /api/cajas/sesion-activa`: devuelve la caja asignada, la apertura en curso (si existe) y el listado de cajas autorizadas para el usuario actual. El endpoint se usa en la UI para mostrar el banner de sesión o desplegar el modal de apertura.
+- `POST /api/cajas/aperturas`: abre una jornada de caja. Requiere `cash_register_code`, `opening_amount` y notas opcionales. Valida que no existan otras sesiones `OPEN` para el usuario ni para la caja objetivo.
+- `POST /api/cajas/cierres`: cierra la sesión activa capturando conteo físico por método de pago. Calcula diferencias contra los montos de sistema, persiste el resumen en `app.cash_register_sessions` y normaliza el desglose en `app.cash_register_session_payments`.
+- `GET /api/cajas/cierres/{sessionId}/reporte?format=csv|json`: genera un reporte descargable con las ventas, formas de pago, diferencias y detalle de facturas asociadas a la jornada.
+
+Todos los endpoints respetan `MOCK_DATA`: en modo demo se utiliza almacenamiento en memoria y los cálculos se realizan en estructuras locales.
 
 ### Endpoint de traspasos (`/api/inventario/traspasos`)
 
@@ -134,6 +157,15 @@ La respuesta exitosa incluye `transaction_id` y `transaction_code`. Las validaci
 - Al cerrar sesión (`/logout`) se invalida la cookie y se redirige a `/?logout=1`. Puedes mostrar un mensaje amigable usando ese query param en la pantalla de inicio.
 - La pantalla de login respeta el parámetro `redirect`: tras autenticarse enviará al usuario a la ruta originalmente solicitada.
 
+## Flujo de comandas y mesas
+
+- Los meseros trabajan desde `/mesas`, donde cada envío consolida los productos servidos mediante `syncWaiterOrderForTable` (`src/lib/db/orders.ts`). La función crea o actualiza el registro en `app.orders`/`app.order_items` y sincroniza el estado táctil en `app.table_state`.
+- Las mesas cambian automáticamente entre `normal`, `facturado` y `anulado` usando `setTableOrderStatus` (`src/lib/db/tables.ts`), lo que mantiene alineados tablero, vista de meseros y facturación.
+- El módulo de facturación (`src/app/facturacion/page.tsx`) distingue flujos por `mode`: `mode=direct` para facturar sin pedido y `mode=order` para cobrar comandas abiertas. Esta diferenciación evita crear rutas nuevas y mantiene la navegación consistente.
+- Al generar una factura (`POST /api/invoices`), `markOrderAsInvoiced` marca la comanda como `INVOICED`, almacena la fecha de cierre y libera la mesa para nuevos turnos. El detalle se conserva como histórico para reimpresiones y reportes.
+- Las validaciones de front, back y base de datos están alineadas: cantidades positivas, IVA opcional, disponibilidad de mesa y, ahora, verificación de apertura de caja para el rol facturador. Puedes repasar `tests/api/invoices.test.md` para ejemplos de payload y escenarios de caja.
+- Cada factura genera un movimiento de inventario tipo consumo con referencia al folio. Los artículos `KIT` se descargan expandiendo sus componentes; si el kit no maneja stock propio, solo se afectan las existencias de cada componente en el almacén configurado (o en `DEFAULT_SALES_WAREHOUSE_CODE` cuando el artículo no define uno).
+
 ## Modo mock (datos en memoria)
 
 Para realizar pruebas sin depender de una instancia de PostgreSQL, activa el modo simulado configurando `MOCK_DATA=true` en `.env.local`.
@@ -146,6 +178,7 @@ Credenciales disponibles en modo mock:
 | Mesero         | PIN de acceso              | `4321`     |
 
 En este modo, las autenticaciones se resuelven en memoria y los registros de auditoría se guardan localmente durante la ejecución, lo que permite pruebas rápidas sin afectar la base de datos real.
+Las comandas, facturas y estados de mesa se conservan únicamente mientras el proceso de Node.js permanece activo; reiniciar el servidor limpia el historial.
 El guardado de sesión funciona igual: aunque el origen de datos sea simulado, las rutas protegidas seguirán requiriendo una cookie válida.
 
 ## Monedas y tipo de cambio

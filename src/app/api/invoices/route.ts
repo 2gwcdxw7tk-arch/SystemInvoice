@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { insertInvoice } from "@/lib/db/invoices";
+import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
+import { getActiveCashRegisterSessionByAdmin } from "@/lib/db/cash-registers";
 
 const paymentSchema = z.object({
   method: z.enum(["CASH", "CARD", "TRANSFER", "OTHER"]),
@@ -30,14 +32,39 @@ const invoiceSchema = z.object({
   customer_name: z.string().trim().max(150).nullable().optional(),
   customer_tax_id: z.string().trim().max(40).nullable().optional(),
   items: z.array(z.object({
+    article_code: z.string().trim().min(1).max(40).nullable().optional(),
     description: z.string().trim().min(1).max(200),
     quantity: z.number().positive(),
     unit_price: z.number().nonnegative(),
+    unit: z.enum(["RETAIL", "STORAGE"]).optional(),
   })).optional().default([]),
   payments: z.array(paymentSchema).default([]),
 });
 
 export async function POST(request: NextRequest) {
+  const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  const session = await parseSessionCookie(rawSession);
+  if (!session || session.role !== "admin") {
+    return NextResponse.json({ success: false, message: "Sesión no válida" }, { status: 401 });
+  }
+
+  const roles = Array.isArray(session.roles) ? session.roles.map((role) => role.trim().toUpperCase()) : [];
+  const permissions = Array.isArray(session.permissions) ? session.permissions.map((perm) => perm.trim().toLowerCase()) : [];
+  const isFacturador = roles.includes("FACTURADOR") || permissions.includes("invoice.issue");
+  if (!isFacturador) {
+    return NextResponse.json({ success: false, message: "No tienes permisos para facturar" }, { status: 403 });
+  }
+
+  const issuerAdminId = Number(session.sub);
+  if (!Number.isInteger(issuerAdminId) || issuerAdminId <= 0) {
+    return NextResponse.json({ success: false, message: "Sesión inválida" }, { status: 401 });
+  }
+
+  const activeSession = await getActiveCashRegisterSessionByAdmin(issuerAdminId);
+  if (!activeSession) {
+    return NextResponse.json({ success: false, message: "Debes abrir una caja antes de facturar" }, { status: 409 });
+  }
+
   const body = await request.json().catch(() => null);
   const parsed = invoiceSchema.safeParse(body);
   if (!parsed.success) {
@@ -64,8 +91,18 @@ export async function POST(request: NextRequest) {
       notes: payload.notes ?? null,
       customer_name: payload.customer_name ?? null,
       customer_tax_id: payload.customer_tax_id ?? null,
-      items: payload.items?.map(i => ({ description: i.description, quantity: i.quantity, unit_price: i.unit_price })) ?? [],
+      items: payload.items?.map((i) => ({
+        article_code: i.article_code ? i.article_code.toUpperCase() : null,
+        description: i.description,
+        quantity: i.quantity,
+        unit_price: i.unit_price,
+        unit: i.unit ?? "RETAIL",
+      })) ?? [],
       payments: payload.payments.map((p) => ({ method: p.method, amount: p.amount, reference: p.reference ?? null })),
+      issuer_admin_user_id: issuerAdminId,
+      cash_register_id: activeSession.cashRegister.cashRegisterId,
+      cash_register_session_id: activeSession.id,
+      cashRegisterWarehouseCode: activeSession.cashRegister.warehouseCode,
     });
 
     return NextResponse.json({ id: result.id, invoice_number: result.invoice_number }, { status: 201 });

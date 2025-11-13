@@ -60,11 +60,29 @@ export async function POST(request: NextRequest) {
 
   if (payload.role === "admin") {
     const result = await verifyAdminCredentials(payload.username!, payload.password!, meta);
+    const defaultCashRegisterAssignment = result.context?.defaultCashRegister ?? null;
+    const defaultCashRegister = defaultCashRegisterAssignment
+      ? {
+          id: defaultCashRegisterAssignment.cashRegisterId,
+          code: defaultCashRegisterAssignment.cashRegisterCode,
+          name: defaultCashRegisterAssignment.cashRegisterName,
+          warehouseCode: defaultCashRegisterAssignment.warehouseCode,
+          warehouseName: defaultCashRegisterAssignment.warehouseName,
+        }
+      : null;
     const response = NextResponse.json(
       {
         success: result.success,
         message: result.message,
-        user: result.user,
+        user: result.user
+          ? {
+              ...result.user,
+              roles: result.context?.roles ?? [],
+              permissions: result.context?.permissions ?? [],
+              defaultCashRegister: defaultCashRegisterAssignment,
+              cashRegisters: result.context?.cashRegisters ?? [],
+            }
+          : undefined,
       },
       { status: result.success ? 200 : 401 }
     );
@@ -74,6 +92,9 @@ export async function POST(request: NextRequest) {
         sub: String(result.user.id),
         role: "admin",
         name: result.user.displayName ?? result.user.username,
+        roles: result.context?.roles,
+        permissions: result.context?.permissions,
+        defaultCashRegister,
       });
 
       response.cookies.set({

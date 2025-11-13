@@ -24,6 +24,7 @@ const envSchema = z
     NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL: z.string().trim().optional(),
     NEXT_PUBLIC_FOREIGN_CURRENCY_CODE: z.string().trim().optional(),
     NEXT_PUBLIC_FOREIGN_CURRENCY_SYMBOL: z.string().trim().optional(),
+    DEFAULT_SALES_WAREHOUSE_CODE: z.string().trim().optional(),
     SESSION_SECRET: z
       .string()
       .min(32, "SESSION_SECRET debe contener al menos 32 caracteres"),
@@ -55,6 +56,7 @@ const envSchema = z
   const localCurrencySymbol = resolveSymbol(value.NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL, "$");
     const foreignCurrencyCode = resolveCode(value.NEXT_PUBLIC_FOREIGN_CURRENCY_CODE, "USD");
     const foreignCurrencySymbol = resolveSymbol(value.NEXT_PUBLIC_FOREIGN_CURRENCY_SYMBOL, "$");
+    const defaultSalesWarehouseCode = resolveCode(value.DEFAULT_SALES_WAREHOUSE_CODE, "");
 
     const normalizedAppUrl = value.NEXT_APP_URL.replace(/\/+$/, "");
 
@@ -79,6 +81,7 @@ const envSchema = z
         baseCurrencyCode: localCurrencyCode,
         quoteCurrencyCode: foreignCurrencyCode,
       },
+      defaultSalesWarehouseCode: defaultSalesWarehouseCode.length > 0 ? defaultSalesWarehouseCode : null,
       company: {
         name: value.NEXT_PUBLIC_COMPANY_NAME,
         acronym:

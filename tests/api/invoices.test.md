@@ -6,7 +6,17 @@ Estos pasos ayudan a validar el flujo de guardado de facturas y pagos múltiples
    - Copia `.env.example` a `.env.local`.
    - Establece `MOCK_DATA=true`.
    - `npm run dev`.
-2. Envía una solicitud POST:
+2. Abre una sesión de caja como administradora (`POST /api/cajas/aperturas`) con un payload similar a:
+
+```
+{
+  "cash_register_code": "CAJA-01",
+  "opening_amount": 500,
+  "opening_notes": "Apertura de pruebas"
+}
+```
+
+3. Envía una solicitud POST:
 
 ```
 POST http://localhost:3000/api/invoices
@@ -24,10 +34,15 @@ Content-Type: application/json
   "vat_rate": 0.16,
   "total_amount": 116.00,
   "currency_code": "MXN",
+  "items": [
+    { "article_code": "CAF-001", "description": "Café americano", "quantity": 2, "unit_price": 35.00, "unit": "RETAIL" },
+    { "article_code": "KIT-DESAYUNO", "description": "Kit desayuno ejecutivo", "quantity": 1, "unit_price": 80.00 }
+  ],
   "payments": [{ "method": "CASH", "amount": 116.00 }]
 }
 ```
 
-3. Espera respuesta 201 con `{ id, invoice_number }`.
-4. Si proporcionaste `origin_order_id`, verifica que el pedido quede con estado `facturado` (`GET /api/orders` ya no debe devolverlo).
-5. Cambia a `MOCK_DATA=false` y configura `DB_CONNECTION_STRING` para validar inserciones reales.
+4. Espera respuesta 201 con `{ id, invoice_number }`.
+5. Si omites la apertura en el paso 2 recibirás 409 con el mensaje `"Debes abrir una caja antes de facturar"`.
+6. Si proporcionaste `origin_order_id`, verifica que el pedido quede con estado `facturado` (`GET /api/orders` ya no debe devolverlo).
+7. Cambia a `MOCK_DATA=false` y configura `DB_CONNECTION_STRING` para validar inserciones reales.

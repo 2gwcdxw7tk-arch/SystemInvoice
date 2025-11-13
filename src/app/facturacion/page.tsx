@@ -35,6 +35,7 @@ import type { LucideIcon } from "lucide-react";
    name: string;
    qty: number;
    unitPrice: number;
+    unit?: "RETAIL" | "STORAGE";
    modifiers?: string[];
    notes?: string | null;
  }
@@ -1579,6 +1580,7 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
                 name: item.name,
                 qty: Number(item.quantity),
                 unitPrice: Number(item.unitPrice),
+                unit: "RETAIL",
                 modifiers: item.modifiers ?? [],
                 notes: item.notes ?? null,
               }))
@@ -1896,6 +1898,7 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
             name: art.name ?? art.article_code ?? "Artículo",
             qty: qtyNumber,
             unitPrice: Number(art.price!.base_price) || 0,
+            unit: "RETAIL",
           },
         ],
       }));
@@ -2032,7 +2035,16 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
       customer_name: customerName.trim() || null,
       customer_tax_id: customerTaxId.trim() || null,
       notes: activeNotes.trim() ? activeNotes.trim() : null,
-      items: items.map(i => ({ description: i.name, quantity: i.qty, unit_price: i.unitPrice })),
+      items: items.map((item) => {
+        const code = item.articleCode?.trim();
+        return {
+          article_code: code && code.length > 0 ? code.toUpperCase() : null,
+          description: item.name,
+          quantity: item.qty,
+          unit_price: item.unitPrice,
+          unit: item.unit ?? "RETAIL",
+        };
+      }),
       payments: payments
         .filter(p => (Number(String(p.amount).replace(/,/g, ".")) || 0) > 0)
         .map(p => ({

@@ -176,6 +176,14 @@ CREATE TABLE IF NOT EXISTS app.invoices (
 CREATE INDEX IF NOT EXISTS ix_invoices_origin_order
   ON app.invoices (origin_order_id);
 
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS issuer_admin_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS cash_register_id INTEGER REFERENCES app.cash_registers(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS cash_register_session_id BIGINT REFERENCES app.cash_register_sessions(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS ix_invoices_cash_register_session
+  ON app.invoices (cash_register_session_id);
+
 -- ========================================================
 -- Tabla: app.invoice_payments
 -- ========================================================
@@ -258,6 +266,160 @@ VALUES
 ON CONFLICT (code) DO NOTHING;
 
 -- ========================================================
+-- Tabla: app.cash_registers (cajas de facturación)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.cash_registers (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code VARCHAR(30) NOT NULL UNIQUE,
+  name VARCHAR(120) NOT NULL,
+  warehouse_id INTEGER NOT NULL REFERENCES app.warehouses(id),
+  allow_manual_warehouse_override BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  notes VARCHAR(250),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_cash_registers_touch_updated_at ON app.cash_registers;
+CREATE TRIGGER trg_cash_registers_touch_updated_at
+BEFORE UPDATE ON app.cash_registers
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_cash_registers_active
+  ON app.cash_registers (is_active) INCLUDE (code, warehouse_id);
+
+-- ========================================================
+-- Tabla: app.cash_register_users (asignación de cajas a usuarios admin)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.cash_register_users (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  cash_register_id INTEGER NOT NULL REFERENCES app.cash_registers(id) ON DELETE CASCADE,
+  admin_user_id INTEGER NOT NULL REFERENCES app.admin_users(id) ON DELETE CASCADE,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (cash_register_id, admin_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_cash_register_users_admin
+  ON app.cash_register_users (admin_user_id, is_default DESC);
+
+-- ========================================================
+-- Tabla: app.cash_register_sessions (aperturas/cierres de caja)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.cash_register_sessions (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  cash_register_id INTEGER NOT NULL REFERENCES app.cash_registers(id) ON DELETE RESTRICT,
+  admin_user_id INTEGER NOT NULL REFERENCES app.admin_users(id) ON DELETE RESTRICT,
+  opening_amount NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (opening_amount >= 0),
+  opening_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  opening_notes VARCHAR(400),
+  closing_amount NUMERIC(18,2),
+  closing_at TIMESTAMPTZ,
+  closing_notes VARCHAR(400),
+  status VARCHAR(12) NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED', 'CANCELLED')),
+  closing_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
+  totals_snapshot JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_cash_register_sessions_touch_updated_at ON app.cash_register_sessions;
+CREATE TRIGGER trg_cash_register_sessions_touch_updated_at
+BEFORE UPDATE ON app.cash_register_sessions
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_register_sessions_open_by_register
+  ON app.cash_register_sessions (cash_register_id)
+  WHERE status = 'OPEN';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_register_sessions_open_by_user
+  ON app.cash_register_sessions (admin_user_id)
+  WHERE status = 'OPEN';
+
+CREATE INDEX IF NOT EXISTS ix_cash_register_sessions_register
+  ON app.cash_register_sessions (cash_register_id, status);
+
+-- ========================================================
+-- Tabla: app.cash_register_session_payments (resumen por método)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.cash_register_session_payments (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  session_id BIGINT NOT NULL REFERENCES app.cash_register_sessions(id) ON DELETE CASCADE,
+  payment_method VARCHAR(40) NOT NULL,
+  expected_amount NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (expected_amount >= 0),
+  reported_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+  difference_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+  transaction_count INTEGER NOT NULL DEFAULT 0 CHECK (transaction_count >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (session_id, payment_method)
+);
+
+CREATE INDEX IF NOT EXISTS ix_cash_register_session_payments_session
+  ON app.cash_register_session_payments (session_id);
+
+-- ========================================================
+-- Tabla: app.roles y asignación de permisos
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.roles (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code VARCHAR(40) NOT NULL UNIQUE,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(250),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_roles_touch_updated_at ON app.roles;
+CREATE TRIGGER trg_roles_touch_updated_at
+BEFORE UPDATE ON app.roles
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE TABLE IF NOT EXISTS app.role_permissions (
+  role_id INTEGER NOT NULL REFERENCES app.roles(id) ON DELETE CASCADE,
+  permission_code VARCHAR(80) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (role_id, permission_code)
+);
+
+CREATE INDEX IF NOT EXISTS ix_role_permissions_permission
+  ON app.role_permissions (permission_code);
+
+CREATE TABLE IF NOT EXISTS app.admin_user_roles (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  admin_user_id INTEGER NOT NULL REFERENCES app.admin_users(id) ON DELETE CASCADE,
+  role_id INTEGER NOT NULL REFERENCES app.roles(id) ON DELETE CASCADE,
+  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (admin_user_id, role_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_admin_user_roles_admin
+  ON app.admin_user_roles (admin_user_id, is_primary DESC);
+
+INSERT INTO app.roles (code, name, description, is_active)
+SELECT 'FACTURADOR', 'Facturador POS', 'Puede aperturar y cerrar caja además de emitir facturas en punto de venta', TRUE
+WHERE NOT EXISTS (SELECT 1 FROM app.roles WHERE code = 'FACTURADOR');
+
+WITH role_target AS (
+  SELECT id FROM app.roles WHERE code = 'FACTURADOR' LIMIT 1
+)
+INSERT INTO app.role_permissions (role_id, permission_code)
+SELECT rt.id, perms.permission_code
+FROM role_target rt
+JOIN (VALUES
+  ('cash.register.open'),
+  ('cash.register.close'),
+  ('invoice.issue'),
+  ('cash.report.view')
+) AS perms(permission_code) ON TRUE
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM app.role_permissions rp
+  WHERE rp.role_id = rt.id AND rp.permission_code = perms.permission_code
+);
+
+-- ========================================================
 -- Tabla: app.articles
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.articles (
@@ -291,6 +453,41 @@ FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 
 CREATE INDEX IF NOT EXISTS ix_articles_classification
   ON app.articles (classification_full_code) INCLUDE (name);
+
+-- ========================================================
+-- Tabla: app.article_warehouses (asociación artículo-bodega)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.article_warehouses (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  article_id BIGINT NOT NULL REFERENCES app.articles(id) ON DELETE CASCADE,
+  warehouse_id INTEGER NOT NULL REFERENCES app.warehouses(id) ON DELETE CASCADE,
+  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (article_id, warehouse_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_article_warehouses_primary
+  ON app.article_warehouses (article_id)
+  WHERE is_primary = TRUE;
+
+CREATE INDEX IF NOT EXISTS ix_article_warehouses_lookup
+  ON app.article_warehouses (warehouse_id, article_id);
+
+-- ========================================================
+-- Tabla: app.warehouse_stock (existencias consolidadas por bodega)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.warehouse_stock (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  article_id BIGINT NOT NULL REFERENCES app.articles(id) ON DELETE CASCADE,
+  warehouse_id INTEGER NOT NULL REFERENCES app.warehouses(id) ON DELETE CASCADE,
+  quantity_retail NUMERIC(30,6) NOT NULL DEFAULT 0 CHECK (quantity_retail >= 0),
+  quantity_storage NUMERIC(30,6) NOT NULL DEFAULT 0 CHECK (quantity_storage >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (article_id, warehouse_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_warehouse_stock_wh
+  ON app.warehouse_stock (warehouse_id, article_id);
 
 -- ========================================================
 -- Tabla: app.inventory_alerts

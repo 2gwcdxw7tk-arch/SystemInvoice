@@ -12,6 +12,15 @@ export const SESSION_DURATION_MS = 1000 * 60 * 60 * 12; // 12 horas
 export type SessionPayload = {
   sub: string;
   role: "admin" | "waiter";
+  roles?: string[];
+  permissions?: string[];
+  defaultCashRegister?: {
+    id: number;
+    code: string;
+    name: string;
+    warehouseCode: string;
+    warehouseName: string;
+  } | null;
   name?: string | null;
   exp: number;
   createdAt: number;
@@ -54,6 +63,15 @@ export async function createSessionCookie(params: {
   sub: string;
   role: "admin" | "waiter";
   name?: string | null;
+  roles?: string[];
+  permissions?: string[];
+  defaultCashRegister?: {
+    id: number;
+    code: string;
+    name: string;
+    warehouseCode: string;
+    warehouseName: string;
+  } | null;
 }): Promise<{ value: string; expires: Date; payload: SessionPayload }>
 {
   const createdAt = Date.now();
@@ -62,6 +80,19 @@ export async function createSessionCookie(params: {
     sub: params.sub,
     role: params.role,
     name: params.name ?? null,
+    roles: Array.isArray(params.roles) ? params.roles.map((value) => value.trim().toUpperCase()).filter(Boolean) : undefined,
+    permissions: Array.isArray(params.permissions) ? params.permissions.map((value) => value.trim()).filter(Boolean) : undefined,
+    defaultCashRegister: params.defaultCashRegister
+      ? {
+          id: Number(params.defaultCashRegister.id),
+          code: params.defaultCashRegister.code,
+          name: params.defaultCashRegister.name,
+          warehouseCode: params.defaultCashRegister.warehouseCode,
+          warehouseName: params.defaultCashRegister.warehouseName,
+        }
+      : params.defaultCashRegister === null
+        ? null
+        : undefined,
     createdAt,
     exp,
   };
@@ -95,6 +126,12 @@ export async function parseSessionCookie(value: string | undefined | null): Prom
       return null;
     }
     if (typeof payload.sub !== "string" || (payload.role !== "admin" && payload.role !== "waiter")) {
+      return null;
+    }
+    if (payload.roles && !Array.isArray(payload.roles)) {
+      return null;
+    }
+    if (payload.permissions && !Array.isArray(payload.permissions)) {
       return null;
     }
     return payload;

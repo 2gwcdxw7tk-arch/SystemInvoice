@@ -7,7 +7,7 @@ import type { PoolClient } from "@/lib/db/postgres";
 import { query, withTransaction } from "@/lib/db/postgres";
 import { getArticleByCode, ArticleDetail } from "@/lib/db/articles";
 import { getKitComponents } from "@/lib/db/articleKits";
-import { getWarehouseByCode } from "@/lib/db/warehouses";
+import { getWarehouseByCode, listWarehouses } from "@/lib/db/warehouses";
 
 type MovementDirection = "IN" | "OUT";
 export type TransactionType = "PURCHASE" | "CONSUMPTION" | "ADJUSTMENT" | "TRANSFER";
@@ -54,6 +54,23 @@ export interface RegisterTransferInput {
   notes?: string | null;
   reference?: string | null;
   lines: Array<Omit<InventoryLineInput, "cost_per_unit">>;
+}
+
+export interface InvoiceConsumptionLineInput {
+  article_code: string;
+  quantity: NumericLike;
+  unit?: InventoryUnit;
+  warehouse_code?: string | null;
+}
+
+export interface RegisterInvoiceMovementsInput {
+  invoiceId?: number;
+  invoiceNumber: string;
+  invoiceDate: Date;
+  tableCode?: string | null;
+  customerName?: string | null;
+  lines: InvoiceConsumptionLineInput[];
+  client?: PoolClient;
 }
 
 export interface KardexFilter {
@@ -250,6 +267,12 @@ interface MovementComputation {
   }>;
 }
 
+type WarehouseContext = {
+  id: number;
+  code: string;
+  name: string;
+};
+
 let mockTransactionSeq = 1;
 let mockMovementSeq = 1;
 
@@ -294,6 +317,131 @@ interface MockMovement {
 
 const mockTransactions: MockTransaction[] = [];
 const mockMovements: MockMovement[] = [];
+const mockWarehouseStock = new Map<string, { quantityRetail: number; quantityStorage: number }>();
+
+type StockDelta = {
+  articleId: number;
+  articleCode?: string;
+  warehouse: WarehouseContext;
+  deltaRetail: number;
+  conversionFactor: number;
+};
+
+function normalizeQuantity(value: number, epsilon = 1e-6): number {
+  if (Math.abs(value) < epsilon) {
+    return 0;
+  }
+  return value;
+}
+
+function adjustMockStock(params: {
+  articleCode: string;
+  warehouseCode: string;
+  deltaRetail: number;
+  conversionFactor: number;
+}): void {
+  if (params.deltaRetail === 0) {
+    return;
+  }
+  const key = `${params.articleCode.toUpperCase()}::${params.warehouseCode.toUpperCase()}`;
+  const current = mockWarehouseStock.get(key) ?? { quantityRetail: 0, quantityStorage: 0 };
+  const nextRetail = current.quantityRetail + params.deltaRetail;
+  if (nextRetail < -1e-6) {
+    throw new Error(
+      `Existencias insuficientes para ${params.articleCode} en la bodega ${params.warehouseCode} (mock).`
+    );
+  }
+  const safeRetail = normalizeQuantity(nextRetail);
+  const conversion = params.conversionFactor > 0 ? params.conversionFactor : 1;
+  const nextStorage = normalizeQuantity(Math.max(safeRetail / conversion, 0));
+  mockWarehouseStock.set(key, { quantityRetail: safeRetail, quantityStorage: nextStorage });
+}
+
+async function ensureArticleWarehouseAssociation(
+  client: PoolClient,
+  params: { articleId: number; articleCode?: string; warehouse: WarehouseContext }
+): Promise<void> {
+  if (env.useMockData) {
+    return;
+  }
+  const result = await client.query(
+    `SELECT 1
+       FROM app.article_warehouses
+      WHERE article_id = $1 AND warehouse_id = $2
+      LIMIT 1`,
+    [params.articleId, params.warehouse.id]
+  );
+  if (result.rowCount === 0) {
+    throw new Error(
+      `El artículo ${params.articleCode ?? params.articleId} no está asociado a la bodega ${params.warehouse.code}.`
+    );
+  }
+}
+
+async function applyStockDeltaSql(client: PoolClient, params: StockDelta): Promise<void> {
+  if (env.useMockData || params.deltaRetail === 0) {
+    return;
+  }
+
+  const current = await client.query<{ quantity_retail: string }>(
+    `SELECT quantity_retail
+       FROM app.warehouse_stock
+      WHERE article_id = $1 AND warehouse_id = $2
+      LIMIT 1`,
+    [params.articleId, params.warehouse.id]
+  );
+
+  const currentRetail = current.rowCount ? Number(current.rows[0].quantity_retail) : 0;
+  const nextRetail = currentRetail + params.deltaRetail;
+  if (nextRetail < -1e-6) {
+    throw new Error(
+      `Existencias insuficientes para ${params.articleCode ?? params.articleId} en la bodega ${params.warehouse.code}.`
+    );
+  }
+
+  const safeRetail = normalizeQuantity(Math.max(nextRetail, 0));
+  const conversion = params.conversionFactor > 0 ? params.conversionFactor : 1;
+  const safeStorage = normalizeQuantity(Math.max(safeRetail / conversion, 0));
+
+  if (current.rowCount === 0) {
+    if (params.deltaRetail < 0) {
+      throw new Error(
+        `No existen registros de inventario para ${params.articleCode ?? params.articleId} en ${params.warehouse.code}.`
+      );
+    }
+    await client.query(
+      `INSERT INTO app.warehouse_stock (article_id, warehouse_id, quantity_retail, quantity_storage, updated_at)
+       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+      [params.articleId, params.warehouse.id, safeRetail, safeStorage]
+    );
+    return;
+  }
+
+  await client.query(
+    `UPDATE app.warehouse_stock
+        SET quantity_retail = $3,
+            quantity_storage = $4,
+            updated_at = CURRENT_TIMESTAMP
+      WHERE article_id = $1 AND warehouse_id = $2`,
+    [params.articleId, params.warehouse.id, safeRetail, safeStorage]
+  );
+}
+
+async function applyStockDelta(
+  client: PoolClient,
+  params: StockDelta
+): Promise<void> {
+  if (env.useMockData) {
+    adjustMockStock({
+      articleCode: params.articleCode ?? String(params.articleId),
+      warehouseCode: params.warehouse.code,
+      deltaRetail: params.deltaRetail,
+      conversionFactor: params.conversionFactor,
+    });
+    return;
+  }
+  await applyStockDeltaSql(client, params);
+}
 
 function toNumber(value: NumericLike | undefined | null, fallback = 0): number {
   if (value === undefined || value === null) return fallback;
@@ -320,8 +468,12 @@ function generateTransactionCode(prefix: string): string {
   return `${prefix}-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomUUID().slice(0, 4).toUpperCase()}`;
 }
 
-async function computeMovement(line: InventoryLineInput, type: TransactionType): Promise<MovementComputation> {
-  const article = await getArticleByCode(line.article_code);
+async function computeMovement(
+  line: InventoryLineInput,
+  type: TransactionType,
+  preloadedArticle?: ArticleDetail | null
+): Promise<MovementComputation> {
+  const article = preloadedArticle ?? await getArticleByCode(line.article_code);
   if (!article) throw new Error(`Artículo no encontrado: ${line.article_code}`);
   const conversionFactor = Number(article.conversion_factor || 0);
   if (!(conversionFactor > 0)) throw new Error(`Artículo ${line.article_code} sin factor de conversión válido`);
@@ -395,6 +547,11 @@ export async function registerPurchase(input: RegisterPurchaseInput): Promise<Re
   }
   const warehouse = await getWarehouseByCode(input.warehouse_code);
   if (!warehouse) throw new Error(`Almacén no encontrado: ${input.warehouse_code}`);
+  const warehouseContext: WarehouseContext = {
+    id: warehouse.id,
+    code: warehouse.code,
+    name: warehouse.name,
+  };
   const occurredAt = parseDateInput(input.occurred_at);
   const transactionCode = generateTransactionCode("PUR");
   const status: PurchaseStatus = input.status && ["PENDIENTE", "PARCIAL", "PAGADA"].includes(input.status) ? input.status : "PENDIENTE";
@@ -427,6 +584,20 @@ export async function registerPurchase(input: RegisterPurchaseInput): Promise<Re
           counterparty_name: input.supplier_name || null,
           authorized_by: null,
           source_kit_code: movement.article.article_type === "KIT" ? movement.article.article_code : null,
+        });
+        adjustMockStock({
+          articleCode: component.article_code,
+          warehouseCode: warehouse.code,
+          deltaRetail: component.quantity_retail,
+          conversionFactor: component.conversion_factor,
+        });
+      }
+      if (movement.article.article_type !== "KIT") {
+        adjustMockStock({
+          articleCode: movement.article.article_code,
+          warehouseCode: warehouse.code,
+          deltaRetail: movement.quantity_retail,
+          conversionFactor: movement.article.conversion_factor,
         });
       }
     }
@@ -527,6 +698,11 @@ export async function registerPurchase(input: RegisterPurchaseInput): Promise<Re
         }
         for (const component of movement.components) {
           const compId = await getArticleIdByCode(client, component.article_code);
+          await ensureArticleWarehouseAssociation(client, {
+            articleId: compId,
+            articleCode: component.article_code,
+            warehouse: warehouseContext,
+          });
           await client.query(
             `INSERT INTO app.inventory_movements (
                transaction_id,
@@ -549,8 +725,20 @@ export async function registerPurchase(input: RegisterPurchaseInput): Promise<Re
               kitArticleId,
             ]
           );
+          await applyStockDelta(client, {
+            articleId: compId,
+            articleCode: component.article_code,
+            warehouse: warehouseContext,
+            deltaRetail: component.quantity_retail,
+            conversionFactor: component.conversion_factor,
+          });
         }
       } else {
+        await ensureArticleWarehouseAssociation(client, {
+          articleId: movement.article.id,
+          articleCode: movement.article.article_code,
+          warehouse: warehouseContext,
+        });
         await client.query(
           `INSERT INTO app.inventory_movements (
              transaction_id,
@@ -573,6 +761,13 @@ export async function registerPurchase(input: RegisterPurchaseInput): Promise<Re
             null,
           ]
         );
+        await applyStockDelta(client, {
+          articleId: movement.article.id,
+          articleCode: movement.article.article_code,
+          warehouse: warehouseContext,
+          deltaRetail: movement.quantity_retail,
+          conversionFactor: movement.article.conversion_factor,
+        });
       }
     }
 
@@ -595,6 +790,11 @@ export async function registerConsumption(input: RegisterConsumptionInput): Prom
   }
   const warehouse = await getWarehouseByCode(input.warehouse_code);
   if (!warehouse) throw new Error(`Almacén no encontrado: ${input.warehouse_code}`);
+  const warehouseContext: WarehouseContext = {
+    id: warehouse.id,
+    code: warehouse.code,
+    name: warehouse.name,
+  };
   const occurredAt = parseDateInput(input.occurred_at);
   const transactionCode = generateTransactionCode("CON");
 
@@ -623,6 +823,20 @@ export async function registerConsumption(input: RegisterConsumptionInput): Prom
           counterparty_name: input.area || null,
           authorized_by: input.authorized_by || null,
           source_kit_code: movement.article.article_type === "KIT" ? movement.article.article_code : null,
+        });
+        adjustMockStock({
+          articleCode: component.article_code,
+          warehouseCode: warehouse.code,
+          deltaRetail: -component.quantity_retail,
+          conversionFactor: component.conversion_factor,
+        });
+      }
+      if (movement.article.article_type !== "KIT") {
+        adjustMockStock({
+          articleCode: movement.article.article_code,
+          warehouseCode: warehouse.code,
+          deltaRetail: -movement.quantity_retail,
+          conversionFactor: movement.article.conversion_factor,
         });
       }
     }
@@ -718,6 +932,317 @@ export async function registerConsumption(input: RegisterConsumptionInput): Prom
         }
         for (const component of movement.components) {
           const compId = await getArticleIdByCode(client, component.article_code);
+          await ensureArticleWarehouseAssociation(client, {
+            articleId: compId,
+            articleCode: component.article_code,
+            warehouse: warehouseContext,
+          });
+          await client.query(
+            `INSERT INTO app.inventory_movements (
+               transaction_id,
+               entry_id,
+               article_id,
+               direction,
+               quantity_retail,
+               warehouse_id,
+               source_kit_article_id
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7
+             )`,
+            [
+              transactionId,
+              entryId,
+              compId,
+              "OUT",
+              component.quantity_retail,
+              warehouse.id,
+              kitArticleId,
+            ]
+          );
+          await applyStockDelta(client, {
+            articleId: compId,
+            articleCode: component.article_code,
+            warehouse: warehouseContext,
+            deltaRetail: -component.quantity_retail,
+            conversionFactor: component.conversion_factor,
+          });
+        }
+      } else {
+        await ensureArticleWarehouseAssociation(client, {
+          articleId: movement.article.id,
+          articleCode: movement.article.article_code,
+          warehouse: warehouseContext,
+        });
+        await client.query(
+          `INSERT INTO app.inventory_movements (
+             transaction_id,
+             entry_id,
+             article_id,
+             direction,
+             quantity_retail,
+             warehouse_id,
+             source_kit_article_id
+           ) VALUES (
+             $1, $2, $3, $4, $5, $6, $7
+           )`,
+          [
+            transactionId,
+            entryId,
+            movement.article.id,
+            "OUT",
+            movement.quantity_retail,
+            warehouse.id,
+            null,
+          ]
+        );
+        await applyStockDelta(client, {
+          articleId: movement.article.id,
+          articleCode: movement.article.article_code,
+          warehouse: warehouseContext,
+          deltaRetail: -movement.quantity_retail,
+          conversionFactor: movement.article.conversion_factor,
+        });
+      }
+    }
+
+    return { transaction_id: transactionId, transaction_code: transactionCode };
+  });
+
+  return result;
+}
+
+async function getWarehouseByCodeCached(
+  client: PoolClient,
+  code: string,
+  cacheByCode: Map<string, WarehouseContext>,
+  cacheById: Map<number, WarehouseContext>
+): Promise<WarehouseContext> {
+  const normalized = code.trim().toUpperCase();
+  const cached = cacheByCode.get(normalized);
+  if (cached) {
+    return cached;
+  }
+  const result = await client.query<{ id: number; code: string; name: string }>(
+    `SELECT id, code, name
+       FROM app.warehouses
+      WHERE UPPER(code) = $1
+        AND is_active = TRUE
+      LIMIT 1`,
+    [normalized]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error(`Almacén ${normalized} no encontrado o inactivo`);
+  }
+  const context: WarehouseContext = { id: Number(row.id), code: row.code, name: row.name };
+  cacheByCode.set(normalized, context);
+  cacheById.set(context.id, context);
+  return context;
+}
+
+async function getWarehouseByIdCached(
+  client: PoolClient,
+  id: number,
+  cacheById: Map<number, WarehouseContext>,
+  cacheByCode: Map<string, WarehouseContext>
+): Promise<WarehouseContext> {
+  const cached = cacheById.get(id);
+  if (cached) {
+    return cached;
+  }
+  const result = await client.query<{ id: number; code: string; name: string }>(
+    `SELECT id, code, name
+       FROM app.warehouses
+      WHERE id = $1
+        AND is_active = TRUE
+      LIMIT 1`,
+    [id]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error(`Almacén con ID ${id} no encontrado o inactivo`);
+  }
+  const context: WarehouseContext = { id: Number(row.id), code: row.code, name: row.name };
+  cacheById.set(context.id, context);
+  cacheByCode.set(context.code.toUpperCase(), context);
+  return context;
+}
+
+async function resolveWarehouseForInvoice(
+  client: PoolClient,
+  article: ArticleDetail,
+  explicitCode: string | null | undefined,
+  cacheById: Map<number, WarehouseContext>,
+  cacheByCode: Map<string, WarehouseContext>
+): Promise<WarehouseContext> {
+  if (explicitCode && explicitCode.trim().length > 0) {
+    return getWarehouseByCodeCached(client, explicitCode, cacheByCode, cacheById);
+  }
+  if (article.default_warehouse_id) {
+    return getWarehouseByIdCached(client, Number(article.default_warehouse_id), cacheById, cacheByCode);
+  }
+  if (env.defaultSalesWarehouseCode) {
+    return getWarehouseByCodeCached(client, env.defaultSalesWarehouseCode, cacheByCode, cacheById);
+  }
+  throw new Error(
+    `El artículo ${article.article_code} no tiene almacén asignado y DEFAULT_SALES_WAREHOUSE_CODE no está configurado.`
+  );
+}
+
+type InvoiceGroupEntry = {
+  article: ArticleDetail;
+  unit: InventoryUnit;
+  quantity: number;
+};
+
+async function registerInvoiceMovementsInternal(
+  client: PoolClient,
+  input: RegisterInvoiceMovementsInput
+): Promise<void> {
+  const cacheById = new Map<number, WarehouseContext>();
+  const cacheByCode = new Map<string, WarehouseContext>();
+  const articleCache = new Map<string, ArticleDetail>();
+  const groups = new Map<number, { warehouse: WarehouseContext; entries: InvoiceGroupEntry[] }>();
+
+  for (const line of input.lines) {
+    const rawCode = line.article_code?.trim();
+    if (!rawCode) {
+      continue;
+    }
+    const articleCode = rawCode.toUpperCase();
+    let article = articleCache.get(articleCode);
+    if (!article) {
+      const fetched = await getArticleByCode(articleCode);
+      if (!fetched) {
+        throw new Error(
+          `Artículo ${articleCode} no encontrado para registrar inventario de la factura ${input.invoiceNumber}`
+        );
+      }
+      articleCache.set(articleCode, fetched);
+      article = fetched;
+    }
+
+    const unit: InventoryUnit = line.unit === "STORAGE" ? "STORAGE" : "RETAIL";
+    const quantity = toNumber(line.quantity);
+    if (!(quantity > 0)) {
+      continue;
+    }
+
+    const warehouse = await resolveWarehouseForInvoice(
+      client,
+      article,
+      line.warehouse_code ?? null,
+      cacheById,
+      cacheByCode
+    );
+
+    let bucket = groups.get(warehouse.id);
+    if (!bucket) {
+      bucket = { warehouse, entries: [] };
+      groups.set(warehouse.id, bucket);
+    }
+    bucket.entries.push({ article, unit, quantity });
+  }
+
+  if (groups.size === 0) {
+    return;
+  }
+
+  const occurredAt = input.invoiceDate;
+  const counterparty = input.customerName ?? (input.tableCode ? `Mesa ${input.tableCode}` : null);
+  const notesParts = [
+    input.tableCode ? `Mesa: ${input.tableCode}` : "",
+    input.customerName ? `Cliente: ${input.customerName}` : "",
+  ].filter(Boolean);
+  const notesValue = notesParts.length > 0 ? notesParts.join(" | ") : null;
+
+  for (const { warehouse, entries } of groups.values()) {
+    if (entries.length === 0) {
+      continue;
+    }
+
+    const transactionCode = generateTransactionCode("SAL");
+    const headerResult = await client.query<{ id: number }>(
+      `INSERT INTO app.inventory_transactions (
+         transaction_code,
+         transaction_type,
+         warehouse_id,
+         reference,
+         counterparty_name,
+         status,
+         notes,
+         occurred_at,
+         authorized_by,
+         total_amount
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+       )
+       RETURNING id`,
+      [
+        transactionCode,
+        "CONSUMPTION",
+        warehouse.id,
+        input.invoiceNumber,
+        counterparty,
+        "CONFIRMADO",
+        notesValue,
+        occurredAt,
+        "Facturación POS",
+        0,
+      ]
+    );
+    const transactionId = Number(headerResult.rows[0]?.id);
+    if (!transactionId) {
+      throw new Error("No se pudo crear la cabecera de inventario para la factura");
+    }
+
+    for (const entry of entries) {
+      const movement = await computeMovement(
+        { article_code: entry.article.article_code, quantity: entry.quantity, unit: entry.unit },
+        "CONSUMPTION",
+        entry.article
+      );
+      const entryResult = await client.query<{ id: number }>(
+        `INSERT INTO app.inventory_transaction_entries (
+           transaction_id,
+           article_id,
+           quantity_entered,
+           entered_unit,
+           direction,
+           unit_conversion_factor,
+           kit_multiplier,
+           cost_per_unit,
+           subtotal,
+           notes
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+         )
+         RETURNING id`,
+        [
+          transactionId,
+          movement.article.id,
+          movement.quantity_entered,
+          entry.unit,
+          "OUT",
+          movement.article.conversion_factor,
+          movement.kit_multiplier ?? null,
+          null,
+          null,
+          `Factura ${input.invoiceNumber}`,
+        ]
+      );
+      const entryId = Number(entryResult.rows[0]?.id);
+      if (!entryId) {
+        throw new Error("No se pudo registrar el detalle de inventario de la factura");
+      }
+
+      if (movement.article.article_type === "KIT") {
+        const kitArticleId = movement.article.id;
+        if (!kitArticleId) {
+          throw new Error(`Artículo kit no registrado: ${movement.article.article_code}`);
+        }
+        for (const component of movement.components) {
+          const compId = await getArticleIdByCode(client, component.article_code);
           await client.query(
             `INSERT INTO app.inventory_movements (
                transaction_id,
@@ -766,11 +1291,105 @@ export async function registerConsumption(input: RegisterConsumptionInput): Prom
         );
       }
     }
+  }
+}
 
-    return { transaction_id: transactionId, transaction_code: transactionCode };
+async function registerInvoiceMovementsMock(input: RegisterInvoiceMovementsInput): Promise<void> {
+  if (!input.lines || input.lines.length === 0) {
+    return;
+  }
+
+  const fallback = env.defaultSalesWarehouseCode
+    ? env.defaultSalesWarehouseCode.toUpperCase()
+    : null;
+  const warehouseList = await listWarehouses({ includeInactive: true });
+  const warehouseById = new Map<number, string>();
+  for (const warehouse of warehouseList) {
+    warehouseById.set(Number(warehouse.id), warehouse.code.toUpperCase());
+  }
+  const articleCache = new Map<string, ArticleDetail>();
+  const groups = new Map<string, Array<{ article_code: string; quantity: number; unit: InventoryUnit }>>();
+
+  for (const line of input.lines) {
+    const rawCode = line.article_code?.trim();
+    if (!rawCode) {
+      continue;
+    }
+    const articleCode = rawCode.toUpperCase();
+    let article = articleCache.get(articleCode);
+    if (!article) {
+      const fetched = await getArticleByCode(articleCode);
+      if (!fetched) {
+        throw new Error(
+          `Artículo ${articleCode} no encontrado para registrar inventario de la factura ${input.invoiceNumber}`
+        );
+      }
+      articleCache.set(articleCode, fetched);
+      article = fetched;
+    }
+    const normalizedUnit: InventoryUnit = line.unit === "STORAGE" ? "STORAGE" : "RETAIL";
+    const quantity = toNumber(line.quantity);
+    if (!(quantity > 0)) {
+      continue;
+    }
+
+    let warehouseCode = line.warehouse_code?.trim()?.toUpperCase() ?? null;
+    if (!warehouseCode && article.default_warehouse_id) {
+      warehouseCode = warehouseById.get(Number(article.default_warehouse_id)) ?? null;
+    }
+    if (!warehouseCode && fallback) {
+      warehouseCode = fallback;
+    }
+    if (!warehouseCode) {
+      throw new Error(
+        `No se pudo determinar el almacén para el artículo ${articleCode}. Configura DEFAULT_SALES_WAREHOUSE_CODE o asigna un almacén por defecto.`
+      );
+    }
+
+    const bucket = groups.get(warehouseCode) ?? [];
+    bucket.push({ article_code: articleCode, quantity, unit: normalizedUnit });
+    groups.set(warehouseCode, bucket);
+  }
+
+  if (groups.size === 0) {
+    return;
+  }
+
+  for (const [warehouseCode, lines] of groups.entries()) {
+    await registerConsumption({
+      reason: `Factura ${input.invoiceNumber}`,
+      occurred_at: input.invoiceDate.toISOString(),
+      authorized_by: "Facturación POS",
+      area: input.tableCode ?? null,
+      warehouse_code: warehouseCode,
+      notes: input.customerName ? `Cliente: ${input.customerName}` : null,
+      lines: lines.map((line) => ({
+        article_code: line.article_code,
+        quantity: line.quantity,
+        unit: line.unit,
+      })),
+    });
+  }
+}
+
+export async function registerInvoiceMovements(input: RegisterInvoiceMovementsInput): Promise<void> {
+  if (!input.lines || input.lines.length === 0) {
+    return;
+  }
+
+  if (env.useMockData) {
+    await registerInvoiceMovementsMock(input);
+    return;
+  }
+
+  if (input.client) {
+    await registerInvoiceMovementsInternal(input.client, input);
+    return;
+  }
+
+  await withTransaction(async (client) => {
+    await registerInvoiceMovementsInternal(client, input);
   });
-
-  return result;
 }
 
 export async function registerTransfer(input: RegisterTransferInput): Promise<RegisterResult> {
@@ -787,6 +1406,16 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
   if (!fromWarehouse) throw new Error(`Almacén origen no encontrado: ${input.from_warehouse_code}`);
   const toWarehouse = await getWarehouseByCode(input.to_warehouse_code);
   if (!toWarehouse) throw new Error(`Almacén destino no encontrado: ${input.to_warehouse_code}`);
+  const fromWarehouseContext: WarehouseContext = {
+    id: fromWarehouse.id,
+    code: fromWarehouse.code,
+    name: fromWarehouse.name,
+  };
+  const toWarehouseContext: WarehouseContext = {
+    id: toWarehouse.id,
+    code: toWarehouse.code,
+    name: toWarehouse.name,
+  };
   const occurredAt = parseDateInput(input.occurred_at);
   const transactionCode = generateTransactionCode("TRF");
   const combinedNotes = [input.notes?.trim() || "", input.requested_by?.trim() ? `Solicitado por: ${input.requested_by.trim()}` : ""]
@@ -819,6 +1448,12 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
           authorized_by: input.authorized_by || null,
           source_kit_code: movement.article.article_type === "KIT" ? movement.article.article_code : null,
         });
+        adjustMockStock({
+          articleCode: component.article_code,
+          warehouseCode: fromWarehouse.code,
+          deltaRetail: -component.quantity_retail,
+          conversionFactor: component.conversion_factor,
+        });
 
         const inMovementId = mockMovementSeq++;
         mockMovements.push({
@@ -840,6 +1475,26 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
           counterparty_name: fromWarehouse.name,
           authorized_by: input.authorized_by || null,
           source_kit_code: movement.article.article_type === "KIT" ? movement.article.article_code : null,
+        });
+        adjustMockStock({
+          articleCode: component.article_code,
+          warehouseCode: toWarehouse.code,
+          deltaRetail: component.quantity_retail,
+          conversionFactor: component.conversion_factor,
+        });
+      }
+      if (movement.article.article_type !== "KIT") {
+        adjustMockStock({
+          articleCode: movement.article.article_code,
+          warehouseCode: fromWarehouse.code,
+          deltaRetail: -movement.quantity_retail,
+          conversionFactor: movement.article.conversion_factor,
+        });
+        adjustMockStock({
+          articleCode: movement.article.article_code,
+          warehouseCode: toWarehouse.code,
+          deltaRetail: movement.quantity_retail,
+          conversionFactor: movement.article.conversion_factor,
         });
       }
     }
@@ -937,6 +1592,11 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
         }
         for (const component of movement.components) {
           const compId = await getArticleIdByCode(client, component.article_code);
+          await ensureArticleWarehouseAssociation(client, {
+            articleId: compId,
+            articleCode: component.article_code,
+            warehouse: fromWarehouseContext,
+          });
           await client.query(
             `INSERT INTO app.inventory_movements (
                transaction_id,
@@ -959,8 +1619,20 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
               kitArticleId,
             ]
           );
+          await applyStockDelta(client, {
+            articleId: compId,
+            articleCode: component.article_code,
+            warehouse: fromWarehouseContext,
+            deltaRetail: -component.quantity_retail,
+            conversionFactor: component.conversion_factor,
+          });
         }
       } else {
+        await ensureArticleWarehouseAssociation(client, {
+          articleId: movement.article.id,
+          articleCode: movement.article.article_code,
+          warehouse: fromWarehouseContext,
+        });
         await client.query(
           `INSERT INTO app.inventory_movements (
              transaction_id,
@@ -983,6 +1655,13 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
             null,
           ]
         );
+        await applyStockDelta(client, {
+          articleId: movement.article.id,
+          articleCode: movement.article.article_code,
+          warehouse: fromWarehouseContext,
+          deltaRetail: -movement.quantity_retail,
+          conversionFactor: movement.article.conversion_factor,
+        });
       }
 
       const entryResult = await client.query<{ id: number }>(
@@ -1022,6 +1701,11 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
         }
         for (const component of movement.components) {
           const compId = await getArticleIdByCode(client, component.article_code);
+          await ensureArticleWarehouseAssociation(client, {
+            articleId: compId,
+            articleCode: component.article_code,
+            warehouse: toWarehouseContext,
+          });
           await client.query(
             `INSERT INTO app.inventory_movements (
                transaction_id,
@@ -1044,8 +1728,20 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
               kitArticleId,
             ]
           );
+          await applyStockDelta(client, {
+            articleId: compId,
+            articleCode: component.article_code,
+            warehouse: toWarehouseContext,
+            deltaRetail: component.quantity_retail,
+            conversionFactor: component.conversion_factor,
+          });
         }
       } else {
+        await ensureArticleWarehouseAssociation(client, {
+          articleId: movement.article.id,
+          articleCode: movement.article.article_code,
+          warehouse: toWarehouseContext,
+        });
         await client.query(
           `INSERT INTO app.inventory_movements (
              transaction_id,
@@ -1068,6 +1764,13 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
             null,
           ]
         );
+        await applyStockDelta(client, {
+          articleId: movement.article.id,
+          articleCode: movement.article.article_code,
+          warehouse: toWarehouseContext,
+          deltaRetail: movement.quantity_retail,
+          conversionFactor: movement.article.conversion_factor,
+        });
       }
     }
 
