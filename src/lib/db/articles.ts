@@ -1,7 +1,8 @@
 import "server-only";
 
 import { env } from "@/lib/env";
-import { getPool, sql } from "@/lib/db/mssql";
+import type { PoolClient } from "@/lib/db/postgres";
+import { query, withTransaction } from "@/lib/db/postgres";
 import { listUnits } from "@/lib/db/units";
 
 export interface ArticleInput {
@@ -165,43 +166,69 @@ export async function upsertArticle(input: ArticleInput): Promise<{ id: number }
     return { id: row.id };
   }
 
-  const pool = await getPool();
-  const tx = new sql.Transaction(pool);
-  await tx.begin();
-  try {
-    // Upsert artículo por article_code
-    const req = new sql.Request(tx);
-    req.input("article_code", sql.NVarChar(40), input.article_code);
-    req.input("name", sql.NVarChar(200), input.name);
-    req.input("classification_full_code", sql.NVarChar(24), input.classification_full_code ?? null);
-    req.input("storage_unit_id", sql.Int, input.storage_unit_id);
-    req.input("retail_unit_id", sql.Int, input.retail_unit_id);
-    req.input("conversion_factor", sql.Decimal(18,6), input.conversion_factor);
-    req.input("article_type", sql.NVarChar(12), input.article_type);
-    req.input("default_warehouse_id", sql.Int, input.default_warehouse_id ?? null);
-    req.input("classification_level1_id", sql.Int, input.classification_level1_id ?? null);
-    req.input("classification_level2_id", sql.Int, input.classification_level2_id ?? null);
-    req.input("classification_level3_id", sql.Int, input.classification_level3_id ?? null);
+  const normalizedCode = input.article_code.trim().toUpperCase();
+  const normalizedName = input.name.trim();
+  const classificationFullCode = input.classification_full_code?.trim() ?? null;
 
-    const upsert = await req.query<{ id: number }>(`
-      IF EXISTS (SELECT 1 FROM app.articles WHERE article_code = @article_code)
-      BEGIN
-        UPDATE app.articles SET name=@name, classification_full_code=@classification_full_code, storage_unit_id=@storage_unit_id, retail_unit_id=@retail_unit_id, conversion_factor=@conversion_factor, article_type=@article_type, default_warehouse_id=@default_warehouse_id, classification_level1_id=@classification_level1_id, classification_level2_id=@classification_level2_id, classification_level3_id=@classification_level3_id WHERE article_code=@article_code;
-        SELECT id FROM app.articles WHERE article_code=@article_code;
-      END
-      ELSE BEGIN
-        INSERT INTO app.articles(article_code, name, classification_full_code, storage_unit_id, retail_unit_id, conversion_factor, article_type, default_warehouse_id, classification_level1_id, classification_level2_id, classification_level3_id)
-        VALUES(@article_code, @name, @classification_full_code, @storage_unit_id, @retail_unit_id, @conversion_factor, @article_type, @default_warehouse_id, @classification_level1_id, @classification_level2_id, @classification_level3_id);
-        SELECT SCOPE_IDENTITY() AS id;
-      END`);
-    const articleId = Number(upsert.recordset[0].id);
+  const articleId = await withTransaction(async (client: PoolClient) => {
+    const result = await client.query<{ id: number }>(
+      `INSERT INTO app.articles (
+        article_code,
+        name,
+        classification_full_code,
+        storage_unit_id,
+        retail_unit_id,
+        conversion_factor,
+        article_type,
+        default_warehouse_id,
+        classification_level1_id,
+        classification_level2_id,
+        classification_level3_id
+      ) VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11
+      )
+      ON CONFLICT (article_code)
+      DO UPDATE SET
+        name = EXCLUDED.name,
+        classification_full_code = EXCLUDED.classification_full_code,
+        storage_unit_id = EXCLUDED.storage_unit_id,
+        retail_unit_id = EXCLUDED.retail_unit_id,
+        conversion_factor = EXCLUDED.conversion_factor,
+        article_type = EXCLUDED.article_type,
+        default_warehouse_id = EXCLUDED.default_warehouse_id,
+        classification_level1_id = EXCLUDED.classification_level1_id,
+        classification_level2_id = EXCLUDED.classification_level2_id,
+        classification_level3_id = EXCLUDED.classification_level3_id
+      RETURNING id`,
+      [
+        normalizedCode,
+        normalizedName,
+        classificationFullCode,
+        input.storage_unit_id,
+        input.retail_unit_id,
+        input.conversion_factor,
+        input.article_type,
+        input.default_warehouse_id ?? null,
+        input.classification_level1_id ?? null,
+        input.classification_level2_id ?? null,
+        input.classification_level3_id ?? null,
+      ]
+    );
 
-    await tx.commit();
-    return { id: articleId };
-  } catch (e) {
-    await tx.rollback();
-    throw e;
-  }
+    return Number(result.rows[0].id);
+  });
+
+  return { id: articleId };
 }
 
 export async function getArticles(params: EffectivePriceQuery = {}): Promise<Array<ArticleRow & { price: EffectivePriceResult | null }>> {
@@ -234,34 +261,43 @@ export async function getArticles(params: EffectivePriceQuery = {}): Promise<Arr
     return out;
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("price_list_code", sql.NVarChar(30), priceListCode);
-  req.input("today", sql.Date, today);
-  req.input("prefer_unit", sql.NVarChar(20), preferUnit);
-  const result = await req.query<ArticleQueryRow>(`
-    ;WITH pl AS (
-      SELECT id FROM app.price_lists WHERE UPPER(code) = @price_list_code
-    ), ap AS (
-      SELECT ap.*, ROW_NUMBER() OVER(PARTITION BY ap.article_id ORDER BY ap.start_date DESC) AS rn
-      FROM app.article_prices ap
-      WHERE ap.price_list_id IN (SELECT id FROM pl) AND ap.start_date <= @today AND (ap.end_date IS NULL OR ap.end_date >= @today)
-    )
-    SELECT a.id, a.article_code, a.name, a.classification_full_code, a.conversion_factor, a.is_active, a.article_type,
-      a.storage_unit_id, a.retail_unit_id,
-      a.classification_level1_id, a.classification_level2_id, a.classification_level3_id,
-           su.name AS storage_unit, ru.name AS retail_unit,
-           ap.price AS base_price, ap.start_date, ap.end_date
-    FROM app.articles a
-    LEFT JOIN app.units su ON su.id = a.storage_unit_id
-    LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
-    OUTER APPLY (
-      SELECT TOP 1 price, start_date, end_date
-      FROM app.article_prices ap
-      WHERE ap.article_id = a.id AND ap.price_list_id IN (SELECT id FROM pl) AND ap.start_date <= @today AND (ap.end_date IS NULL OR ap.end_date >= @today)
-      ORDER BY ap.start_date DESC
-    ) ap`);
-  const rows = result.recordset ?? [];
+  const result = await query<ArticleQueryRow>(
+    `WITH pl AS (
+       SELECT id FROM app.price_lists WHERE UPPER(code) = $1
+     )
+     SELECT a.id,
+            a.article_code,
+            a.name,
+            a.classification_full_code,
+            a.conversion_factor,
+            a.is_active,
+            a.article_type,
+            a.storage_unit_id,
+            a.retail_unit_id,
+            a.classification_level1_id,
+            a.classification_level2_id,
+            a.classification_level3_id,
+            su.name AS storage_unit,
+            ru.name AS retail_unit,
+            ap.price AS base_price,
+            ap.start_date,
+            ap.end_date
+     FROM app.articles a
+     LEFT JOIN app.units su ON su.id = a.storage_unit_id
+     LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
+     LEFT JOIN LATERAL (
+       SELECT price, start_date, end_date
+       FROM app.article_prices ap
+       WHERE ap.article_id = a.id
+         AND ap.price_list_id IN (SELECT id FROM pl)
+         AND ap.start_date <= $2::date
+         AND (ap.end_date IS NULL OR ap.end_date >= $2::date)
+       ORDER BY ap.start_date DESC
+       LIMIT 1
+     ) ap ON true`,
+    [priceListCode, today]
+  );
+  const rows = result.rows ?? [];
   return rows.map((r) => {
     let price = r.base_price == null ? null : Number(r.base_price);
     if (price != null && preferUnit === "STORAGE") {
@@ -322,22 +358,34 @@ export async function getArticleByCode(article_code: string): Promise<ArticleDet
       c3_full_code: null,
     };
   }
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("article_code", sql.NVarChar(40), article_code);
-  const result = await req.query<ArticleDetailRow>(`
-    SELECT TOP 1 a.id, a.article_code, a.name, a.article_type, a.storage_unit_id, a.retail_unit_id, a.conversion_factor, a.default_warehouse_id,
-           a.classification_level1_id, a.classification_level2_id, a.classification_level3_id,
-           su.name AS storage_unit, ru.name AS retail_unit,
-           c1.full_code AS c1_full_code, c2.full_code AS c2_full_code, c3.full_code AS c3_full_code
-    FROM app.articles a
-    LEFT JOIN app.units su ON su.id = a.storage_unit_id
-    LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
-    LEFT JOIN app.article_classifications c1 ON c1.id = a.classification_level1_id
-    LEFT JOIN app.article_classifications c2 ON c2.id = a.classification_level2_id
-    LEFT JOIN app.article_classifications c3 ON c3.id = a.classification_level3_id
-    WHERE a.article_code = @article_code`);
-  const r = result.recordset[0];
+  const result = await query<ArticleDetailRow>(
+    `SELECT a.id,
+            a.article_code,
+            a.name,
+            a.article_type,
+            a.storage_unit_id,
+            a.retail_unit_id,
+            a.conversion_factor,
+            a.default_warehouse_id,
+            a.classification_level1_id,
+            a.classification_level2_id,
+            a.classification_level3_id,
+            su.name AS storage_unit,
+            ru.name AS retail_unit,
+            c1.full_code AS c1_full_code,
+            c2.full_code AS c2_full_code,
+            c3.full_code AS c3_full_code
+     FROM app.articles a
+     LEFT JOIN app.units su ON su.id = a.storage_unit_id
+     LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
+     LEFT JOIN app.article_classifications c1 ON c1.id = a.classification_level1_id
+     LEFT JOIN app.article_classifications c2 ON c2.id = a.classification_level2_id
+     LEFT JOIN app.article_classifications c3 ON c3.id = a.classification_level3_id
+     WHERE a.article_code = $1
+     LIMIT 1`,
+    [article_code]
+  );
+  const r = result.rows[0];
   if (!r) return null;
   return {
     id: Number(r.id),
@@ -368,10 +416,9 @@ export async function deleteArticle(article_code: string): Promise<{ deleted: bo
     }
     return { deleted: false };
   }
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("article_code", sql.NVarChar(40), article_code);
-  const res = await req.query(`DELETE FROM app.articles WHERE article_code = @article_code; SELECT @@ROWCOUNT AS affected;`);
-  const affected = res.recordset[0]?.affected ?? 0;
-  return { deleted: Number(affected) > 0 };
+  const result = await query<{ affected: number }>(
+    `DELETE FROM app.articles WHERE article_code = $1 RETURNING 1 AS affected`,
+    [article_code]
+  );
+  return { deleted: result.rowCount > 0 };
 }

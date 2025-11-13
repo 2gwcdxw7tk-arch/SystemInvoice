@@ -1,7 +1,8 @@
 import "server-only";
 
 import { env } from "@/lib/env";
-import { getPool, sql } from "@/lib/db/mssql";
+import type { PoolClient } from "@/lib/db/postgres";
+import { query, withTransaction } from "@/lib/db/postgres";
 import type { OrderLine, OrderStatus } from "@/lib/orders/types";
 
 export type TableReservationSnapshot = {
@@ -51,38 +52,29 @@ export type TableDefinition = {
   is_active: boolean;
   sort_order: number;
   created_at: string;
-  updated_at: string | null;
-};
-
-export type TableAdminSnapshot = TableDefinition & {
-  assigned_waiter_id: number | null;
+  return withTransaction(async (client: PoolClient) => {
+    const duplicate = await client.query(`SELECT 1 FROM app.tables WHERE id = $1 LIMIT 1;`, [id]);
+    if (duplicate.rowCount > 0) {
   assigned_waiter_name: string | null;
   updated_state_at: string | null;
   order_status: OrderStatus | "libre";
-  pending_items_count: number;
-  sent_items_count: number;
-  reservation: TableReservationSnapshot | null;
-  order: {
+      const zoneResult = await client.query(`SELECT 1 FROM app.table_zones WHERE id = $1 LIMIT 1;`, [zoneId]);
+      if (zoneResult.rowCount === 0) {
     status: OrderStatus;
     pending_items: OrderLine[];
     sent_items: OrderLine[];
-  } | null;
-};
-
-type TableDefinitionRecord = {
-  id: string;
-  label: string;
-  zoneId: string | null;
-  zoneName: string | null;
-  capacity: number | null;
-  isActive: boolean;
-  sortOrder: number;
-  createdAt: string;
-  updatedAt: string | null;
-};
-
-type TableReservationRecord = {
-  status: "holding" | "seated";
+    const sortOrderResult = await client.query<{ next_sort_order: number }>(
+      `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_sort_order FROM app.tables;`
+    );
+    const sortOrder = Number(sortOrderResult.rows[0]?.next_sort_order ?? 1);
+    await client.query(
+      `
+        INSERT INTO app.tables (id, label, zone_id, capacity, is_active, sort_order, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NULL);
+      `,
+      [id, label, zoneId, capacityValue, isActive, sortOrder]
+    );
+    const snapshot = await fetchSnapshotOrThrow(id, client);
   reservedBy: string;
   contactName: string | null;
   contactPhone: string | null;
@@ -120,14 +112,14 @@ type DbTableRow = {
   capacity: number | null;
   is_active: boolean;
   sort_order: number;
-  created_at: Date;
-  updated_at: Date | null;
+  created_at: Date | string;
+  updated_at: Date | string | null;
   assigned_waiter_id: number | null;
   assigned_waiter_name: string | null;
   state_status: OrderStatus | null;
   pending_items: string | null;
   sent_items: string | null;
-  state_updated_at: Date | null;
+  state_updated_at: Date | string | null;
   reservation_status: "holding" | "seated" | null;
   reserved_by: string | null;
   reservation_contact_name: string | null;
@@ -135,8 +127,8 @@ type DbTableRow = {
   reservation_party_size: number | null;
   reservation_notes: string | null;
   reservation_scheduled_for: string | null;
-  reservation_created_at: Date | null;
-  reservation_updated_at: Date | null;
+  reservation_created_at: Date | string | null;
+  reservation_updated_at: Date | string | null;
 };
 
 type DbSnapshot = {
@@ -276,74 +268,56 @@ function mapRowToDefinition(row: DbTableRow): TableDefinitionRecord {
 
 async function fetchTableSnapshots(
   params: { tableId?: string; includeInactive?: boolean } = {},
-  transaction?: sql.Transaction
+  client?: PoolClient
 ): Promise<DbSnapshot[]> {
   const normalizedId = params.tableId ? normalizeTableId(params.tableId) : null;
   const includeInactive = params.includeInactive ?? true;
-  const pool = transaction ? null : await getPool();
-  const request = transaction ? new sql.Request(transaction) : pool!.request();
-  request.input("tableId", sql.NVarChar(40), normalizedId);
-  request.input("includeInactive", sql.Bit, includeInactive ? 1 : 0);
-  const result = await request.query<DbTableRow>(
-    `SELECT
-        t.id,
-        t.label,
-        t.zone_id,
-        z.name AS zone_name,
-        t.capacity,
-        t.is_active,
-        t.sort_order,
-        t.created_at,
-        t.updated_at,
-        ts.assigned_waiter_id,
-        ts.assigned_waiter_name,
-        ts.status AS state_status,
-        ts.pending_items,
-        ts.sent_items,
-        ts.updated_at AS state_updated_at,
-        tr.status AS reservation_status,
-        tr.reserved_by,
-        tr.contact_name AS reservation_contact_name,
-        tr.contact_phone AS reservation_contact_phone,
-        tr.party_size AS reservation_party_size,
-        tr.notes AS reservation_notes,
-        tr.scheduled_for AS reservation_scheduled_for,
-        tr.created_at AS reservation_created_at,
-        tr.updated_at AS reservation_updated_at
-      FROM app.tables t
-      LEFT JOIN app.table_zones z ON z.id = t.zone_id
-      LEFT JOIN app.table_state ts ON ts.table_id = t.id
-      LEFT JOIN app.table_reservations tr ON tr.table_id = t.id
-      WHERE (@tableId IS NULL OR t.id = @tableId)
-        AND (@includeInactive = 1 OR t.is_active = 1)
-      ORDER BY t.sort_order, t.label;`
-  );
-  return result.recordset.map((row) => ({
+  const values: Array<string | boolean | null> = [normalizedId, includeInactive];
+  const sqlText = `
+    SELECT
+      t.id,
+      t.label,
+      t.zone_id,
+      z.name AS zone_name,
+      t.capacity,
+      t.is_active,
+      t.sort_order,
+      t.created_at,
+      t.updated_at,
+      ts.assigned_waiter_id,
+      ts.assigned_waiter_name,
+      ts.status AS state_status,
+      ts.pending_items,
+      ts.sent_items,
+      ts.updated_at AS state_updated_at,
+      tr.status AS reservation_status,
+      tr.reserved_by,
+      tr.contact_name AS reservation_contact_name,
+      tr.contact_phone AS reservation_contact_phone,
+      tr.party_size AS reservation_party_size,
+      tr.notes AS reservation_notes,
+      tr.scheduled_for AS reservation_scheduled_for,
+      tr.created_at AS reservation_created_at,
+      tr.updated_at AS reservation_updated_at
+    FROM app.tables t
+    LEFT JOIN app.table_zones z ON z.id = t.zone_id
+    LEFT JOIN app.table_state ts ON ts.table_id = t.id
+    LEFT JOIN app.table_reservations tr ON tr.table_id = t.id
+    WHERE ($1::text IS NULL OR t.id = $1::text)
+      AND ($2::boolean OR t.is_active = TRUE)
+    ORDER BY t.sort_order, t.label;
+  `;
+  const result = client
+    ? await client.query<DbTableRow>(sqlText, values)
+    : await query<DbTableRow>(sqlText, values);
+  return result.rows.map((row) => ({
     definition: mapRowToDefinition(row),
     state: buildStateFromRow(row),
   }));
 }
 
-async function withTransaction<T>(handler: (transaction: sql.Transaction) => Promise<T>): Promise<T> {
-  const pool = await getPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
-  try {
-    const result = await handler(transaction);
-    await transaction.commit();
-    return result;
-  } catch (error) {
-    try {
-      await transaction.rollback();
-    } catch (rollbackError) {
-      console.error("No se pudo revertir la transacción de mesas", rollbackError);
-    }
-    throw error;
-  }
-}
-
-async function fetchSnapshotOrThrow(tableId: string, transaction: sql.Transaction): Promise<DbSnapshot> {
-  const rows = await fetchTableSnapshots({ tableId, includeInactive: true }, transaction);
+async function fetchSnapshotOrThrow(tableId: string, client: PoolClient): Promise<DbSnapshot> {
+  const rows = await fetchTableSnapshots({ tableId, includeInactive: true }, client);
   if (rows.length === 0) {
     throw new Error("Mesa no encontrada");
   }
@@ -993,8 +967,8 @@ async function claimWaiterTableDb(params: {
 }): Promise<WaiterTableSnapshot> {
   const tableId = normalizeTableId(params.tableId);
   const waiterName = params.waiterName.trim();
-  return withTransaction(async (transaction) => {
-    const snapshot = await fetchSnapshotOrThrow(tableId, transaction);
+  return withTransaction(async (client: PoolClient) => {
+    const snapshot = await fetchSnapshotOrThrow(tableId, client);
     if (!snapshot.definition.isActive) {
       throw new Error("La mesa está inactiva");
     }
@@ -1005,38 +979,32 @@ async function claimWaiterTableDb(params: {
     const status: OrderStatus = state && (state.status === "facturado" || state.status === "anulado") ? "normal" : state?.status ?? "normal";
     const pendingItems = serializeOrderLines(state?.pendingItems ?? []);
     const sentItems = serializeOrderLines(state?.sentItems ?? []);
-    const request = new sql.Request(transaction);
-    request.input("tableId", sql.NVarChar(40), tableId);
-    request.input("assignedWaiterId", sql.Int, params.waiterId);
-    request.input("assignedWaiterName", sql.NVarChar(150), waiterName || null);
-    request.input("status", sql.NVarChar(20), status);
-    request.input("pendingItems", sql.NVarChar(sql.MAX), pendingItems);
-    request.input("sentItems", sql.NVarChar(sql.MAX), sentItems);
-    await request.query(`
-      UPDATE app.table_state
-      SET assigned_waiter_id = @assignedWaiterId,
-          assigned_waiter_name = @assignedWaiterName,
-          status = @status,
-          pending_items = @pendingItems,
-          sent_items = @sentItems,
-          updated_at = SYSUTCDATETIME()
-      WHERE table_id = @tableId;
-      IF @@ROWCOUNT = 0
-      BEGIN
+    await client.query(
+      `
         INSERT INTO app.table_state (table_id, assigned_waiter_id, assigned_waiter_name, status, pending_items, sent_items, updated_at)
-        VALUES (@tableId, @assignedWaiterId, @assignedWaiterName, @status, @pendingItems, @sentItems, SYSUTCDATETIME());
-      END;
-    `);
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (table_id)
+        DO UPDATE SET
+          assigned_waiter_id = EXCLUDED.assigned_waiter_id,
+          assigned_waiter_name = EXCLUDED.assigned_waiter_name,
+          status = EXCLUDED.status,
+          pending_items = EXCLUDED.pending_items,
+          sent_items = EXCLUDED.sent_items,
+          updated_at = NOW();
+      `,
+      [tableId, params.waiterId, waiterName || null, status, pendingItems, sentItems]
+    );
     if (state?.reservation) {
-      const reservationRequest = new sql.Request(transaction);
-      reservationRequest.input("tableId", sql.NVarChar(40), tableId);
-      await reservationRequest.query(`
-        UPDATE app.table_reservations
-        SET status = 'seated', updated_at = SYSUTCDATETIME()
-        WHERE table_id = @tableId;
-      `);
+      await client.query(
+        `
+          UPDATE app.table_reservations
+          SET status = 'seated', updated_at = NOW()
+          WHERE table_id = $1;
+        `,
+        [tableId]
+      );
     }
-    const updated = await fetchSnapshotOrThrow(tableId, transaction);
+    const updated = await fetchSnapshotOrThrow(tableId, client);
     return toWaiterSnapshot(updated.definition, updated.state);
   });
 }
@@ -1052,8 +1020,8 @@ async function storeWaiterTableOrderDb(params: {
   const waiterName = params.waiterName.trim();
   const pendingItems = serializeOrderLines(params.pendingItems);
   const sentItems = serializeOrderLines(params.sentItems);
-  return withTransaction(async (transaction) => {
-    const snapshot = await fetchSnapshotOrThrow(tableId, transaction);
+  return withTransaction(async (client: PoolClient) => {
+    const snapshot = await fetchSnapshotOrThrow(tableId, client);
     if (!snapshot.definition.isActive) {
       throw new Error("La mesa está inactiva");
     }
@@ -1062,29 +1030,22 @@ async function storeWaiterTableOrderDb(params: {
       throw new Error("La mesa está asignada a otro mesero");
     }
     const status: OrderStatus = state && (state.status === "facturado" || state.status === "anulado") ? "normal" : state?.status ?? "normal";
-    const request = new sql.Request(transaction);
-    request.input("tableId", sql.NVarChar(40), tableId);
-    request.input("assignedWaiterId", sql.Int, params.waiterId);
-    request.input("assignedWaiterName", sql.NVarChar(150), waiterName || null);
-    request.input("status", sql.NVarChar(20), status);
-    request.input("pendingItems", sql.NVarChar(sql.MAX), pendingItems);
-    request.input("sentItems", sql.NVarChar(sql.MAX), sentItems);
-    await request.query(`
-      UPDATE app.table_state
-      SET assigned_waiter_id = @assignedWaiterId,
-          assigned_waiter_name = @assignedWaiterName,
-          status = @status,
-          pending_items = @pendingItems,
-          sent_items = @sentItems,
-          updated_at = SYSUTCDATETIME()
-      WHERE table_id = @tableId;
-      IF @@ROWCOUNT = 0
-      BEGIN
+    await client.query(
+      `
         INSERT INTO app.table_state (table_id, assigned_waiter_id, assigned_waiter_name, status, pending_items, sent_items, updated_at)
-        VALUES (@tableId, @assignedWaiterId, @assignedWaiterName, @status, @pendingItems, @sentItems, SYSUTCDATETIME());
-      END;
-    `);
-    const updated = await fetchSnapshotOrThrow(tableId, transaction);
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (table_id)
+        DO UPDATE SET
+          assigned_waiter_id = EXCLUDED.assigned_waiter_id,
+          assigned_waiter_name = EXCLUDED.assigned_waiter_name,
+          status = EXCLUDED.status,
+          pending_items = EXCLUDED.pending_items,
+          sent_items = EXCLUDED.sent_items,
+          updated_at = NOW();
+      `,
+      [tableId, params.waiterId, waiterName || null, status, pendingItems, sentItems]
+    );
+    const updated = await fetchSnapshotOrThrow(tableId, client);
     return toWaiterSnapshot(updated.definition, updated.state);
   });
 }
@@ -1104,38 +1065,29 @@ async function createTableDefinitionDb(input: {
   const capacityValue = typeof input.capacity === "number" && Number.isFinite(input.capacity) && input.capacity > 0 ? Math.floor(input.capacity) : null;
   const zoneId = input.zoneId ? normalizeZoneId(input.zoneId) : null;
   const isActive = input.isActive ?? true;
-  return withTransaction(async (transaction) => {
-    const poolCheck = new sql.Request(transaction);
-    poolCheck.input("tableId", sql.NVarChar(40), id);
-    const duplicate = await poolCheck.query(`SELECT 1 FROM app.tables WHERE id = @tableId;`);
-    if (duplicate.recordset.length > 0) {
+  return withTransaction(async (client: PoolClient) => {
+    const duplicate = await client.query(`SELECT 1 FROM app.tables WHERE id = $1 LIMIT 1;`, [id]);
+    if (duplicate.rowCount > 0) {
       throw new Error("Ya existe una mesa con ese código");
     }
     if (zoneId) {
-      const zoneRequest = new sql.Request(transaction);
-      zoneRequest.input("zoneId", sql.NVarChar(40), zoneId);
-      const zoneResult = await zoneRequest.query(`SELECT 1 FROM app.table_zones WHERE id = @zoneId;`);
-      if (zoneResult.recordset.length === 0) {
+      const zoneResult = await client.query(`SELECT 1 FROM app.table_zones WHERE id = $1 LIMIT 1;`, [zoneId]);
+      if (zoneResult.rowCount === 0) {
         throw new Error("La zona seleccionada no existe");
       }
     }
-    const sortOrderRequest = new sql.Request(transaction);
-    const sortOrderResult = await sortOrderRequest.query<{ nextSortOrder: number }>(
-      `SELECT ISNULL(MAX(sort_order), 0) + 1 AS nextSortOrder FROM app.tables;`
+    const sortOrderResult = await client.query<{ next_sort_order: number }>(
+      `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_sort_order FROM app.tables;`
     );
-    const sortOrder = sortOrderResult.recordset[0]?.nextSortOrder ?? 1;
-    const insertRequest = new sql.Request(transaction);
-    insertRequest.input("tableId", sql.NVarChar(40), id);
-    insertRequest.input("label", sql.NVarChar(120), label);
-    insertRequest.input("zoneId", sql.NVarChar(40), zoneId);
-    insertRequest.input("capacity", sql.Int, capacityValue);
-    insertRequest.input("isActive", sql.Bit, isActive ? 1 : 0);
-    insertRequest.input("sortOrder", sql.Int, sortOrder);
-    await insertRequest.query(`
-      INSERT INTO app.tables (id, label, zone_id, capacity, is_active, sort_order, created_at, updated_at)
-      VALUES (@tableId, @label, @zoneId, @capacity, @isActive, @sortOrder, SYSUTCDATETIME(), NULL);
-    `);
-    const snapshot = await fetchSnapshotOrThrow(id, transaction);
+    const sortOrder = Number(sortOrderResult.rows[0]?.next_sort_order ?? 1);
+    await client.query(
+      `
+        INSERT INTO app.tables (id, label, zone_id, capacity, is_active, sort_order, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NULL);
+      `,
+      [id, label, zoneId, capacityValue, isActive, sortOrder]
+    );
+    const snapshot = await fetchSnapshotOrThrow(id, client);
     return toDefinitionSnapshot(snapshot.definition);
   });
 }
@@ -1147,8 +1099,8 @@ async function updateTableDefinitionDb(tableId: string, patch: {
   isActive?: boolean;
 }): Promise<TableDefinition> {
   const id = normalizeTableId(tableId);
-  return withTransaction(async (transaction) => {
-    const snapshot = await fetchSnapshotOrThrow(id, transaction);
+  return withTransaction(async (client: PoolClient) => {
+    const snapshot = await fetchSnapshotOrThrow(id, client);
     const current = snapshot.definition;
     const label = patch.label !== undefined ? patch.label.trim() : current.label;
     if (!label) {
@@ -1157,10 +1109,8 @@ async function updateTableDefinitionDb(tableId: string, patch: {
     const zoneId =
       patch.zoneId !== undefined ? (patch.zoneId ? normalizeZoneId(patch.zoneId) : null) : current.zoneId;
     if (zoneId) {
-      const zoneRequest = new sql.Request(transaction);
-      zoneRequest.input("zoneId", sql.NVarChar(40), zoneId);
-      const zoneResult = await zoneRequest.query(`SELECT 1 FROM app.table_zones WHERE id = @zoneId;`);
-      if (zoneResult.recordset.length === 0) {
+      const zoneResult = await client.query(`SELECT 1 FROM app.table_zones WHERE id = $1 LIMIT 1;`, [zoneId]);
+      if (zoneResult.rowCount === 0) {
         throw new Error("La zona seleccionada no existe");
       }
     }
@@ -1171,38 +1121,31 @@ async function updateTableDefinitionDb(tableId: string, patch: {
         ? null
         : current.capacity;
     const isActive = patch.isActive !== undefined ? patch.isActive : current.isActive;
-    const updateRequest = new sql.Request(transaction);
-    updateRequest.input("tableId", sql.NVarChar(40), id);
-    updateRequest.input("label", sql.NVarChar(120), label);
-    updateRequest.input("zoneId", sql.NVarChar(40), zoneId);
-    updateRequest.input("capacity", sql.Int, capacityValue);
-    updateRequest.input("isActive", sql.Bit, isActive ? 1 : 0);
-    await updateRequest.query(`
-      UPDATE app.tables
-      SET label = @label,
-          zone_id = @zoneId,
-          capacity = @capacity,
-          is_active = @isActive,
-          updated_at = SYSUTCDATETIME()
-      WHERE id = @tableId;
-    `);
+    await client.query(
+      `
+        UPDATE app.tables
+        SET label = $1,
+            zone_id = $2,
+            capacity = $3,
+            is_active = $4,
+            updated_at = NOW()
+        WHERE id = $5;
+      `,
+      [label, zoneId, capacityValue, isActive, id]
+    );
     if (!isActive) {
-      const cleanupRequest = new sql.Request(transaction);
-      cleanupRequest.input("tableId", sql.NVarChar(40), id);
-      await cleanupRequest.query(`
-        DELETE FROM app.table_reservations WHERE table_id = @tableId;
-        DELETE FROM app.table_state WHERE table_id = @tableId;
-      `);
+      await client.query(`DELETE FROM app.table_reservations WHERE table_id = $1;`, [id]);
+      await client.query(`DELETE FROM app.table_state WHERE table_id = $1;`, [id]);
     }
-    const updated = await fetchSnapshotOrThrow(id, transaction);
+    const updated = await fetchSnapshotOrThrow(id, client);
     return toDefinitionSnapshot(updated.definition);
   });
 }
 
 async function deleteTableDefinitionDb(tableId: string): Promise<void> {
   const id = normalizeTableId(tableId);
-  await withTransaction(async (transaction) => {
-    const snapshot = await fetchSnapshotOrThrow(id, transaction);
+  await withTransaction(async (client: PoolClient) => {
+    const snapshot = await fetchSnapshotOrThrow(id, client);
     const state = snapshot.state;
     const hasActiveOrder =
       state && state.status === "normal" && (state.pendingItems.length > 0 || state.sentItems.length > 0 || state.assignedWaiterId !== null);
@@ -1213,65 +1156,50 @@ async function deleteTableDefinitionDb(tableId: string): Promise<void> {
     if (hasReservation) {
       throw new Error("No puedes eliminar una mesa con una reservación activa");
     }
-    const request = new sql.Request(transaction);
-    request.input("tableId", sql.NVarChar(40), id);
-    await request.query(`
-      DELETE FROM app.table_reservations WHERE table_id = @tableId;
-      DELETE FROM app.table_state WHERE table_id = @tableId;
-      DELETE FROM app.tables WHERE id = @tableId;
-    `);
-    await new sql.Request(transaction).query(`
+    await client.query(`DELETE FROM app.table_reservations WHERE table_id = $1;`, [id]);
+    await client.query(`DELETE FROM app.table_state WHERE table_id = $1;`, [id]);
+    await client.query(`DELETE FROM app.tables WHERE id = $1;`, [id]);
+    await client.query(`
       WITH ordered AS (
         SELECT id, ROW_NUMBER() OVER (ORDER BY sort_order, label, id) AS rn
         FROM app.tables
       )
-      UPDATE t
-      SET sort_order = o.rn
-      FROM app.tables AS t
-      INNER JOIN ordered o ON o.id = t.id;
+      UPDATE app.tables AS t
+      SET sort_order = ordered.rn
+      FROM ordered
+      WHERE ordered.id = t.id;
     `);
   });
 }
 
 async function setTableOrderStatusDb(tableId: string, status: OrderStatus): Promise<TableAdminSnapshot> {
   const id = normalizeTableId(tableId);
-  return withTransaction(async (transaction) => {
-    const snapshot = await fetchSnapshotOrThrow(id, transaction);
+  return withTransaction(async (client: PoolClient) => {
+    const snapshot = await fetchSnapshotOrThrow(id, client);
     const state = snapshot.state;
     const assignedWaiterId = status === "normal" ? state?.assignedWaiterId ?? null : null;
     const assignedWaiterName = status === "normal" ? state?.assignedWaiterName ?? null : null;
     const pendingItems = status === "normal" ? serializeOrderLines(state?.pendingItems ?? []) : serializeOrderLines([]);
     const sentItems = status === "normal" ? serializeOrderLines(state?.sentItems ?? []) : serializeOrderLines([]);
-    const request = new sql.Request(transaction);
-    request.input("tableId", sql.NVarChar(40), id);
-    request.input("assignedWaiterId", sql.Int, assignedWaiterId);
-    request.input("assignedWaiterName", sql.NVarChar(150), assignedWaiterName);
-    request.input("status", sql.NVarChar(20), status);
-    request.input("pendingItems", sql.NVarChar(sql.MAX), pendingItems);
-    request.input("sentItems", sql.NVarChar(sql.MAX), sentItems);
-    await request.query(`
-      UPDATE app.table_state
-      SET assigned_waiter_id = @assignedWaiterId,
-          assigned_waiter_name = @assignedWaiterName,
-          status = @status,
-          pending_items = @pendingItems,
-          sent_items = @sentItems,
-          updated_at = SYSUTCDATETIME()
-      WHERE table_id = @tableId;
-      IF @@ROWCOUNT = 0
-      BEGIN
+    await client.query(
+      `
         INSERT INTO app.table_state (table_id, assigned_waiter_id, assigned_waiter_name, status, pending_items, sent_items, updated_at)
-        VALUES (@tableId, @assignedWaiterId, @assignedWaiterName, @status, @pendingItems, @sentItems, SYSUTCDATETIME());
-      END;
-    `);
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (table_id)
+        DO UPDATE SET
+          assigned_waiter_id = EXCLUDED.assigned_waiter_id,
+          assigned_waiter_name = EXCLUDED.assigned_waiter_name,
+          status = EXCLUDED.status,
+          pending_items = EXCLUDED.pending_items,
+          sent_items = EXCLUDED.sent_items,
+          updated_at = NOW();
+      `,
+      [id, assignedWaiterId, assignedWaiterName, status, pendingItems, sentItems]
+    );
     if (status !== "normal") {
-      const cleanupRequest = new sql.Request(transaction);
-      cleanupRequest.input("tableId", sql.NVarChar(40), id);
-      await cleanupRequest.query(`
-        DELETE FROM app.table_reservations WHERE table_id = @tableId;
-      `);
+      await client.query(`DELETE FROM app.table_reservations WHERE table_id = $1;`, [id]);
     }
-    const updated = await fetchSnapshotOrThrow(id, transaction);
+    const updated = await fetchSnapshotOrThrow(id, client);
     return composeAdminSnapshot(updated.definition, updated.state);
   });
 }
@@ -1298,8 +1226,8 @@ async function reserveTableDb(params: {
     typeof params.partySize === "number" && Number.isFinite(params.partySize) && params.partySize > 0
       ? Math.floor(params.partySize)
       : null;
-  return withTransaction(async (transaction) => {
-    const snapshot = await fetchSnapshotOrThrow(id, transaction);
+  return withTransaction(async (client: PoolClient) => {
+    const snapshot = await fetchSnapshotOrThrow(id, client);
     if (!snapshot.definition.isActive) {
       throw new Error("La mesa está inactiva");
     }
@@ -1316,78 +1244,71 @@ async function reserveTableDb(params: {
     const status: OrderStatus = state && (state.status === "facturado" || state.status === "anulado") ? "normal" : state?.status ?? "normal";
     const pendingItems = serializeOrderLines(state?.pendingItems ?? []);
     const sentItems = serializeOrderLines(state?.sentItems ?? []);
-    const stateRequest = new sql.Request(transaction);
-    stateRequest.input("tableId", sql.NVarChar(40), id);
-    stateRequest.input("assignedWaiterId", sql.Int, state?.assignedWaiterId ?? null);
-    stateRequest.input("assignedWaiterName", sql.NVarChar(150), state?.assignedWaiterName ?? null);
-    stateRequest.input("status", sql.NVarChar(20), status);
-    stateRequest.input("pendingItems", sql.NVarChar(sql.MAX), pendingItems);
-    stateRequest.input("sentItems", sql.NVarChar(sql.MAX), sentItems);
-    await stateRequest.query(`
-      UPDATE app.table_state
-      SET assigned_waiter_id = @assignedWaiterId,
-          assigned_waiter_name = @assignedWaiterName,
-          status = @status,
-          pending_items = @pendingItems,
-          sent_items = @sentItems,
-          updated_at = SYSUTCDATETIME()
-      WHERE table_id = @tableId;
-      IF @@ROWCOUNT = 0
-      BEGIN
+    await client.query(
+      `
         INSERT INTO app.table_state (table_id, assigned_waiter_id, assigned_waiter_name, status, pending_items, sent_items, updated_at)
-        VALUES (@tableId, @assignedWaiterId, @assignedWaiterName, @status, @pendingItems, @sentItems, SYSUTCDATETIME());
-      END;
-    `);
-    const reservationRequest = new sql.Request(transaction);
-    reservationRequest.input("tableId", sql.NVarChar(40), id);
-    reservationRequest.input("status", sql.NVarChar(20), "holding");
-    reservationRequest.input("reservedBy", sql.NVarChar(150), reservedBy);
-    reservationRequest.input("contactName", sql.NVarChar(150), contactName);
-    reservationRequest.input("contactPhone", sql.NVarChar(50), contactPhone);
-    reservationRequest.input("partySize", sql.Int, partySize);
-    reservationRequest.input("notes", sql.NVarChar(sql.MAX), notes);
-    reservationRequest.input("scheduledFor", sql.NVarChar(50), scheduledFor);
-    await reservationRequest.query(`
-      IF EXISTS (SELECT 1 FROM app.table_reservations WHERE table_id = @tableId)
-      BEGIN
-        UPDATE app.table_reservations
-        SET status = @status,
-            reserved_by = @reservedBy,
-            contact_name = @contactName,
-            contact_phone = @contactPhone,
-            party_size = @partySize,
-            notes = @notes,
-            scheduled_for = @scheduledFor,
-            updated_at = SYSUTCDATETIME()
-        WHERE table_id = @tableId;
-      END
-      ELSE
-      BEGIN
-        INSERT INTO app.table_reservations (table_id, status, reserved_by, contact_name, contact_phone, party_size, notes, scheduled_for, created_at, updated_at)
-        VALUES (@tableId, @status, @reservedBy, @contactName, @contactPhone, @partySize, @notes, @scheduledFor, SYSUTCDATETIME(), SYSUTCDATETIME());
-      END;
-    `);
-    const updated = await fetchSnapshotOrThrow(id, transaction);
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (table_id)
+        DO UPDATE SET
+          assigned_waiter_id = EXCLUDED.assigned_waiter_id,
+          assigned_waiter_name = EXCLUDED.assigned_waiter_name,
+          status = EXCLUDED.status,
+          pending_items = EXCLUDED.pending_items,
+          sent_items = EXCLUDED.sent_items,
+          updated_at = NOW();
+      `,
+      [id, state?.assignedWaiterId ?? null, state?.assignedWaiterName ?? null, status, pendingItems, sentItems]
+    );
+    await client.query(
+      `
+        INSERT INTO app.table_reservations (
+          table_id,
+          status,
+          reserved_by,
+          contact_name,
+          contact_phone,
+          party_size,
+          notes,
+          scheduled_for,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+        ON CONFLICT (table_id)
+        DO UPDATE SET
+          status = EXCLUDED.status,
+          reserved_by = EXCLUDED.reserved_by,
+          contact_name = EXCLUDED.contact_name,
+          contact_phone = EXCLUDED.contact_phone,
+          party_size = EXCLUDED.party_size,
+          notes = EXCLUDED.notes,
+          scheduled_for = EXCLUDED.scheduled_for,
+          updated_at = NOW();
+      `,
+      [id, "holding", reservedBy, contactName, contactPhone, partySize, notes, scheduledFor]
+    );
+    const updated = await fetchSnapshotOrThrow(id, client);
     return composeAdminSnapshot(updated.definition, updated.state);
   });
 }
 
 async function releaseTableReservationDb(tableId: string): Promise<TableAdminSnapshot> {
   const id = normalizeTableId(tableId);
-  return withTransaction(async (transaction) => {
-    const snapshot = await fetchSnapshotOrThrow(id, transaction);
+  return withTransaction(async (client: PoolClient) => {
+    const snapshot = await fetchSnapshotOrThrow(id, client);
     if (!snapshot.state?.reservation) {
       return composeAdminSnapshot(snapshot.definition, snapshot.state);
     }
-    const request = new sql.Request(transaction);
-    request.input("tableId", sql.NVarChar(40), id);
-    await request.query(`
-      DELETE FROM app.table_reservations WHERE table_id = @tableId;
-      UPDATE app.table_state
-      SET updated_at = SYSUTCDATETIME()
-      WHERE table_id = @tableId;
-    `);
-    const updated = await fetchSnapshotOrThrow(id, transaction);
+    await client.query(`DELETE FROM app.table_reservations WHERE table_id = $1;`, [id]);
+    await client.query(
+      `
+        UPDATE app.table_state
+        SET updated_at = NOW()
+        WHERE table_id = $1;
+      `,
+      [id]
+    );
+    const updated = await fetchSnapshotOrThrow(id, client);
     return composeAdminSnapshot(updated.definition, updated.state);
   });
 }

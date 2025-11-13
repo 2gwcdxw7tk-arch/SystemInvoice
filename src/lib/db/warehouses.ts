@@ -1,7 +1,7 @@
 import "server-only";
 
 import { env } from "@/lib/env";
-import { getPool, sql } from "@/lib/db/mssql";
+import { query } from "@/lib/db/postgres";
 
 export interface WarehouseRow {
   id: number;
@@ -21,18 +21,13 @@ export async function listWarehouses(options: { includeInactive?: boolean } = {}
   if (env.useMockData) {
     return includeInactive ? mockWarehouses : mockWarehouses.filter((w) => w.is_active);
   }
-  const pool = await getPool();
-  const req = pool.request();
-  if (!includeInactive) {
-    req.input("is_active", sql.Bit, 1);
-  }
-  const result = await req.query<WarehouseRow>(`
-    SELECT id, code, name, is_active
-    FROM app.warehouses
-    ${includeInactive ? "" : "WHERE is_active = 1"}
-    ORDER BY name
-  `);
-  return result.recordset.map((row) => ({
+  const result = await query<{ id: number; code: string; name: string; is_active: boolean }>(
+    `SELECT id, code, name, is_active
+     FROM app.warehouses
+     ${includeInactive ? "" : "WHERE is_active = true"}
+     ORDER BY name`
+  );
+  return result.rows.map((row) => ({
     id: Number(row.id),
     code: row.code,
     name: row.name,
@@ -46,15 +41,15 @@ export async function getWarehouseByCode(code: string): Promise<WarehouseRow | n
     const found = mockWarehouses.find((w) => w.code.toUpperCase() === code.toUpperCase());
     return found ? { ...found } : null;
   }
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("code", sql.NVarChar(20), code.toUpperCase());
-  const result = await req.query<WarehouseRow>(`
-    SELECT TOP 1 id, code, name, is_active
-    FROM app.warehouses
-    WHERE UPPER(code) = @code
-  `);
-  const row = result.recordset[0];
+  const normalizedCode = code.toUpperCase();
+  const result = await query<{ id: number; code: string; name: string; is_active: boolean }>(
+    `SELECT id, code, name, is_active
+     FROM app.warehouses
+     WHERE UPPER(code) = $1
+     LIMIT 1`,
+    [normalizedCode]
+  );
+  const row = result.rows[0];
   return row
     ? {
         id: Number(row.id),

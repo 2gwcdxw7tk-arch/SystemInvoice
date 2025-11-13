@@ -1,7 +1,5 @@
-import sql from "mssql";
-
 import { env } from "@/lib/env";
-import { getPool } from "@/lib/db/mssql";
+import { query } from "@/lib/db/postgres";
 
 export type ExchangeRateRecord = {
   rateDate: Date;
@@ -59,28 +57,26 @@ export async function getExchangeRateHistory(limit = 7): Promise<ExchangeRateRec
     return mockExchangeRates.slice(0, normalizedLimit);
   }
 
-  const pool = await getPool();
-  const result = await pool
-    .request()
-    .input("limit", sql.Int, normalizedLimit)
-    .query<{
-      rate_date: Date;
-      rate_value: number;
-      base_currency_code: string;
-      quote_currency_code: string;
-      source_name: string | null;
-    }>(
-      `SELECT TOP (@limit)
-         rate_date,
-         rate_value,
-         base_currency_code,
-         quote_currency_code,
-         source_name
-       FROM app.exchange_rates
-       ORDER BY rate_date DESC`
-    );
+  const result = await query<{
+    rate_date: Date;
+    rate_value: number;
+    base_currency_code: string;
+    quote_currency_code: string;
+    source_name: string | null;
+  }>(
+    `SELECT
+       rate_date,
+       rate_value,
+       base_currency_code,
+       quote_currency_code,
+       source_name
+     FROM app.exchange_rates
+     ORDER BY rate_date DESC
+     LIMIT $1`,
+    [normalizedLimit]
+  );
 
-  return result.recordset.map(mapRecord);
+  return result.rows.map(mapRecord);
 }
 
 export async function getCurrentExchangeRate(): Promise<ExchangeRateRecord | null> {
@@ -96,27 +92,25 @@ export async function getExchangeRateForDate(rateDate: Date): Promise<ExchangeRa
     return mockExchangeRates.find((entry) => entry.rateDate.getTime() === normalizedDate.getTime()) ?? null;
   }
 
-  const pool = await getPool();
-  const result = await pool
-    .request()
-    .input("rateDate", sql.Date, normalizedDate)
-    .query<{
-      rate_date: Date;
-      rate_value: number;
-      base_currency_code: string;
-      quote_currency_code: string;
-      source_name: string | null;
-    }>(
-      `SELECT TOP (1)
-         rate_date,
-         rate_value,
-         base_currency_code,
-         quote_currency_code,
-         source_name
-       FROM app.exchange_rates
-       WHERE rate_date = @rateDate
-       ORDER BY created_at DESC`
-    );
+  const result = await query<{
+    rate_date: Date;
+    rate_value: number;
+    base_currency_code: string;
+    quote_currency_code: string;
+    source_name: string | null;
+  }>(
+    `SELECT
+       rate_date,
+       rate_value,
+       base_currency_code,
+       quote_currency_code,
+       source_name
+     FROM app.exchange_rates
+     WHERE rate_date = $1::date
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [normalizedDate]
+  );
 
-  return result.recordset.length > 0 ? mapRecord(result.recordset[0]) : null;
+  return result.rows.length > 0 ? mapRecord(result.rows[0]) : null;
 }

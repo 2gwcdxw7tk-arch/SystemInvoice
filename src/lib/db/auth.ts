@@ -1,9 +1,8 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
-import sql from "mssql";
 
 import { env } from "@/lib/env";
-import { getPool } from "@/lib/db/mssql";
+import { query } from "@/lib/db/postgres";
 
 export type AdminUser = {
   id: number;
@@ -187,20 +186,18 @@ async function upsertLoginAudit(params: {
     return;
   }
 
-  const pool = await getPool();
-
-  await pool
-    .request()
-    .input("loginType", sql.NVarChar(20), params.loginType)
-    .input("identifier", sql.NVarChar(150), params.identifier)
-    .input("success", sql.Bit, params.success ? 1 : 0)
-    .input("ipAddress", sql.NVarChar(45), params.ipAddress ?? null)
-    .input("userAgent", sql.NVarChar(300), params.userAgent?.slice(0, 300) ?? null)
-    .input("notes", sql.NVarChar(300), params.notes?.slice(0, 300) ?? null)
-    .query(`
-      INSERT INTO app.login_audit (login_type, identifier, success, ip_address, user_agent, notes)
-      VALUES (@loginType, @identifier, @success, @ipAddress, @userAgent, @notes)
-    `);
+  await query(
+    `INSERT INTO app.login_audit (login_type, identifier, success, ip_address, user_agent, notes)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      params.loginType,
+      params.identifier,
+      params.success,
+      params.ipAddress ?? null,
+      params.userAgent?.slice(0, 300) ?? null,
+      params.notes?.slice(0, 300) ?? null,
+    ]
+  );
 }
 
 export async function verifyAdminCredentials(
@@ -250,25 +247,22 @@ export async function verifyAdminCredentials(
     };
   }
 
-  const pool = await getPool();
   const normalizedUsername = normalizeIdentifier(username);
+  const result = await query<{
+    id: number;
+    username: string;
+    password_hash: string;
+    display_name: string | null;
+    is_active: boolean;
+  }>(
+    `SELECT id, username, password_hash, display_name, is_active
+     FROM app.admin_users
+     WHERE username = $1
+     LIMIT 1`,
+    [normalizedUsername]
+  );
 
-  const result = await pool
-    .request()
-    .input("username", sql.NVarChar(120), normalizedUsername)
-    .query<{
-      id: number;
-      username: string;
-      password_hash: string;
-      display_name: string | null;
-      is_active: boolean;
-    }>(
-      `SELECT TOP (1) id, username, password_hash, display_name, is_active
-       FROM app.admin_users
-       WHERE username = @username`
-    );
-
-  const record = result.recordset[0];
+  const record = result.rows[0];
 
   if (!record || !record.is_active) {
     await upsertLoginAudit({
@@ -304,10 +298,7 @@ export async function verifyAdminCredentials(
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
     }),
-    pool
-      .request()
-      .input("id", sql.Int, record.id)
-      .query("UPDATE app.admin_users SET last_login_at = SYSUTCDATETIME() WHERE id = @id"),
+    query("UPDATE app.admin_users SET last_login_at = NOW() WHERE id = $1", [record.id]),
   ]);
 
   return {
@@ -370,25 +361,22 @@ export async function verifyWaiterPin(
     };
   }
 
-  const pool = await getPool();
   const signature = computePinSignature(pin);
+  const result = await query<{
+    id: number;
+    code: string;
+    full_name: string;
+    pin_hash: string;
+    is_active: boolean;
+  }>(
+    `SELECT id, code, full_name, pin_hash, is_active
+     FROM app.waiters
+     WHERE pin_signature = $1
+     LIMIT 1`,
+    [signature]
+  );
 
-  const result = await pool
-    .request()
-    .input("signature", sql.Char(64), signature)
-    .query<{
-      id: number;
-      code: string;
-      full_name: string;
-      pin_hash: string;
-      is_active: boolean;
-    }>(
-      `SELECT TOP (1) id, code, full_name, pin_hash, is_active
-       FROM app.waiters
-       WHERE pin_signature = @signature`
-    );
-
-  const record = result.recordset[0];
+  const record = result.rows[0];
 
   if (!record || !record.is_active) {
     await upsertLoginAudit({
@@ -424,10 +412,7 @@ export async function verifyWaiterPin(
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
     }),
-    pool
-      .request()
-      .input("id", sql.Int, record.id)
-      .query("UPDATE app.waiters SET last_login_at = SYSUTCDATETIME() WHERE id = @id"),
+    query("UPDATE app.waiters SET last_login_at = NOW() WHERE id = $1", [record.id]),
   ]);
 
   return {
@@ -454,22 +439,20 @@ export async function getWaiterById(waiterId: number): Promise<WaiterUser | null
     };
   }
 
-  const pool = await getPool();
-  const result = await pool
-    .request()
-    .input("id", sql.Int, waiterId)
-    .query<{
-      id: number;
-      code: string;
-      full_name: string;
-      is_active: boolean;
-    }>(
-      `SELECT TOP (1) id, code, full_name, is_active
-       FROM app.waiters
-       WHERE id = @id`
-    );
+  const result = await query<{
+    id: number;
+    code: string;
+    full_name: string;
+    is_active: boolean;
+  }>(
+    `SELECT id, code, full_name, is_active
+     FROM app.waiters
+     WHERE id = $1
+     LIMIT 1`,
+    [waiterId]
+  );
 
-  const record = result.recordset[0];
+  const record = result.rows[0];
   if (!record || !record.is_active) {
     return null;
   }
@@ -489,17 +472,14 @@ export async function listWaiterDirectory(options: { includeInactive?: boolean }
       .map((waiter) => cloneDirectoryEntry(waiter));
   }
 
-  const pool = await getPool();
-  const result = await pool
-    .request()
-    .input("includeInactive", sql.Bit, includeInactive ? 1 : 0)
-    .query<DbWaiterRow>(
-      `SELECT id, code, full_name, phone, email, is_active, last_login_at, created_at, updated_at
-       FROM app.waiters
-       WHERE @includeInactive = 1 OR is_active = 1`
-    );
+  const result = await query<DbWaiterRow>(
+    `SELECT id, code, full_name, phone, email, is_active, last_login_at, created_at, updated_at
+     FROM app.waiters
+     WHERE $1::boolean IS TRUE OR is_active = TRUE`,
+    [includeInactive]
+  );
 
-  return result.recordset.map((row) => mapDbWaiterRow(row));
+  return result.rows.map((row) => mapDbWaiterRow(row));
 }
 
 type CreateWaiterParams = {
@@ -549,23 +529,14 @@ export async function createWaiterDirectoryEntry(params: CreateWaiterParams): Pr
     return cloneDirectoryEntry(record);
   }
 
-  const pool = await getPool();
-  const result = await pool
-    .request()
-    .input("code", sql.NVarChar(50), code)
-    .input("fullName", sql.NVarChar(150), fullName)
-    .input("pinHash", sql.NVarChar(100), pinHash)
-    .input("pinSignature", sql.Char(64), pinSignature)
-    .input("isActive", sql.Bit, isActive ? 1 : 0)
-    .input("phone", sql.NVarChar(30), phone)
-    .input("email", sql.NVarChar(150), email)
-    .query<DbWaiterRow>(
-      `INSERT INTO app.waiters (code, full_name, pin_hash, pin_signature, is_active, phone, email)
-       OUTPUT inserted.id, inserted.code, inserted.full_name, inserted.phone, inserted.email, inserted.is_active, inserted.last_login_at, inserted.created_at, inserted.updated_at
-       VALUES (@code, @fullName, @pinHash, @pinSignature, @isActive, @phone, @email)`
-    );
+  const result = await query<DbWaiterRow>(
+    `INSERT INTO app.waiters (code, full_name, pin_hash, pin_signature, is_active, phone, email)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, code, full_name, phone, email, is_active, last_login_at, created_at, updated_at`,
+    [code, fullName, pinHash, pinSignature, isActive, phone, email]
+  );
 
-  const row = result.recordset[0];
+  const row = result.rows[0];
   if (!row) {
     throw new Error("No se pudo registrar el mesero");
   }
@@ -631,43 +602,49 @@ export async function updateWaiterDirectoryEntry(waiterId: number, params: Updat
     return cloneDirectoryEntry(record);
   }
 
-  const setClauses: string[] = [];
-  const pool = await getPool();
-  const request = pool.request().input("id", sql.Int, waiterId);
+  const values: unknown[] = [waiterId];
+  const setFragments: string[] = [];
+  let index = 2;
 
   if (typeof updates.code !== "undefined") {
-    request.input("code", sql.NVarChar(50), updates.code);
-    setClauses.push("code = @code");
+    setFragments.push(`code = $${index}`);
+    values.push(updates.code);
+    index += 1;
   }
   if (typeof updates.fullName !== "undefined") {
-    request.input("fullName", sql.NVarChar(150), updates.fullName);
-    setClauses.push("full_name = @fullName");
+    setFragments.push(`full_name = $${index}`);
+    values.push(updates.fullName);
+    index += 1;
   }
   if (typeof updates.phone !== "undefined") {
-    request.input("phone", sql.NVarChar(30), updates.phone ?? null);
-    setClauses.push("phone = @phone");
+    setFragments.push(`phone = $${index}`);
+    values.push(updates.phone ?? null);
+    index += 1;
   }
   if (typeof updates.email !== "undefined") {
-    request.input("email", sql.NVarChar(150), updates.email ?? null);
-    setClauses.push("email = @email");
+    setFragments.push(`email = $${index}`);
+    values.push(updates.email ?? null);
+    index += 1;
   }
   if (typeof updates.isActive !== "undefined") {
-    request.input("isActive", sql.Bit, updates.isActive ? 1 : 0);
-    setClauses.push("is_active = @isActive");
+    setFragments.push(`is_active = $${index}`);
+    values.push(!!updates.isActive);
+    index += 1;
   }
 
-  if (!setClauses.length) {
+  if (!setFragments.length) {
     throw new Error("No hay cambios para aplicar");
   }
 
-  const result = await request.query<DbWaiterRow>(
+  const result = await query<DbWaiterRow>(
     `UPDATE app.waiters
-     SET ${setClauses.join(", ")}
-     OUTPUT inserted.id, inserted.code, inserted.full_name, inserted.phone, inserted.email, inserted.is_active, inserted.last_login_at, inserted.created_at, inserted.updated_at
-     WHERE id = @id`
+     SET ${setFragments.join(", ")}
+     WHERE id = $1
+     RETURNING id, code, full_name, phone, email, is_active, last_login_at, created_at, updated_at`,
+    values
   );
 
-  const row = result.recordset[0];
+  const row = result.rows[0];
   if (!row) {
     throw new Error("Mesero no encontrado");
   }
@@ -689,21 +666,16 @@ export async function resetWaiterPin(waiterId: number, newPin: string): Promise<
     return cloneDirectoryEntry(record);
   }
 
-  const pool = await getPool();
-  const result = await pool
-    .request()
-    .input("id", sql.Int, waiterId)
-    .input("pinHash", sql.NVarChar(100), pinHash)
-    .input("pinSignature", sql.Char(64), pinSignature)
-    .query<DbWaiterRow>(
-      `UPDATE app.waiters
-       SET pin_hash = @pinHash,
-           pin_signature = @pinSignature
-       OUTPUT inserted.id, inserted.code, inserted.full_name, inserted.phone, inserted.email, inserted.is_active, inserted.last_login_at, inserted.created_at, inserted.updated_at
-       WHERE id = @id`
-    );
+  const result = await query<DbWaiterRow>(
+    `UPDATE app.waiters
+     SET pin_hash = $1,
+         pin_signature = $2
+     WHERE id = $3
+     RETURNING id, code, full_name, phone, email, is_active, last_login_at, created_at, updated_at`,
+    [pinHash, pinSignature, waiterId]
+  );
 
-  const row = result.recordset[0];
+  const row = result.rows[0];
   if (!row) {
     throw new Error("Mesero no encontrado");
   }

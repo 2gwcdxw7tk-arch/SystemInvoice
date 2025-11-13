@@ -1,7 +1,7 @@
 import "server-only";
 
 import { env } from "@/lib/env";
-import { getPool, sql } from "@/lib/db/mssql";
+import { query } from "@/lib/db/postgres";
 
 export interface InventoryAlertRow {
   id: number;
@@ -54,8 +54,7 @@ export async function listInventoryAlerts(): Promise<InventoryAlertRow[]> {
   if (env.useMockData) {
     return mockAlerts.map((alert) => ({ ...alert }));
   }
-  const pool = await getPool();
-  const result = await pool.request().query<{
+  const result = await query<{
     id: number;
     name: string;
     description: string | null;
@@ -65,12 +64,12 @@ export async function listInventoryAlerts(): Promise<InventoryAlertRow[]> {
     is_active: boolean;
     created_at: Date;
     updated_at: Date;
-  }>(`
-    SELECT id, name, description, threshold, unit_code, notify_channel, is_active, created_at, updated_at
-    FROM app.inventory_alerts
-    ORDER BY name;
-  `);
-  return result.recordset.map((row) => ({
+  }>(
+    `SELECT id, name, description, threshold, unit_code, notify_channel, is_active, created_at, updated_at
+     FROM app.inventory_alerts
+     ORDER BY name`
+  );
+  return result.rows.map((row) => ({
     id: Number(row.id),
     name: row.name,
     description: row.description,
@@ -117,35 +116,36 @@ export async function upsertInventoryAlert(input: UpsertInventoryAlertInput): Pr
     return { id };
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("name", sql.NVarChar(80), input.name);
-  req.input("description", sql.NVarChar(200), input.description ?? null);
-  req.input("threshold", sql.Decimal(18, 2), input.threshold);
-  req.input("unit_code", sql.NVarChar(20), input.unitCode ?? null);
-  req.input("notify_channel", sql.NVarChar(200), input.notifyChannel ?? null);
-  req.input("is_active", sql.Bit, input.isActive ?? true);
+  const name = input.name.trim();
+  const description = input.description ?? null;
+  const threshold = input.threshold;
+  const unitCode = input.unitCode ?? null;
+  const notifyChannel = input.notifyChannel ?? null;
+  const isActive = input.isActive ?? true;
+
   if (input.id) {
-    req.input("id", sql.Int, input.id);
-    await req.query(`
-      UPDATE app.inventory_alerts
-      SET name = @name,
-          description = @description,
-          threshold = @threshold,
-          unit_code = @unit_code,
-          notify_channel = @notify_channel,
-          is_active = @is_active,
-          updated_at = SYSUTCDATETIME()
-      WHERE id = @id;
-    `);
+    await query(
+      `UPDATE app.inventory_alerts
+       SET name = $1,
+           description = $2,
+           threshold = $3,
+           unit_code = $4,
+           notify_channel = $5,
+           is_active = $6,
+           updated_at = NOW()
+       WHERE id = $7`,
+      [name, description, threshold, unitCode, notifyChannel, isActive, input.id]
+    );
     return { id: input.id };
   }
-  const insertResult = await req.query<{ id: number }>(`
-    INSERT INTO app.inventory_alerts (name, description, threshold, unit_code, notify_channel, is_active)
-    OUTPUT INSERTED.id
-    VALUES (@name, @description, @threshold, @unit_code, @notify_channel, @is_active);
-  `);
-  return { id: Number(insertResult.recordset[0].id) };
+
+  const insertResult = await query<{ id: number }>(
+    `INSERT INTO app.inventory_alerts (name, description, threshold, unit_code, notify_channel, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
+    [name, description, threshold, unitCode, notifyChannel, isActive]
+  );
+  return { id: Number(insertResult.rows[0].id) };
 }
 
 export async function setInventoryAlertStatus(id: number, isActive: boolean): Promise<void> {
@@ -157,14 +157,11 @@ export async function setInventoryAlertStatus(id: number, isActive: boolean): Pr
     }
     return;
   }
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("id", sql.Int, id);
-  req.input("is_active", sql.Bit, isActive);
-  await req.query(`
-    UPDATE app.inventory_alerts
-    SET is_active = @is_active,
-        updated_at = SYSUTCDATETIME()
-    WHERE id = @id;
-  `);
+  await query(
+    `UPDATE app.inventory_alerts
+     SET is_active = $1,
+         updated_at = NOW()
+     WHERE id = $2`,
+    [isActive, id]
+  );
 }

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { env } from "@/lib/env";
-import { getPool, sql } from "@/lib/db/mssql";
+import { query } from "@/lib/db/postgres";
 import type { PurchaseStatus } from "@/lib/db/inventory";
 
 export interface SalesSummaryFilters {
@@ -175,118 +175,88 @@ export async function getSalesSummaryReport(filters: SalesSummaryFilters): Promi
       byDay,
     };
   }
+  const buildWhere = (options?: { includePaymentMethod?: boolean }) => {
+    const params: unknown[] = [filters.from, filters.to];
+    const conditions: string[] = ["i.created_at::date BETWEEN $1 AND $2"];
+    const pushCondition = (value: unknown, clauseFactory: (placeholder: string) => string) => {
+      params.push(value);
+      const placeholder = `$${params.length}`;
+      conditions.push(clauseFactory(placeholder));
+    };
 
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("from", sql.Date, filters.from);
-  req.input("to", sql.Date, filters.to);
-  const where: string[] = ["CAST(i.created_at AS DATE) BETWEEN @from AND @to"];
-  if (filters.waiterCode) {
-    req.input("waiter", sql.NVarChar(60), filters.waiterCode.toUpperCase());
-    where.push("UPPER(i.waiter_code) = @waiter");
-  }
-  if (filters.tableCode) {
-    req.input("tableCode", sql.NVarChar(60), filters.tableCode.toUpperCase());
-    where.push("UPPER(i.table_code) = @tableCode");
-  }
-  if (filters.customer) {
-    req.input("customer", sql.NVarChar(160), `%${filters.customer.toUpperCase()}%`);
-    where.push("(UPPER(i.customer_name) LIKE @customer OR UPPER(i.customer_tax_id) LIKE @customer)");
-  }
-  if (filters.currency) {
-    req.input("currency", sql.NVarChar(5), filters.currency.toUpperCase());
-    where.push("UPPER(i.currency_code) = @currency");
-  }
-  const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    if (filters.waiterCode) {
+      pushCondition(filters.waiterCode.toUpperCase(), (placeholder) => `UPPER(i.waiter_code) = ${placeholder}`);
+    }
+    if (filters.tableCode) {
+      pushCondition(filters.tableCode.toUpperCase(), (placeholder) => `UPPER(i.table_code) = ${placeholder}`);
+    }
+    if (filters.customer) {
+      pushCondition(`%${filters.customer.toUpperCase()}%`, (placeholder) => `(
+        UPPER(i.customer_name) LIKE ${placeholder}
+        OR UPPER(i.customer_tax_id) LIKE ${placeholder}
+      )`);
+    }
+    if (filters.currency) {
+      pushCondition(filters.currency.toUpperCase(), (placeholder) => `UPPER(i.currency_code) = ${placeholder}`);
+    }
+    if (options?.includePaymentMethod && filters.paymentMethod) {
+      pushCondition(filters.paymentMethod.toUpperCase(), (placeholder) => `UPPER(p.payment_method) = ${placeholder}`);
+    }
 
-  const totalsQuery = await req.query<{
+    return {
+      whereClause: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
+      params,
+    };
+  };
+
+  const { whereClause, params } = buildWhere();
+  const totalsQuery = await query<{
     invoices: number;
     subtotal: number;
     service_charge: number;
     vat_amount: number;
     total_amount: number;
-  }>(`
-    SELECT
-      COUNT(*) AS invoices,
-      COALESCE(SUM(i.subtotal), 0) AS subtotal,
-      COALESCE(SUM(i.service_charge), 0) AS service_charge,
-      COALESCE(SUM(i.vat_amount), 0) AS vat_amount,
-      COALESCE(SUM(i.total_amount), 0) AS total_amount
-    FROM app.invoices i
-    ${whereClause};
-  `);
+  }>(
+    `SELECT
+       COUNT(*) AS invoices,
+       COALESCE(SUM(i.subtotal), 0) AS subtotal,
+       COALESCE(SUM(i.service_charge), 0) AS service_charge,
+       COALESCE(SUM(i.vat_amount), 0) AS vat_amount,
+       COALESCE(SUM(i.total_amount), 0) AS total_amount
+     FROM app.invoices i
+     ${whereClause}`,
+    params
+  );
 
-  const totalsRow = totalsQuery.recordset[0] ?? { invoices: 0, subtotal: 0, service_charge: 0, vat_amount: 0, total_amount: 0 };
+  const totalsRow = totalsQuery.rows[0] ?? { invoices: 0, subtotal: 0, service_charge: 0, vat_amount: 0, total_amount: 0 };
   const invoicesCount = Number(totalsRow.invoices ?? 0);
   const totalAmount = Number(totalsRow.total_amount ?? 0);
 
-  const paymentsReq = pool.request();
-  paymentsReq.input("from", sql.Date, filters.from);
-  paymentsReq.input("to", sql.Date, filters.to);
-  const paymentWhere: string[] = ["CAST(i.created_at AS DATE) BETWEEN @from AND @to"];
-  if (filters.waiterCode) {
-    paymentsReq.input("waiter", sql.NVarChar(60), filters.waiterCode.toUpperCase());
-    paymentWhere.push("UPPER(i.waiter_code) = @waiter");
-  }
-  if (filters.tableCode) {
-    paymentsReq.input("tableCode", sql.NVarChar(60), filters.tableCode.toUpperCase());
-    paymentWhere.push("UPPER(i.table_code) = @tableCode");
-  }
-  if (filters.customer) {
-    paymentsReq.input("customer", sql.NVarChar(160), `%${filters.customer.toUpperCase()}%`);
-    paymentWhere.push("(UPPER(i.customer_name) LIKE @customer OR UPPER(i.customer_tax_id) LIKE @customer)");
-  }
-  if (filters.currency) {
-    paymentsReq.input("currency", sql.NVarChar(5), filters.currency.toUpperCase());
-    paymentWhere.push("UPPER(i.currency_code) = @currency");
-  }
-  if (filters.paymentMethod) {
-    paymentsReq.input("paymentMethod", sql.NVarChar(30), filters.paymentMethod.toUpperCase());
-    paymentWhere.push("UPPER(p.payment_method) = @paymentMethod");
-  }
-  const paymentsWhereClause = paymentWhere.length ? `WHERE ${paymentWhere.join(" AND ")}` : "";
-  const paymentsResult = await paymentsReq.query<{ method: string; amount: number }>(`
-    SELECT
-      p.payment_method AS method,
-      COALESCE(SUM(p.amount), 0) AS amount
-    FROM app.invoice_payments p
-    INNER JOIN app.invoices i ON i.id = p.invoice_id
-    ${paymentsWhereClause}
-    GROUP BY p.payment_method
-    ORDER BY amount DESC;
-  `);
+  const { whereClause: paymentsWhereClause, params: paymentParams } = buildWhere({ includePaymentMethod: true });
+  const paymentsResult = await query<{ method: string; amount: number }>(
+    `SELECT
+       p.payment_method AS method,
+       COALESCE(SUM(p.amount), 0) AS amount
+     FROM app.invoice_payments p
+     INNER JOIN app.invoices i ON i.id = p.invoice_id
+     ${paymentsWhereClause}
+     GROUP BY p.payment_method
+     ORDER BY amount DESC`,
+    paymentParams
+  );
 
-  const dayReq = pool.request();
-  dayReq.input("from", sql.Date, filters.from);
-  dayReq.input("to", sql.Date, filters.to);
-  const dayWhere: string[] = ["CAST(i.created_at AS DATE) BETWEEN @from AND @to"];
-  if (filters.waiterCode) {
-    dayReq.input("waiter", sql.NVarChar(60), filters.waiterCode.toUpperCase());
-    dayWhere.push("UPPER(i.waiter_code) = @waiter");
-  }
-  if (filters.tableCode) {
-    dayReq.input("tableCode", sql.NVarChar(60), filters.tableCode.toUpperCase());
-    dayWhere.push("UPPER(i.table_code) = @tableCode");
-  }
-  if (filters.customer) {
-    dayReq.input("customer", sql.NVarChar(160), `%${filters.customer.toUpperCase()}%`);
-    dayWhere.push("(UPPER(i.customer_name) LIKE @customer OR UPPER(i.customer_tax_id) LIKE @customer)");
-  }
-  if (filters.currency) {
-    dayReq.input("currency", sql.NVarChar(5), filters.currency.toUpperCase());
-    dayWhere.push("UPPER(i.currency_code) = @currency");
-  }
-  const dayWhereClause = dayWhere.length ? `WHERE ${dayWhere.join(" AND ")}` : "";
-  const byDay = await dayReq.query<{ date: Date | string; invoices: number; total: number }>(`
-    SELECT
-      CAST(i.created_at AS DATE) AS date,
-      COUNT(*) AS invoices,
-      COALESCE(SUM(i.total_amount), 0) AS total
-    FROM app.invoices i
-    ${dayWhereClause}
-    GROUP BY CAST(i.created_at AS DATE)
-    ORDER BY CAST(i.created_at AS DATE);
-  `);
+  const { whereClause: dayWhereClause, params: dayParams } = buildWhere();
+  const byDay = await query<{ date: Date | string; invoices: number; total: number }>(
+    `SELECT
+       i.created_at::date AS date,
+       COUNT(*) AS invoices,
+       COALESCE(SUM(i.total_amount), 0) AS total
+     FROM app.invoices i
+     ${dayWhereClause}
+     GROUP BY i.created_at::date
+     ORDER BY i.created_at::date`,
+    dayParams
+  );
 
   return {
     totals: {
@@ -297,11 +267,11 @@ export async function getSalesSummaryReport(filters: SalesSummaryFilters): Promi
       total: Number(totalAmount.toFixed(2)),
       averageTicket: invoicesCount > 0 ? Number((totalAmount / invoicesCount).toFixed(2)) : 0,
     },
-    payments: paymentsResult.recordset.map((row) => ({
+    payments: paymentsResult.rows.map((row) => ({
       method: row.method,
       amount: Number((row.amount ?? 0).toFixed(2)),
     })),
-    byDay: byDay.recordset.map((row) => ({
+    byDay: byDay.rows.map((row) => ({
       date: row.date instanceof Date ? row.date.toISOString() : new Date(row.date).toISOString(),
       invoices: Number(row.invoices ?? 0),
       total: Number((row.total ?? 0).toFixed(2)),
@@ -326,38 +296,36 @@ export async function getWaiterPerformanceReport(filters: WaiterPerformanceFilte
     });
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("from", sql.Date, filters.from);
-  req.input("to", sql.Date, filters.to);
-  const where: string[] = ["CAST(i.created_at AS DATE) BETWEEN @from AND @to"];
+  const params: unknown[] = [filters.from, filters.to];
+  const conditions: string[] = ["i.created_at::date BETWEEN $1 AND $2"];
   if (filters.waiterCode) {
-    req.input("waiter", sql.NVarChar(60), filters.waiterCode.toUpperCase());
-    where.push("UPPER(i.waiter_code) = @waiter");
+    params.push(filters.waiterCode.toUpperCase());
+    conditions.push(`UPPER(i.waiter_code) = $${params.length}`);
   }
-  const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const result = await req.query<{
+  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const result = await query<{
     waiter_code: string | null;
     waiter_name: string | null;
     invoices: number;
     total_sales: number;
     service_charge: number;
     last_sale_at: Date | string | null;
-  }>(`
-    SELECT
-      COALESCE(w.code, i.waiter_code) AS waiter_code,
-      COALESCE(w.full_name, i.waiter_code, 'Sin asignar') AS waiter_name,
-      COUNT(*) AS invoices,
-      COALESCE(SUM(i.total_amount), 0) AS total_sales,
-      COALESCE(SUM(i.service_charge), 0) AS service_charge,
-      MAX(i.created_at) AS last_sale_at
-    FROM app.invoices i
-    LEFT JOIN app.waiters w ON w.code = i.waiter_code
-    ${whereClause}
-    GROUP BY COALESCE(w.code, i.waiter_code), COALESCE(w.full_name, i.waiter_code, 'Sin asignar')
-    ORDER BY total_sales DESC;
-  `);
-  return result.recordset.map((row) => {
+  }>(
+    `SELECT
+       COALESCE(w.code, i.waiter_code) AS waiter_code,
+       COALESCE(w.full_name, i.waiter_code, 'Sin asignar') AS waiter_name,
+       COUNT(*) AS invoices,
+       COALESCE(SUM(i.total_amount), 0) AS total_sales,
+       COALESCE(SUM(i.service_charge), 0) AS service_charge,
+       MAX(i.created_at) AS last_sale_at
+     FROM app.invoices i
+     LEFT JOIN app.waiters w ON w.code = i.waiter_code
+     ${whereClause}
+     GROUP BY COALESCE(w.code, i.waiter_code), COALESCE(w.full_name, i.waiter_code, 'Sin asignar')
+     ORDER BY total_sales DESC`,
+    params
+  );
+  return result.rows.map((row) => {
     const invoices = Number(row.invoices ?? 0);
     const totalSales = Number(row.total_sales ?? 0);
     return {
@@ -388,51 +356,54 @@ export async function getTopItemsReport(filters: TopItemsFilters): Promise<TopIt
     });
   }
 
-  const pool = await getPool();
   const limit = Math.max(Math.min(filters.limit ?? 15, 100), 1);
-  const req = pool.request();
-  req.input("from", sql.Date, filters.from);
-  req.input("to", sql.Date, filters.to);
-  req.input("limit", sql.Int, limit);
-  const where: string[] = ["CAST(inv.created_at AS DATE) BETWEEN @from AND @to"];
+  const params: unknown[] = [filters.from, filters.to];
+  const conditions: string[] = ["inv.created_at::date BETWEEN $1 AND $2"];
+  const addCondition = (value: unknown, clauseFactory: (placeholder: string) => string) => {
+    params.push(value);
+    const placeholder = `$${params.length}`;
+    conditions.push(clauseFactory(placeholder));
+  };
+
   if (filters.search) {
-    req.input("search", sql.NVarChar(160), `%${filters.search.toUpperCase()}%`);
-    where.push("UPPER(item.description) LIKE @search");
+    addCondition(`%${filters.search.toUpperCase()}%`, (placeholder) => `UPPER(item.description) LIKE ${placeholder}`);
   }
-  const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const result = await req.query<{
+
+  params.push(limit);
+  const limitPlaceholder = `$${params.length}`;
+  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const result = await query<{
     description: string;
     quantity: number;
     total: number;
-    first_sale: Date | string | null;
-    last_sale: Date | string | null;
-  }>(`
-    SELECT TOP (@limit)
-      item.description,
-      COALESCE(SUM(item.quantity), 0) AS quantity,
-      COALESCE(SUM(item.line_total), 0) AS total,
-      MIN(inv.created_at) AS first_sale,
-      MAX(inv.created_at) AS last_sale
-    FROM app.invoice_items item
-    INNER JOIN app.invoices inv ON inv.id = item.invoice_id
-    ${whereClause}
-    GROUP BY item.description
-    ORDER BY COALESCE(SUM(item.line_total), 0) DESC;
-  `);
+    average_price: number;
+    first_sale_at: Date | string | null;
+    last_sale_at: Date | string | null;
+  }>(
+    `SELECT
+       item.description,
+       COALESCE(SUM(inv.quantity), 0) AS quantity,
+       COALESCE(SUM(inv.total_amount), 0) AS total,
+       CASE WHEN SUM(inv.quantity) > 0 THEN COALESCE(SUM(inv.total_amount), 0) / SUM(inv.quantity) ELSE 0 END AS average_price,
+       MIN(inv.created_at) AS first_sale_at,
+       MAX(inv.created_at) AS last_sale_at
+     FROM app.invoice_items item
+     INNER JOIN app.invoice_items_movements inv ON inv.item_id = item.id
+     ${whereClause}
+     GROUP BY item.description
+     ORDER BY total DESC
+     LIMIT ${limitPlaceholder}`,
+    params
+  );
 
-  return result.recordset.map((row) => {
-    const quantity = Number(row.quantity ?? 0);
-    const total = Number(row.total ?? 0);
-    const safeQuantity = quantity <= 0 ? 1 : quantity;
-    return {
-      description: row.description,
-      quantity: Number(quantity.toFixed(2)),
-      total: Number(total.toFixed(2)),
-      averagePrice: Number((total / safeQuantity).toFixed(2)),
-      firstSaleAt: row.first_sale ? (row.first_sale instanceof Date ? row.first_sale.toISOString() : new Date(row.first_sale).toISOString()) : null,
-      lastSaleAt: row.last_sale ? (row.last_sale instanceof Date ? row.last_sale.toISOString() : new Date(row.last_sale).toISOString()) : null,
-    } satisfies TopItemRow;
-  });
+  return result.rows.map((row) => ({
+    description: row.description,
+    quantity: Number((row.quantity ?? 0).toFixed(2)),
+    total: Number((row.total ?? 0).toFixed(2)),
+    averagePrice: Number((row.average_price ?? 0).toFixed(2)),
+    firstSaleAt: row.first_sale_at ? (row.first_sale_at instanceof Date ? row.first_sale_at.toISOString() : new Date(row.first_sale_at).toISOString()) : null,
+    lastSaleAt: row.last_sale_at ? (row.last_sale_at instanceof Date ? row.last_sale_at.toISOString() : new Date(row.last_sale_at).toISOString()) : null,
+  } satisfies TopItemRow));
 }
 
 export async function getInventoryMovementsReport(filters: InventoryMovementsFilters): Promise<InventoryMovementsResult> {
@@ -462,47 +433,52 @@ export async function getInventoryMovementsReport(filters: InventoryMovementsFil
     } satisfies InventoryMovementsResult;
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("from", sql.Date, filters.from);
-  req.input("to", sql.Date, filters.to);
-  const where: string[] = ["t.transaction_type = 'PURCHASE'", "CAST(t.occurred_at AS DATE) BETWEEN @from AND @to"];
+  const params: unknown[] = [filters.from, filters.to];
+  const conditions: string[] = ["t.transaction_type = 'PURCHASE'", "t.occurred_at::date BETWEEN $1 AND $2"];
+  const addCondition = (value: unknown, clauseFactory: (placeholder: string) => string) => {
+    params.push(value);
+    const placeholder = `$${params.length}`;
+    conditions.push(clauseFactory(placeholder));
+  };
+
   if (filters.article) {
-    req.input("article", sql.NVarChar(120), `%${filters.article.toUpperCase()}%`);
-    where.push("(UPPER(a.article_code) LIKE @article OR UPPER(a.name) LIKE @article)");
+    addCondition(`%${filters.article.toUpperCase()}%`, (placeholder) => `(
+      UPPER(a.article_code) LIKE ${placeholder}
+      OR UPPER(a.name) LIKE ${placeholder}
+    )`);
   }
   if (filters.warehouse) {
-    req.input("warehouse", sql.NVarChar(40), filters.warehouse.toUpperCase());
-    where.push("UPPER(w.code) = @warehouse");
+    addCondition(filters.warehouse.toUpperCase(), (placeholder) => `UPPER(w.code) = ${placeholder}`);
   }
   if (filters.transactionType) {
-    req.input("transactionType", sql.NVarChar(20), filters.transactionType.toUpperCase());
-    where.push("UPPER(t.transaction_type) = @transactionType");
+    addCondition(filters.transactionType.toUpperCase(), (placeholder) => `UPPER(t.transaction_type) = ${placeholder}`);
   }
-  const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const result = await req.query<{
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const result = await query<{
     transaction_type: string;
     entries_retail: number;
     exits_retail: number;
     entries_storage: number;
     exits_storage: number;
-  }>(`
-    SELECT
-      t.transaction_type,
-      COALESCE(SUM(CASE WHEN m.direction = 'IN' THEN m.quantity_retail ELSE 0 END), 0) AS entries_retail,
-      COALESCE(SUM(CASE WHEN m.direction = 'OUT' THEN m.quantity_retail ELSE 0 END), 0) AS exits_retail,
-      COALESCE(SUM(CASE WHEN m.direction = 'IN' THEN m.quantity_retail / NULLIF(a.conversion_factor, 0) ELSE 0 END), 0) AS entries_storage,
-      COALESCE(SUM(CASE WHEN m.direction = 'OUT' THEN m.quantity_retail / NULLIF(a.conversion_factor, 0) ELSE 0 END), 0) AS exits_storage
-    FROM app.inventory_movements m
-    INNER JOIN app.inventory_transactions t ON t.id = m.transaction_id
-    INNER JOIN app.articles a ON a.id = m.article_id
-    INNER JOIN app.warehouses w ON w.id = m.warehouse_id
-    ${whereClause}
-    GROUP BY t.transaction_type
-    ORDER BY t.transaction_type;
-  `);
+  }>(
+    `SELECT
+       t.transaction_type,
+       COALESCE(SUM(CASE WHEN m.direction = 'IN' THEN m.quantity_retail ELSE 0 END), 0) AS entries_retail,
+       COALESCE(SUM(CASE WHEN m.direction = 'OUT' THEN m.quantity_retail ELSE 0 END), 0) AS exits_retail,
+       COALESCE(SUM(CASE WHEN m.direction = 'IN' THEN m.quantity_retail / NULLIF(a.conversion_factor, 0) ELSE 0 END), 0) AS entries_storage,
+       COALESCE(SUM(CASE WHEN m.direction = 'OUT' THEN m.quantity_retail / NULLIF(a.conversion_factor, 0) ELSE 0 END), 0) AS exits_storage
+     FROM app.inventory_movements m
+     INNER JOIN app.inventory_transactions t ON t.id = m.transaction_id
+     INNER JOIN app.articles a ON a.id = m.article_id
+     INNER JOIN app.warehouses w ON w.id = m.warehouse_id
+     ${whereClause}
+     GROUP BY t.transaction_type
+     ORDER BY t.transaction_type`,
+    params
+  );
 
-  const summary = result.recordset.map((row) => {
+  const summary = result.rows.map((row) => {
     const entriesRetail = Number(row.entries_retail ?? 0);
     const exitsRetail = Number(row.exits_retail ?? 0);
     const entriesStorage = Number(row.entries_storage ?? 0);
@@ -550,21 +526,20 @@ export async function getPurchasesReport(filters: PurchasesReportFilters): Promi
     });
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("from", sql.Date, filters.from);
-  req.input("to", sql.Date, filters.to);
-  const where: string[] = ["CAST(t.occurred_at AS DATE) BETWEEN @from AND @to"];
+  const params: unknown[] = [filters.from, filters.to];
+  const conditions: string[] = ["t.occurred_at::date BETWEEN $1 AND $2"];
+
   if (filters.supplier) {
-    req.input("supplier", sql.NVarChar(160), `%${filters.supplier.toUpperCase()}%`);
-    where.push("UPPER(t.counterparty_name) LIKE @supplier");
+    params.push(`%${filters.supplier.toUpperCase()}%`);
+    conditions.push(`UPPER(t.counterparty_name) LIKE $${params.length}`);
   }
   if (filters.status) {
-    req.input("status", sql.NVarChar(20), filters.status);
-    where.push("t.status = @status");
+    params.push(filters.status);
+    conditions.push(`t.status = $${params.length}`);
   }
-  const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const result = await req.query<{
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const result = await query<{
     supplier_name: string | null;
     purchases: number;
     total_amount: number;
@@ -572,22 +547,23 @@ export async function getPurchasesReport(filters: PurchasesReportFilters): Promi
     partial_amount: number;
     paid_amount: number;
     last_purchase_at: Date | string | null;
-  }>(`
-    SELECT
-      COALESCE(t.counterparty_name, 'Sin proveedor') AS supplier_name,
-      COUNT(*) AS purchases,
-      COALESCE(SUM(t.total_amount), 0) AS total_amount,
-      COALESCE(SUM(CASE WHEN t.status = 'PENDIENTE' THEN t.total_amount ELSE 0 END), 0) AS pending_amount,
-      COALESCE(SUM(CASE WHEN t.status = 'PARCIAL' THEN t.total_amount ELSE 0 END), 0) AS partial_amount,
-      COALESCE(SUM(CASE WHEN t.status = 'PAGADA' THEN t.total_amount ELSE 0 END), 0) AS paid_amount,
-      MAX(t.occurred_at) AS last_purchase_at
-  FROM app.inventory_transactions t
-  ${whereClause}
-    GROUP BY COALESCE(t.counterparty_name, 'Sin proveedor')
-    ORDER BY total_amount DESC;
-  `);
+  }>(
+    `SELECT
+       COALESCE(t.counterparty_name, 'Sin proveedor') AS supplier_name,
+       COUNT(*) AS purchases,
+       COALESCE(SUM(t.total_amount), 0) AS total_amount,
+       COALESCE(SUM(CASE WHEN t.status = 'PENDIENTE' THEN t.total_amount ELSE 0 END), 0) AS pending_amount,
+       COALESCE(SUM(CASE WHEN t.status = 'PARCIAL' THEN t.total_amount ELSE 0 END), 0) AS partial_amount,
+       COALESCE(SUM(CASE WHEN t.status = 'PAGADA' THEN t.total_amount ELSE 0 END), 0) AS paid_amount,
+       MAX(t.occurred_at) AS last_purchase_at
+     FROM app.inventory_transactions t
+     ${whereClause}
+     GROUP BY COALESCE(t.counterparty_name, 'Sin proveedor')
+     ORDER BY total_amount DESC`,
+    params
+  );
 
-  return result.recordset.map((row) => {
+  return result.rows.map((row) => {
     const purchases = Number(row.purchases ?? 0);
     const totalAmount = Number(row.total_amount ?? 0);
     return {
@@ -623,57 +599,74 @@ export async function getInvoiceStatusReport(filters: InvoiceStatusFilters): Pro
     return { summary, topPending } satisfies InvoiceStatusResult;
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("from", sql.Date, filters.from);
-  req.input("to", sql.Date, filters.to);
-  const where: string[] = ["CAST(i.created_at AS DATE) BETWEEN @from AND @to"];
-  if (filters.customer) {
-    req.input("customer", sql.NVarChar(160), `%${filters.customer.toUpperCase()}%`);
-    where.push("(UPPER(i.customer_name) LIKE @customer OR UPPER(i.customer_tax_id) LIKE @customer)");
-  }
-  if (filters.waiterCode) {
-    req.input("waiter", sql.NVarChar(60), filters.waiterCode.toUpperCase());
-    where.push("UPPER(i.waiter_code) = @waiter");
-  }
-  const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const buildWhere = () => {
+    const params: unknown[] = [filters.from, filters.to];
+    const conditions: string[] = ["i.created_at::date BETWEEN $1 AND $2"];
+    const addCondition = (value: unknown, clauseFactory: (placeholder: string) => string) => {
+      params.push(value);
+      const placeholder = `$${params.length}`;
+      conditions.push(clauseFactory(placeholder));
+    };
 
-  const summaryResult = await req.query<{
+    if (filters.customer) {
+      addCondition(`%${filters.customer.toUpperCase()}%`, (placeholder) => `(
+        UPPER(i.customer_name) LIKE ${placeholder}
+        OR UPPER(i.customer_tax_id) LIKE ${placeholder}
+      )`);
+    }
+    if (filters.waiterCode) {
+      addCondition(filters.waiterCode.toUpperCase(), (placeholder) => `UPPER(i.waiter_code) = ${placeholder}`);
+    }
+
+    return {
+      whereClause: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
+      params,
+    };
+  };
+
+  const { whereClause, params } = buildWhere();
+  const summaryResult = await query<{
     status: "PAGADA" | "PARCIAL" | "PENDIENTE";
     invoices: number;
     total_amount: number;
     paid_amount: number;
     balance: number;
-  }>(`
-    WITH invoice_totals AS (
-      SELECT
-        i.id,
-        i.total_amount,
-        COALESCE(SUM(p.amount), 0) AS paid_amount
-      FROM app.invoices i
-      LEFT JOIN app.invoice_payments p ON p.invoice_id = i.id
-      ${whereClause}
-      GROUP BY i.id, i.total_amount
-    )
-    SELECT
-      CASE
-        WHEN it.paid_amount >= it.total_amount THEN 'PAGADA'
-        WHEN it.paid_amount = 0 THEN 'PENDIENTE'
-        ELSE 'PARCIAL'
-      END AS status,
-      COUNT(*) AS invoices,
-      COALESCE(SUM(it.total_amount), 0) AS total_amount,
-      COALESCE(SUM(it.paid_amount), 0) AS paid_amount,
-      COALESCE(SUM(it.total_amount - it.paid_amount), 0) AS balance
-    FROM invoice_totals it
-    GROUP BY CASE
-      WHEN it.paid_amount >= it.total_amount THEN 'PAGADA'
-      WHEN it.paid_amount = 0 THEN 'PENDIENTE'
-      ELSE 'PARCIAL'
-    END;
-  `);
+  }>(
+    `WITH invoice_totals AS (
+       SELECT
+         i.id,
+         i.invoice_number,
+         i.customer_name,
+         i.waiter_code,
+         i.created_at,
+         i.total_amount,
+         COALESCE(SUM(p.amount), 0) AS paid_amount
+       FROM app.invoices i
+       LEFT JOIN app.invoice_payments p ON p.invoice_id = i.id
+       ${whereClause}
+       GROUP BY i.id, i.invoice_number, i.customer_name, i.waiter_code, i.created_at, i.total_amount
+     )
+     SELECT
+       CASE
+         WHEN paid_amount >= total_amount THEN 'PAGADA'
+         WHEN paid_amount = 0 THEN 'PENDIENTE'
+         ELSE 'PARCIAL'
+       END AS status,
+       COUNT(*) AS invoices,
+       COALESCE(SUM(total_amount), 0) AS total_amount,
+       COALESCE(SUM(paid_amount), 0) AS paid_amount,
+       COALESCE(SUM(total_amount - paid_amount), 0) AS balance
+     FROM invoice_totals
+     GROUP BY CASE
+       WHEN paid_amount >= total_amount THEN 'PAGADA'
+       WHEN paid_amount = 0 THEN 'PENDIENTE'
+       ELSE 'PARCIAL'
+     END`,
+    params
+  );
 
-  const topResult = await req.query<{
+  const { whereClause: topWhereClause, params: topParams } = buildWhere();
+  const topResult = await query<{
     invoice_number: string;
     customer_name: string | null;
     waiter_code: string | null;
@@ -682,49 +675,50 @@ export async function getInvoiceStatusReport(filters: InvoiceStatusFilters): Pro
     paid_amount: number;
     balance: number;
     status: "PAGADA" | "PARCIAL" | "PENDIENTE";
-  }>(`
-    WITH invoice_totals AS (
-      SELECT
-        i.id,
-        i.invoice_number,
-        i.customer_name,
-        i.waiter_code,
-        i.created_at,
-        i.total_amount,
-        COALESCE(SUM(p.amount), 0) AS paid_amount,
-        i.total_amount - COALESCE(SUM(p.amount), 0) AS balance
-      FROM app.invoices i
-      LEFT JOIN app.invoice_payments p ON p.invoice_id = i.id
-      ${whereClause}
-      GROUP BY i.id, i.invoice_number, i.customer_name, i.waiter_code, i.created_at, i.total_amount
-    )
-    SELECT TOP (15)
-      invoice_number,
-      customer_name,
-      waiter_code,
-      created_at,
-      total_amount,
-      paid_amount,
-      balance,
-      CASE
-        WHEN paid_amount >= total_amount THEN 'PAGADA'
-        WHEN paid_amount = 0 THEN 'PENDIENTE'
-        ELSE 'PARCIAL'
-      END AS status
-    FROM invoice_totals
-    WHERE balance > 0
-    ORDER BY balance DESC, created_at ASC;
-  `);
+  }>(
+    `WITH invoice_totals AS (
+       SELECT
+         i.id,
+         i.invoice_number,
+         i.customer_name,
+         i.waiter_code,
+         i.created_at,
+         i.total_amount,
+         COALESCE(SUM(p.amount), 0) AS paid_amount
+       FROM app.invoices i
+       LEFT JOIN app.invoice_payments p ON p.invoice_id = i.id
+       ${topWhereClause}
+       GROUP BY i.id, i.invoice_number, i.customer_name, i.waiter_code, i.created_at, i.total_amount
+     )
+     SELECT
+       invoice_number,
+       customer_name,
+       waiter_code,
+       created_at,
+       total_amount,
+       paid_amount,
+       total_amount - paid_amount AS balance,
+       CASE
+         WHEN paid_amount >= total_amount THEN 'PAGADA'
+         WHEN paid_amount = 0 THEN 'PENDIENTE'
+         ELSE 'PARCIAL'
+       END AS status
+     FROM invoice_totals
+     WHERE total_amount - paid_amount > 0
+     ORDER BY balance DESC, created_at ASC
+     LIMIT 15`,
+    topParams
+  );
 
   return {
-    summary: summaryResult.recordset.map((row) => ({
+    summary: summaryResult.rows.map((row) => ({
       status: row.status,
       invoices: Number(row.invoices ?? 0),
       totalAmount: Number((row.total_amount ?? 0).toFixed(2)),
       paidAmount: Number((row.paid_amount ?? 0).toFixed(2)),
       balance: Number((row.balance ?? 0).toFixed(2)),
     })),
-    topPending: topResult.recordset.map((row) => ({
+    topPending: topResult.rows.map((row) => ({
       invoiceNumber: row.invoice_number,
       customerName: row.customer_name,
       waiterCode: row.waiter_code,

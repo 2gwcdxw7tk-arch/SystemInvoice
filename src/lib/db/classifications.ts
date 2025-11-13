@@ -1,7 +1,7 @@
 import "server-only";
 
 import { env } from "@/lib/env";
-import { getPool, sql } from "@/lib/db/mssql";
+import { query } from "@/lib/db/postgres";
 
 export interface ClassificationRow {
   id: number;
@@ -31,18 +31,27 @@ export async function listClassifications(params: { level?: number; parent_full_
       return c.is_active;
     });
   }
-  const pool = await getPool();
-  const req = pool.request();
-  let where = "WHERE is_active = 1";
-  if (typeof params.level === 'number') {
-    req.input("level", sql.TinyInt, params.level);
-    where += " AND level = @level";
+  const conditions: string[] = ["is_active = TRUE"];
+  const values: unknown[] = [];
+  let index = 1;
+
+  if (typeof params.level === "number") {
+    conditions.push(`level = $${index}`);
+    values.push(params.level);
+    index += 1;
   }
-  if (typeof params.parent_full_code !== 'undefined') {
-    req.input("parent_full_code", sql.NVarChar(24), params.parent_full_code);
-    if (params.parent_full_code) where += " AND parent_full_code = @parent_full_code"; else where += " AND parent_full_code IS NULL";
+
+  if (typeof params.parent_full_code !== "undefined") {
+    if (params.parent_full_code) {
+      conditions.push(`parent_full_code = $${index}`);
+      values.push(params.parent_full_code);
+      index += 1;
+    } else {
+      conditions.push("parent_full_code IS NULL");
+    }
   }
-  const result = await req.query<{
+
+  const result = await query<{
     id: number;
     level: number;
     code: string;
@@ -50,8 +59,14 @@ export async function listClassifications(params: { level?: number; parent_full_
     name: string;
     parent_full_code: string | null;
     is_active: boolean;
-  }>(`SELECT id, level, code, full_code, name, parent_full_code, is_active FROM app.article_classifications ${where} ORDER BY full_code`);
-  return result.recordset.map((r) => ({
+  }>(
+    `SELECT id, level, code, full_code, name, parent_full_code, is_active
+     FROM app.article_classifications
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY full_code`,
+    values
+  );
+  return result.rows.map((r) => ({
     id: Number(r.id),
     level: Number(r.level),
     code: r.code,

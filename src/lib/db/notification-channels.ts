@@ -1,7 +1,7 @@
 import "server-only";
 
 import { env } from "@/lib/env";
-import { getPool, sql } from "@/lib/db/mssql";
+import { query } from "@/lib/db/postgres";
 
 export interface NotificationChannelRow {
   id: number;
@@ -50,8 +50,7 @@ export async function listNotificationChannels(): Promise<NotificationChannelRow
   if (env.useMockData) {
     return mockChannels.map((channel) => ({ ...channel }));
   }
-  const pool = await getPool();
-  const result = await pool.request().query<{
+  const result = await query<{
     id: number;
     name: string;
     channel_type: string;
@@ -60,12 +59,12 @@ export async function listNotificationChannels(): Promise<NotificationChannelRow
     is_active: boolean;
     created_at: Date;
     updated_at: Date;
-  }>(`
-    SELECT id, name, channel_type, target, preferences, is_active, created_at, updated_at
-    FROM app.notification_channels
-    ORDER BY name;
-  `);
-  return result.recordset.map((row) => ({
+  }>(
+    `SELECT id, name, channel_type, target, preferences, is_active, created_at, updated_at
+     FROM app.notification_channels
+     ORDER BY name`
+  );
+  return result.rows.map((row) => ({
     id: Number(row.id),
     name: row.name,
     channelType: row.channel_type,
@@ -109,33 +108,34 @@ export async function upsertNotificationChannel(input: UpsertNotificationChannel
     return { id };
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("name", sql.NVarChar(80), input.name);
-  req.input("channel_type", sql.NVarChar(40), input.channelType);
-  req.input("target", sql.NVarChar(200), input.target);
-  req.input("preferences", sql.NVarChar(500), input.preferences ?? null);
-  req.input("is_active", sql.Bit, input.isActive ?? true);
+  const name = input.name.trim();
+  const channelType = input.channelType;
+  const target = input.target;
+  const preferences = input.preferences ?? null;
+  const isActive = input.isActive ?? true;
+
   if (input.id) {
-    req.input("id", sql.Int, input.id);
-    await req.query(`
-      UPDATE app.notification_channels
-      SET name = @name,
-          channel_type = @channel_type,
-          target = @target,
-          preferences = @preferences,
-          is_active = @is_active,
-          updated_at = SYSUTCDATETIME()
-      WHERE id = @id;
-    `);
+    await query(
+      `UPDATE app.notification_channels
+       SET name = $1,
+           channel_type = $2,
+           target = $3,
+           preferences = $4,
+           is_active = $5,
+           updated_at = NOW()
+       WHERE id = $6`,
+      [name, channelType, target, preferences, isActive, input.id]
+    );
     return { id: input.id };
   }
-  const insertResult = await req.query<{ id: number }>(`
-    INSERT INTO app.notification_channels (name, channel_type, target, preferences, is_active)
-    OUTPUT INSERTED.id
-    VALUES (@name, @channel_type, @target, @preferences, @is_active);
-  `);
-  return { id: Number(insertResult.recordset[0].id) };
+
+  const insertResult = await query<{ id: number }>(
+    `INSERT INTO app.notification_channels (name, channel_type, target, preferences, is_active)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    [name, channelType, target, preferences, isActive]
+  );
+  return { id: Number(insertResult.rows[0].id) };
 }
 
 export async function setNotificationChannelStatus(id: number, isActive: boolean): Promise<void> {
@@ -147,14 +147,11 @@ export async function setNotificationChannelStatus(id: number, isActive: boolean
     }
     return;
   }
-  const pool = await getPool();
-  const req = pool.request();
-  req.input("id", sql.Int, id);
-  req.input("is_active", sql.Bit, isActive);
-  await req.query(`
-    UPDATE app.notification_channels
-    SET is_active = @is_active,
-        updated_at = SYSUTCDATETIME()
-    WHERE id = @id;
-  `);
+  await query(
+    `UPDATE app.notification_channels
+     SET is_active = $1,
+         updated_at = NOW()
+     WHERE id = $2`,
+    [isActive, id]
+  );
 }

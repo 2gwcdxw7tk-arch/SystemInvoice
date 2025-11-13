@@ -3,7 +3,8 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { env } from "@/lib/env";
-import { getPool, sql } from "@/lib/db/mssql";
+import type { PoolClient } from "@/lib/db/postgres";
+import { query, withTransaction } from "@/lib/db/postgres";
 import { getArticleByCode, ArticleDetail } from "@/lib/db/articles";
 import { getKitComponents } from "@/lib/db/articleKits";
 import { getWarehouseByCode } from "@/lib/db/warehouses";
@@ -376,6 +377,18 @@ async function computeMovement(line: InventoryLineInput, type: TransactionType):
   };
 }
 
+async function getArticleIdByCode(client: PoolClient, articleCode: string): Promise<number> {
+  const result = await client.query<{ id: number }>(
+    `SELECT id FROM app.articles WHERE article_code = $1`,
+    [articleCode]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error(`Componente no registrado: ${articleCode}`);
+  }
+  return Number(row.id);
+}
+
 export async function registerPurchase(input: RegisterPurchaseInput): Promise<RegisterResult> {
   if (!input || !Array.isArray(input.lines) || input.lines.length === 0) {
     throw new Error("Debes incluir al menos una línea en la compra");
@@ -437,27 +450,37 @@ export async function registerPurchase(input: RegisterPurchaseInput): Promise<Re
     return { transaction_id: transactionId, transaction_code: transactionCode };
   }
 
-  const pool = await getPool();
-  const tx = new sql.Transaction(pool);
-  await tx.begin();
-  try {
-    const headerReq = new sql.Request(tx);
-    headerReq.input("transaction_code", sql.NVarChar(60), transactionCode);
-    headerReq.input("transaction_type", sql.NVarChar(20), "PURCHASE");
-    headerReq.input("warehouse_id", sql.Int, warehouse.id);
-    headerReq.input("reference", sql.NVarChar(120), input.document_number || null);
-    headerReq.input("counterparty_name", sql.NVarChar(160), input.supplier_name || null);
-    headerReq.input("status", sql.NVarChar(12), status);
-    headerReq.input("notes", sql.NVarChar(400), input.notes || null);
-    headerReq.input("occurred_at", sql.DateTime2, occurredAt);
-    headerReq.input("authorized_by", sql.NVarChar(80), null);
-    headerReq.input("total_amount", sql.Decimal(18, 2), 0);
-    const headerResult = await headerReq.query<{ id: number }>(`
-      INSERT INTO app.inventory_transactions (transaction_code, transaction_type, warehouse_id, reference, counterparty_name, status, notes, occurred_at, authorized_by, total_amount)
-      VALUES (@transaction_code, @transaction_type, @warehouse_id, @reference, @counterparty_name, @status, @notes, @occurred_at, @authorized_by, @total_amount);
-      SELECT SCOPE_IDENTITY() AS id;
-    `);
-    const transactionId = Number(headerResult.recordset[0].id);
+  const result = await withTransaction(async (client) => {
+    const headerResult = await client.query<{ id: number }>(
+      `INSERT INTO app.inventory_transactions (
+         transaction_code,
+         transaction_type,
+         warehouse_id,
+         reference,
+         counterparty_name,
+         status,
+         notes,
+         occurred_at,
+         authorized_by,
+         total_amount
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+       )
+       RETURNING id`,
+      [
+        transactionCode,
+        "PURCHASE",
+        warehouse.id,
+        input.document_number || null,
+        input.supplier_name || null,
+        status,
+        input.notes || null,
+        occurredAt,
+        null,
+        0,
+      ]
+    );
+    const transactionId = Number(headerResult.rows[0].id);
     let totalAmount = 0;
 
     for (const line of input.lines) {
@@ -465,83 +488,105 @@ export async function registerPurchase(input: RegisterPurchaseInput): Promise<Re
       const costPerUnit = toNumber(line.cost_per_unit, 0);
       const subtotal = costPerUnit * movement.quantity_entered;
       totalAmount += subtotal;
-      const entryReq = new sql.Request(tx);
-      entryReq.input("transaction_id", sql.BigInt, transactionId);
-      entryReq.input("article_id", sql.BigInt, movement.article.id);
-      entryReq.input("quantity_entered", sql.Decimal(18, 6), movement.quantity_entered);
-      entryReq.input("entered_unit", sql.NVarChar(12), line.unit);
-      entryReq.input("direction", sql.NVarChar(3), "IN");
-      entryReq.input("unit_conversion_factor", sql.Decimal(18, 6), movement.article.conversion_factor);
-      entryReq.input("kit_multiplier", sql.Decimal(18, 6), movement.kit_multiplier ?? null);
-      entryReq.input("cost_per_unit", sql.Decimal(18, 6), costPerUnit || null);
-      entryReq.input("subtotal", sql.Decimal(18, 2), subtotal || null);
-      entryReq.input("notes", sql.NVarChar(300), line.notes || null);
-      const entryResult = await entryReq.query<{ id: number }>(`
-        INSERT INTO app.inventory_transaction_entries (transaction_id, article_id, quantity_entered, entered_unit, direction, unit_conversion_factor, kit_multiplier, cost_per_unit, subtotal, notes)
-        VALUES (@transaction_id, @article_id, @quantity_entered, @entered_unit, @direction, @unit_conversion_factor, @kit_multiplier, @cost_per_unit, @subtotal, @notes);
-        SELECT SCOPE_IDENTITY() AS id;
-      `);
-      const entryId = Number(entryResult.recordset[0].id);
+
+      const entryResult = await client.query<{ id: number }>(
+        `INSERT INTO app.inventory_transaction_entries (
+           transaction_id,
+           article_id,
+           quantity_entered,
+           entered_unit,
+           direction,
+           unit_conversion_factor,
+           kit_multiplier,
+           cost_per_unit,
+           subtotal,
+           notes
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+         )
+         RETURNING id`,
+        [
+          transactionId,
+          movement.article.id,
+          movement.quantity_entered,
+          line.unit,
+          "IN",
+          movement.article.conversion_factor,
+          movement.kit_multiplier ?? null,
+          costPerUnit || null,
+          subtotal || null,
+          line.notes || null,
+        ]
+      );
+      const entryId = Number(entryResult.rows[0].id);
 
       if (movement.article.article_type === "KIT") {
-        const kitArticleReq = new sql.Request(tx);
-        kitArticleReq.input("id", sql.BigInt, movement.article.id);
-        const kitArticle = await kitArticleReq.query<{ id: number }>(`SELECT id FROM app.articles WHERE id = @id`);
-        const kitArticleId = kitArticle.recordset[0]?.id ? Number(kitArticle.recordset[0].id) : movement.article.id;
+        const kitArticleId = movement.article.id;
+        if (!kitArticleId) {
+          throw new Error(`Artículo kit no registrado: ${movement.article.article_code}`);
+        }
         for (const component of movement.components) {
-          const compReq = new sql.Request(tx);
-          compReq.input("transaction_id", sql.BigInt, transactionId);
-          compReq.input("entry_id", sql.BigInt, entryId);
-          compReq.input("article_code", sql.NVarChar(40), component.article_code);
-          const compResult = await compReq.query<{ id: number }>(`
-            SELECT id FROM app.articles WHERE article_code = @article_code;
-          `);
-          if (!compResult.recordset[0]) {
-            throw new Error(`Componente no registrado: ${component.article_code}`);
-          }
-          const compId = Number(compResult.recordset[0].id);
-          const movementReq = new sql.Request(tx);
-          movementReq.input("transaction_id", sql.BigInt, transactionId);
-          movementReq.input("entry_id", sql.BigInt, entryId);
-          movementReq.input("article_id", sql.BigInt, compId);
-          movementReq.input("direction", sql.NVarChar(3), "IN");
-          movementReq.input("quantity_retail", sql.Decimal(18, 6), component.quantity_retail);
-          movementReq.input("warehouse_id", sql.Int, warehouse.id);
-          movementReq.input("source_kit_article_id", sql.BigInt, kitArticleId);
-          await movementReq.query(`
-            INSERT INTO app.inventory_movements (transaction_id, entry_id, article_id, direction, quantity_retail, warehouse_id, source_kit_article_id)
-            VALUES (@transaction_id, @entry_id, @article_id, @direction, @quantity_retail, @warehouse_id, @source_kit_article_id);
-          `);
+          const compId = await getArticleIdByCode(client, component.article_code);
+          await client.query(
+            `INSERT INTO app.inventory_movements (
+               transaction_id,
+               entry_id,
+               article_id,
+               direction,
+               quantity_retail,
+               warehouse_id,
+               source_kit_article_id
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7
+             )`,
+            [
+              transactionId,
+              entryId,
+              compId,
+              "IN",
+              component.quantity_retail,
+              warehouse.id,
+              kitArticleId,
+            ]
+          );
         }
       } else {
-        const movementReq = new sql.Request(tx);
-        movementReq.input("transaction_id", sql.BigInt, transactionId);
-        movementReq.input("entry_id", sql.BigInt, entryId);
-        movementReq.input("article_id", sql.BigInt, movement.article.id);
-        movementReq.input("direction", sql.NVarChar(3), "IN");
-        movementReq.input("quantity_retail", sql.Decimal(18, 6), movement.quantity_retail);
-        movementReq.input("warehouse_id", sql.Int, warehouse.id);
-        movementReq.input("source_kit_article_id", sql.BigInt, null);
-        await movementReq.query(`
-          INSERT INTO app.inventory_movements (transaction_id, entry_id, article_id, direction, quantity_retail, warehouse_id, source_kit_article_id)
-          VALUES (@transaction_id, @entry_id, @article_id, @direction, @quantity_retail, @warehouse_id, @source_kit_article_id);
-        `);
+        await client.query(
+          `INSERT INTO app.inventory_movements (
+             transaction_id,
+             entry_id,
+             article_id,
+             direction,
+             quantity_retail,
+             warehouse_id,
+             source_kit_article_id
+           ) VALUES (
+             $1, $2, $3, $4, $5, $6, $7
+           )`,
+          [
+            transactionId,
+            entryId,
+            movement.article.id,
+            "IN",
+            movement.quantity_retail,
+            warehouse.id,
+            null,
+          ]
+        );
       }
     }
 
-    const totalReq = new sql.Request(tx);
-    totalReq.input("total_amount", sql.Decimal(18, 2), Number(totalAmount.toFixed(2)));
-    totalReq.input("transaction_id", sql.BigInt, transactionId);
-    await totalReq.query(`
-      UPDATE app.inventory_transactions SET total_amount = @total_amount WHERE id = @transaction_id;
-    `);
+    await client.query(
+      `UPDATE app.inventory_transactions
+       SET total_amount = $1
+       WHERE id = $2`,
+      [Number(totalAmount.toFixed(2)), transactionId]
+    );
 
-    await tx.commit();
     return { transaction_id: transactionId, transaction_code: transactionCode };
-  } catch (error) {
-    await tx.rollback();
-    throw error;
-  }
+  });
+
+  return result;
 }
 
 export async function registerConsumption(input: RegisterConsumptionInput): Promise<RegisterResult> {
@@ -601,100 +646,131 @@ export async function registerConsumption(input: RegisterConsumptionInput): Prom
     return { transaction_id: transactionId, transaction_code: transactionCode };
   }
 
-  const pool = await getPool();
-  const tx = new sql.Transaction(pool);
-  await tx.begin();
-  try {
-    const headerReq = new sql.Request(tx);
-    headerReq.input("transaction_code", sql.NVarChar(60), transactionCode);
-    headerReq.input("transaction_type", sql.NVarChar(20), "CONSUMPTION");
-    headerReq.input("warehouse_id", sql.Int, warehouse.id);
-    headerReq.input("reference", sql.NVarChar(120), input.reason || null);
-    headerReq.input("counterparty_name", sql.NVarChar(160), input.area || null);
-    headerReq.input("status", sql.NVarChar(12), "CONFIRMADO");
-    headerReq.input("notes", sql.NVarChar(400), input.notes || null);
-    headerReq.input("occurred_at", sql.DateTime2, occurredAt);
-    headerReq.input("authorized_by", sql.NVarChar(80), input.authorized_by || null);
-    headerReq.input("total_amount", sql.Decimal(18, 2), 0);
-    const headerResult = await headerReq.query<{ id: number }>(`
-      INSERT INTO app.inventory_transactions (transaction_code, transaction_type, warehouse_id, reference, counterparty_name, status, notes, occurred_at, authorized_by, total_amount)
-      VALUES (@transaction_code, @transaction_type, @warehouse_id, @reference, @counterparty_name, @status, @notes, @occurred_at, @authorized_by, @total_amount);
-      SELECT SCOPE_IDENTITY() AS id;
-    `);
-    const transactionId = Number(headerResult.recordset[0].id);
+  const result = await withTransaction(async (client) => {
+    const headerResult = await client.query<{ id: number }>(
+      `INSERT INTO app.inventory_transactions (
+         transaction_code,
+         transaction_type,
+         warehouse_id,
+         reference,
+         counterparty_name,
+         status,
+         notes,
+         occurred_at,
+         authorized_by,
+         total_amount
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+       )
+       RETURNING id`,
+      [
+        transactionCode,
+        "CONSUMPTION",
+        warehouse.id,
+        input.reason || null,
+        input.area || null,
+        "CONFIRMADO",
+        input.notes || null,
+        occurredAt,
+        input.authorized_by || null,
+        0,
+      ]
+    );
+    const transactionId = Number(headerResult.rows[0].id);
 
     for (const line of input.lines) {
       const movement = await computeMovement(line, "CONSUMPTION");
-      const entryReq = new sql.Request(tx);
-      entryReq.input("transaction_id", sql.BigInt, transactionId);
-      entryReq.input("article_id", sql.BigInt, movement.article.id);
-      entryReq.input("quantity_entered", sql.Decimal(18, 6), movement.quantity_entered);
-      entryReq.input("entered_unit", sql.NVarChar(12), line.unit);
-      entryReq.input("direction", sql.NVarChar(3), "OUT");
-      entryReq.input("unit_conversion_factor", sql.Decimal(18, 6), movement.article.conversion_factor);
-      entryReq.input("kit_multiplier", sql.Decimal(18, 6), movement.kit_multiplier ?? null);
-      entryReq.input("cost_per_unit", sql.Decimal(18, 6), null);
-      entryReq.input("subtotal", sql.Decimal(18, 2), null);
-      entryReq.input("notes", sql.NVarChar(300), line.notes || null);
-      const entryResult = await entryReq.query<{ id: number }>(`
-        INSERT INTO app.inventory_transaction_entries (transaction_id, article_id, quantity_entered, entered_unit, direction, unit_conversion_factor, kit_multiplier, cost_per_unit, subtotal, notes)
-        VALUES (@transaction_id, @article_id, @quantity_entered, @entered_unit, @direction, @unit_conversion_factor, @kit_multiplier, @cost_per_unit, @subtotal, @notes);
-        SELECT SCOPE_IDENTITY() AS id;
-      `);
-      const entryId = Number(entryResult.recordset[0].id);
+      const entryResult = await client.query<{ id: number }>(
+        `INSERT INTO app.inventory_transaction_entries (
+           transaction_id,
+           article_id,
+           quantity_entered,
+           entered_unit,
+           direction,
+           unit_conversion_factor,
+           kit_multiplier,
+           cost_per_unit,
+           subtotal,
+           notes
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+         )
+         RETURNING id`,
+        [
+          transactionId,
+          movement.article.id,
+          movement.quantity_entered,
+          line.unit,
+          "OUT",
+          movement.article.conversion_factor,
+          movement.kit_multiplier ?? null,
+          null,
+          null,
+          line.notes || null,
+        ]
+      );
+      const entryId = Number(entryResult.rows[0].id);
 
       if (movement.article.article_type === "KIT") {
-        const kitArticleReq = new sql.Request(tx);
-        kitArticleReq.input("id", sql.BigInt, movement.article.id);
-        const kitArticle = await kitArticleReq.query<{ id: number }>(`SELECT id FROM app.articles WHERE id = @id`);
-        const kitArticleId = kitArticle.recordset[0]?.id ? Number(kitArticle.recordset[0].id) : movement.article.id;
+        const kitArticleId = movement.article.id;
+        if (!kitArticleId) {
+          throw new Error(`Artículo kit no registrado: ${movement.article.article_code}`);
+        }
         for (const component of movement.components) {
-          const compReq = new sql.Request(tx);
-          compReq.input("transaction_id", sql.BigInt, transactionId);
-          compReq.input("entry_id", sql.BigInt, entryId);
-          compReq.input("article_code", sql.NVarChar(40), component.article_code);
-          const compResult = await compReq.query<{ id: number }>(`
-            SELECT id FROM app.articles WHERE article_code = @article_code;
-          `);
-          if (!compResult.recordset[0]) {
-            throw new Error(`Componente no registrado: ${component.article_code}`);
-          }
-          const compId = Number(compResult.recordset[0].id);
-          const movementReq = new sql.Request(tx);
-          movementReq.input("transaction_id", sql.BigInt, transactionId);
-          movementReq.input("entry_id", sql.BigInt, entryId);
-          movementReq.input("article_id", sql.BigInt, compId);
-          movementReq.input("direction", sql.NVarChar(3), "OUT");
-          movementReq.input("quantity_retail", sql.Decimal(18, 6), component.quantity_retail);
-          movementReq.input("warehouse_id", sql.Int, warehouse.id);
-          movementReq.input("source_kit_article_id", sql.BigInt, kitArticleId);
-          await movementReq.query(`
-            INSERT INTO app.inventory_movements (transaction_id, entry_id, article_id, direction, quantity_retail, warehouse_id, source_kit_article_id)
-            VALUES (@transaction_id, @entry_id, @article_id, @direction, @quantity_retail, @warehouse_id, @source_kit_article_id);
-          `);
+          const compId = await getArticleIdByCode(client, component.article_code);
+          await client.query(
+            `INSERT INTO app.inventory_movements (
+               transaction_id,
+               entry_id,
+               article_id,
+               direction,
+               quantity_retail,
+               warehouse_id,
+               source_kit_article_id
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7
+             )`,
+            [
+              transactionId,
+              entryId,
+              compId,
+              "OUT",
+              component.quantity_retail,
+              warehouse.id,
+              kitArticleId,
+            ]
+          );
         }
       } else {
-        const movementReq = new sql.Request(tx);
-        movementReq.input("transaction_id", sql.BigInt, transactionId);
-        movementReq.input("entry_id", sql.BigInt, entryId);
-        movementReq.input("article_id", sql.BigInt, movement.article.id);
-        movementReq.input("direction", sql.NVarChar(3), "OUT");
-        movementReq.input("quantity_retail", sql.Decimal(18, 6), movement.quantity_retail);
-        movementReq.input("warehouse_id", sql.Int, warehouse.id);
-        movementReq.input("source_kit_article_id", sql.BigInt, null);
-        await movementReq.query(`
-          INSERT INTO app.inventory_movements (transaction_id, entry_id, article_id, direction, quantity_retail, warehouse_id, source_kit_article_id)
-          VALUES (@transaction_id, @entry_id, @article_id, @direction, @quantity_retail, @warehouse_id, @source_kit_article_id);
-        `);
+        await client.query(
+          `INSERT INTO app.inventory_movements (
+             transaction_id,
+             entry_id,
+             article_id,
+             direction,
+             quantity_retail,
+             warehouse_id,
+             source_kit_article_id
+           ) VALUES (
+             $1, $2, $3, $4, $5, $6, $7
+           )`,
+          [
+            transactionId,
+            entryId,
+            movement.article.id,
+            "OUT",
+            movement.quantity_retail,
+            warehouse.id,
+            null,
+          ]
+        );
       }
     }
 
-    await tx.commit();
     return { transaction_id: transactionId, transaction_code: transactionCode };
-  } catch (error) {
-    await tx.rollback();
-    throw error;
-  }
+  });
+
+  return result;
 }
 
 export async function registerTransfer(input: RegisterTransferInput): Promise<RegisterResult> {
@@ -788,155 +864,217 @@ export async function registerTransfer(input: RegisterTransferInput): Promise<Re
     return { transaction_id: transactionId, transaction_code: transactionCode };
   }
 
-  const pool = await getPool();
-  const tx = new sql.Transaction(pool);
-  await tx.begin();
-  try {
-    const headerReq = new sql.Request(tx);
-    headerReq.input("transaction_code", sql.NVarChar(60), transactionCode);
-    headerReq.input("transaction_type", sql.NVarChar(20), "TRANSFER");
-    headerReq.input("warehouse_id", sql.Int, fromWarehouse.id);
-    headerReq.input("reference", sql.NVarChar(120), input.reference || null);
-    headerReq.input("counterparty_name", sql.NVarChar(160), toWarehouse.name);
-    headerReq.input("status", sql.NVarChar(12), "CONFIRMADO");
-    headerReq.input("notes", sql.NVarChar(400), combinedNotes);
-    headerReq.input("occurred_at", sql.DateTime2, occurredAt);
-    headerReq.input("authorized_by", sql.NVarChar(80), input.authorized_by || null);
-    headerReq.input("total_amount", sql.Decimal(18, 2), 0);
-    const headerResult = await headerReq.query<{ id: number }>(`
-      INSERT INTO app.inventory_transactions (transaction_code, transaction_type, warehouse_id, reference, counterparty_name, status, notes, occurred_at, authorized_by, total_amount)
-      VALUES (@transaction_code, @transaction_type, @warehouse_id, @reference, @counterparty_name, @status, @notes, @occurred_at, @authorized_by, @total_amount);
-      SELECT SCOPE_IDENTITY() AS id;
-    `);
-    const transactionId = Number(headerResult.recordset[0].id);
+  const result = await withTransaction(async (client) => {
+    const headerResult = await client.query<{ id: number }>(
+      `INSERT INTO app.inventory_transactions (
+         transaction_code,
+         transaction_type,
+         warehouse_id,
+         reference,
+         counterparty_name,
+         status,
+         notes,
+         occurred_at,
+         authorized_by,
+         total_amount
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+       )
+       RETURNING id`,
+      [
+        transactionCode,
+        "TRANSFER",
+        fromWarehouse.id,
+        input.reference || null,
+        toWarehouse.name,
+        "CONFIRMADO",
+        combinedNotes,
+        occurredAt,
+        input.authorized_by || null,
+        0,
+      ]
+    );
+    const transactionId = Number(headerResult.rows[0].id);
 
     for (const line of input.lines) {
       const movement = await computeMovement(line, "PURCHASE");
-      let kitArticleId: number | null = null;
-      if (movement.article.article_type === "KIT") {
-        const kitArticleReq = new sql.Request(tx);
-        kitArticleReq.input("id", sql.BigInt, movement.article.id);
-        const kitArticle = await kitArticleReq.query<{ id: number }>(`SELECT id FROM app.articles WHERE id = @id`);
-        kitArticleId = kitArticle.recordset[0]?.id ? Number(kitArticle.recordset[0].id) : movement.article.id;
-      }
+      const kitArticleId = movement.article.article_type === "KIT" ? movement.article.id : null;
 
-      const exitEntryReq = new sql.Request(tx);
-      exitEntryReq.input("transaction_id", sql.BigInt, transactionId);
-      exitEntryReq.input("article_id", sql.BigInt, movement.article.id);
-      exitEntryReq.input("quantity_entered", sql.Decimal(18, 6), movement.quantity_entered);
-      exitEntryReq.input("entered_unit", sql.NVarChar(12), line.unit);
-      exitEntryReq.input("direction", sql.NVarChar(3), "OUT");
-      exitEntryReq.input("unit_conversion_factor", sql.Decimal(18, 6), movement.article.conversion_factor);
-      exitEntryReq.input("kit_multiplier", sql.Decimal(18, 6), movement.kit_multiplier ?? null);
-      exitEntryReq.input("cost_per_unit", sql.Decimal(18, 6), null);
-      exitEntryReq.input("subtotal", sql.Decimal(18, 2), null);
-      exitEntryReq.input("notes", sql.NVarChar(300), line.notes || null);
-      const exitEntryResult = await exitEntryReq.query<{ id: number }>(`
-        INSERT INTO app.inventory_transaction_entries (transaction_id, article_id, quantity_entered, entered_unit, direction, unit_conversion_factor, kit_multiplier, cost_per_unit, subtotal, notes)
-        VALUES (@transaction_id, @article_id, @quantity_entered, @entered_unit, @direction, @unit_conversion_factor, @kit_multiplier, @cost_per_unit, @subtotal, @notes);
-        SELECT SCOPE_IDENTITY() AS id;
-      `);
-      const exitEntryId = Number(exitEntryResult.recordset[0].id);
+      const exitEntryResult = await client.query<{ id: number }>(
+        `INSERT INTO app.inventory_transaction_entries (
+           transaction_id,
+           article_id,
+           quantity_entered,
+           entered_unit,
+           direction,
+           unit_conversion_factor,
+           kit_multiplier,
+           cost_per_unit,
+           subtotal,
+           notes
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+         )
+         RETURNING id`,
+        [
+          transactionId,
+          movement.article.id,
+          movement.quantity_entered,
+          line.unit,
+          "OUT",
+          movement.article.conversion_factor,
+          movement.kit_multiplier ?? null,
+          null,
+          null,
+          line.notes || null,
+        ]
+      );
+      const exitEntryId = Number(exitEntryResult.rows[0].id);
 
       if (movement.article.article_type === "KIT") {
+        if (!kitArticleId) {
+          throw new Error(`Artículo kit no registrado: ${movement.article.article_code}`);
+        }
         for (const component of movement.components) {
-          const compReq = new sql.Request(tx);
-          compReq.input("article_code", sql.NVarChar(40), component.article_code);
-          const compResult = await compReq.query<{ id: number }>(`SELECT id FROM app.articles WHERE article_code = @article_code`);
-          if (!compResult.recordset[0]) {
-            throw new Error(`Componente no registrado: ${component.article_code}`);
-          }
-          const compId = Number(compResult.recordset[0].id);
-          const movementReq = new sql.Request(tx);
-          movementReq.input("transaction_id", sql.BigInt, transactionId);
-          movementReq.input("entry_id", sql.BigInt, exitEntryId);
-          movementReq.input("article_id", sql.BigInt, compId);
-          movementReq.input("direction", sql.NVarChar(3), "OUT");
-          movementReq.input("quantity_retail", sql.Decimal(18, 6), component.quantity_retail);
-          movementReq.input("warehouse_id", sql.Int, fromWarehouse.id);
-          movementReq.input("source_kit_article_id", sql.BigInt, kitArticleId);
-          await movementReq.query(`
-            INSERT INTO app.inventory_movements (transaction_id, entry_id, article_id, direction, quantity_retail, warehouse_id, source_kit_article_id)
-            VALUES (@transaction_id, @entry_id, @article_id, @direction, @quantity_retail, @warehouse_id, @source_kit_article_id);
-          `);
+          const compId = await getArticleIdByCode(client, component.article_code);
+          await client.query(
+            `INSERT INTO app.inventory_movements (
+               transaction_id,
+               entry_id,
+               article_id,
+               direction,
+               quantity_retail,
+               warehouse_id,
+               source_kit_article_id
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7
+             )`,
+            [
+              transactionId,
+              exitEntryId,
+              compId,
+              "OUT",
+              component.quantity_retail,
+              fromWarehouse.id,
+              kitArticleId,
+            ]
+          );
         }
       } else {
-        const movementReq = new sql.Request(tx);
-        movementReq.input("transaction_id", sql.BigInt, transactionId);
-        movementReq.input("entry_id", sql.BigInt, exitEntryId);
-        movementReq.input("article_id", sql.BigInt, movement.article.id);
-        movementReq.input("direction", sql.NVarChar(3), "OUT");
-        movementReq.input("quantity_retail", sql.Decimal(18, 6), movement.quantity_retail);
-        movementReq.input("warehouse_id", sql.Int, fromWarehouse.id);
-        movementReq.input("source_kit_article_id", sql.BigInt, null);
-        await movementReq.query(`
-          INSERT INTO app.inventory_movements (transaction_id, entry_id, article_id, direction, quantity_retail, warehouse_id, source_kit_article_id)
-          VALUES (@transaction_id, @entry_id, @article_id, @direction, @quantity_retail, @warehouse_id, @source_kit_article_id);
-        `);
+        await client.query(
+          `INSERT INTO app.inventory_movements (
+             transaction_id,
+             entry_id,
+             article_id,
+             direction,
+             quantity_retail,
+             warehouse_id,
+             source_kit_article_id
+           ) VALUES (
+             $1, $2, $3, $4, $5, $6, $7
+           )`,
+          [
+            transactionId,
+            exitEntryId,
+            movement.article.id,
+            "OUT",
+            movement.quantity_retail,
+            fromWarehouse.id,
+            null,
+          ]
+        );
       }
 
-      const entryReq = new sql.Request(tx);
-      entryReq.input("transaction_id", sql.BigInt, transactionId);
-      entryReq.input("article_id", sql.BigInt, movement.article.id);
-      entryReq.input("quantity_entered", sql.Decimal(18, 6), movement.quantity_entered);
-      entryReq.input("entered_unit", sql.NVarChar(12), line.unit);
-      entryReq.input("direction", sql.NVarChar(3), "IN");
-      entryReq.input("unit_conversion_factor", sql.Decimal(18, 6), movement.article.conversion_factor);
-      entryReq.input("kit_multiplier", sql.Decimal(18, 6), movement.kit_multiplier ?? null);
-      entryReq.input("cost_per_unit", sql.Decimal(18, 6), null);
-      entryReq.input("subtotal", sql.Decimal(18, 2), null);
-      entryReq.input("notes", sql.NVarChar(300), line.notes || null);
-      const entryResult = await entryReq.query<{ id: number }>(`
-        INSERT INTO app.inventory_transaction_entries (transaction_id, article_id, quantity_entered, entered_unit, direction, unit_conversion_factor, kit_multiplier, cost_per_unit, subtotal, notes)
-        VALUES (@transaction_id, @article_id, @quantity_entered, @entered_unit, @direction, @unit_conversion_factor, @kit_multiplier, @cost_per_unit, @subtotal, @notes);
-        SELECT SCOPE_IDENTITY() AS id;
-      `);
-      const entryId = Number(entryResult.recordset[0].id);
+      const entryResult = await client.query<{ id: number }>(
+        `INSERT INTO app.inventory_transaction_entries (
+           transaction_id,
+           article_id,
+           quantity_entered,
+           entered_unit,
+           direction,
+           unit_conversion_factor,
+           kit_multiplier,
+           cost_per_unit,
+           subtotal,
+           notes
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+         )
+         RETURNING id`,
+        [
+          transactionId,
+          movement.article.id,
+          movement.quantity_entered,
+          line.unit,
+          "IN",
+          movement.article.conversion_factor,
+          movement.kit_multiplier ?? null,
+          null,
+          null,
+          line.notes || null,
+        ]
+      );
+      const entryId = Number(entryResult.rows[0].id);
 
       if (movement.article.article_type === "KIT") {
+        if (!kitArticleId) {
+          throw new Error(`Artículo kit no registrado: ${movement.article.article_code}`);
+        }
         for (const component of movement.components) {
-          const compReq = new sql.Request(tx);
-          compReq.input("article_code", sql.NVarChar(40), component.article_code);
-          const compResult = await compReq.query<{ id: number }>(`SELECT id FROM app.articles WHERE article_code = @article_code`);
-          if (!compResult.recordset[0]) {
-            throw new Error(`Componente no registrado: ${component.article_code}`);
-          }
-          const compId = Number(compResult.recordset[0].id);
-          const movementReq = new sql.Request(tx);
-          movementReq.input("transaction_id", sql.BigInt, transactionId);
-          movementReq.input("entry_id", sql.BigInt, entryId);
-          movementReq.input("article_id", sql.BigInt, compId);
-          movementReq.input("direction", sql.NVarChar(3), "IN");
-          movementReq.input("quantity_retail", sql.Decimal(18, 6), component.quantity_retail);
-          movementReq.input("warehouse_id", sql.Int, toWarehouse.id);
-          movementReq.input("source_kit_article_id", sql.BigInt, kitArticleId);
-          await movementReq.query(`
-            INSERT INTO app.inventory_movements (transaction_id, entry_id, article_id, direction, quantity_retail, warehouse_id, source_kit_article_id)
-            VALUES (@transaction_id, @entry_id, @article_id, @direction, @quantity_retail, @warehouse_id, @source_kit_article_id);
-          `);
+          const compId = await getArticleIdByCode(client, component.article_code);
+          await client.query(
+            `INSERT INTO app.inventory_movements (
+               transaction_id,
+               entry_id,
+               article_id,
+               direction,
+               quantity_retail,
+               warehouse_id,
+               source_kit_article_id
+             ) VALUES (
+               $1, $2, $3, $4, $5, $6, $7
+             )`,
+            [
+              transactionId,
+              entryId,
+              compId,
+              "IN",
+              component.quantity_retail,
+              toWarehouse.id,
+              kitArticleId,
+            ]
+          );
         }
       } else {
-        const movementReq = new sql.Request(tx);
-        movementReq.input("transaction_id", sql.BigInt, transactionId);
-        movementReq.input("entry_id", sql.BigInt, entryId);
-        movementReq.input("article_id", sql.BigInt, movement.article.id);
-        movementReq.input("direction", sql.NVarChar(3), "IN");
-        movementReq.input("quantity_retail", sql.Decimal(18, 6), movement.quantity_retail);
-        movementReq.input("warehouse_id", sql.Int, toWarehouse.id);
-        movementReq.input("source_kit_article_id", sql.BigInt, null);
-        await movementReq.query(`
-          INSERT INTO app.inventory_movements (transaction_id, entry_id, article_id, direction, quantity_retail, warehouse_id, source_kit_article_id)
-          VALUES (@transaction_id, @entry_id, @article_id, @direction, @quantity_retail, @warehouse_id, @source_kit_article_id);
-        `);
+        await client.query(
+          `INSERT INTO app.inventory_movements (
+             transaction_id,
+             entry_id,
+             article_id,
+             direction,
+             quantity_retail,
+             warehouse_id,
+             source_kit_article_id
+           ) VALUES (
+             $1, $2, $3, $4, $5, $6, $7
+           )`,
+          [
+            transactionId,
+            entryId,
+            movement.article.id,
+            "IN",
+            movement.quantity_retail,
+            toWarehouse.id,
+            null,
+          ]
+        );
       }
     }
 
-    await tx.commit();
     return { transaction_id: transactionId, transaction_code: transactionCode };
-  } catch (error) {
-    await tx.rollback();
-    throw error;
-  }
+  });
+
+  return result;
 }
 
 export async function listTransfers(filters: TransferFilter = {}): Promise<TransferListItem[]> {
@@ -983,27 +1121,28 @@ export async function listTransfers(filters: TransferFilter = {}): Promise<Trans
     }));
   }
 
-  const pool = await getPool();
-  const req = pool.request();
+  const params: unknown[] = [];
   const conditions: string[] = ["t.transaction_type = 'TRANSFER'"];
+
   if (filters.from_warehouse_code) {
-    req.input("from_code", sql.NVarChar(20), filters.from_warehouse_code.toUpperCase());
-    conditions.push("UPPER(wf.code) = @from_code");
+    params.push(filters.from_warehouse_code.toUpperCase());
+    conditions.push(`UPPER(wf.code) = $${params.length}`);
   }
   if (filters.to_warehouse_code) {
-    req.input("to_code", sql.NVarChar(20), filters.to_warehouse_code.toUpperCase());
-    conditions.push("dest.to_code IS NOT NULL AND UPPER(dest.to_code) = @to_code");
+    params.push(filters.to_warehouse_code.toUpperCase());
+    conditions.push(`dest.to_code IS NOT NULL AND UPPER(dest.to_code) = $${params.length}`);
   }
   if (filters.from) {
-    req.input("from_date", sql.Date, filters.from);
-    conditions.push("CAST(t.occurred_at AS DATE) >= @from_date");
+    params.push(filters.from);
+    conditions.push(`t.occurred_at::date >= $${params.length}`);
   }
   if (filters.to) {
-    req.input("to_date", sql.Date, filters.to);
-    conditions.push("CAST(t.occurred_at AS DATE) <= @to_date");
+    params.push(filters.to);
+    conditions.push(`t.occurred_at::date <= $${params.length}`);
   }
   if (filters.article) {
-    req.input("article", sql.NVarChar(80), `%${filters.article.toUpperCase()}%`);
+    params.push(`%${filters.article.toUpperCase()}%`);
+    const placeholder = `$${params.length}`;
     conditions.push(`EXISTS (
       SELECT 1
       FROM app.inventory_movements mov
@@ -1011,41 +1150,49 @@ export async function listTransfers(filters: TransferFilter = {}): Promise<Trans
       LEFT JOIN app.articles kit ON kit.id = mov.source_kit_article_id
       WHERE mov.transaction_id = t.id
         AND (
-          UPPER(art.article_code) LIKE @article OR
-          UPPER(art.name) LIKE @article OR
-          UPPER(kit.article_code) LIKE @article
+          UPPER(art.article_code) LIKE ${placeholder} OR
+          UPPER(art.name) LIKE ${placeholder} OR
+          UPPER(kit.article_code) LIKE ${placeholder}
         )
     )`);
   }
+
   const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
-  const result = await req.query<TransferQueryRow>(`
-    WITH dest AS (
-      SELECT t.id,
-             MAX(CASE WHEN m.direction = 'IN' THEN w.code END) AS to_code,
-             MAX(CASE WHEN m.direction = 'IN' THEN w.name END) AS to_name
-      FROM app.inventory_transactions t
-      LEFT JOIN app.inventory_movements m ON m.transaction_id = t.id
-      LEFT JOIN app.warehouses w ON w.id = m.warehouse_id
-      WHERE t.transaction_type = 'TRANSFER'
-      GROUP BY t.id
-    )
-    SELECT t.id, t.transaction_code, t.occurred_at, t.notes, t.authorized_by,
-           wf.code AS from_code, wf.name AS from_name,
-           dest.to_code, dest.to_name,
-           (
-             SELECT COUNT(*)
-             FROM app.inventory_transaction_entries e
-             WHERE e.transaction_id = t.id AND e.direction = 'OUT'
-           ) AS lines_count
-    FROM app.inventory_transactions t
-    INNER JOIN app.warehouses wf ON wf.id = t.warehouse_id
-    LEFT JOIN dest ON dest.id = t.id
-    ${whereClause}
-    ORDER BY t.occurred_at DESC, t.id DESC;
-  `);
+  const result = await query<TransferQueryRow>(
+    `WITH dest AS (
+       SELECT t.id,
+              MAX(CASE WHEN m.direction = 'IN' THEN w.code END) AS to_code,
+              MAX(CASE WHEN m.direction = 'IN' THEN w.name END) AS to_name
+       FROM app.inventory_transactions t
+       LEFT JOIN app.inventory_movements m ON m.transaction_id = t.id
+       LEFT JOIN app.warehouses w ON w.id = m.warehouse_id
+       WHERE t.transaction_type = 'TRANSFER'
+       GROUP BY t.id
+     )
+     SELECT t.id,
+            t.transaction_code,
+            t.occurred_at,
+            t.notes,
+            t.authorized_by,
+            wf.code AS from_code,
+            wf.name AS from_name,
+            dest.to_code,
+            dest.to_name,
+            (
+              SELECT COUNT(*)
+              FROM app.inventory_transaction_entries e
+              WHERE e.transaction_id = t.id AND e.direction = 'OUT'
+            ) AS lines_count
+     FROM app.inventory_transactions t
+     INNER JOIN app.warehouses wf ON wf.id = t.warehouse_id
+     LEFT JOIN dest ON dest.id = t.id
+     ${whereClause}
+     ORDER BY t.occurred_at DESC, t.id DESC`,
+    params
+  );
 
-  return result.recordset.map((row) => ({
+  return result.rows.map((row) => ({
     id: `sql-${row.id}`,
     transaction_code: row.transaction_code,
     occurred_at: row.occurred_at instanceof Date ? row.occurred_at.toISOString() : new Date(row.occurred_at).toISOString(),
@@ -1116,35 +1263,64 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
     });
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  if (filters.article) req.input("article", sql.NVarChar(80), `%${filters.article.toUpperCase()}%`);
-  if (filters.warehouse_code) req.input("warehouse_code", sql.NVarChar(20), filters.warehouse_code.toUpperCase());
-  if (filters.from) req.input("from", sql.Date, filters.from);
-  if (filters.to) req.input("to", sql.Date, filters.to);
-  const result = await req.query<KardexQueryRow>(`
-    SELECT m.id, t.transaction_code, t.transaction_type, t.occurred_at, m.direction, m.quantity_retail,
-           a.article_code, a.name AS article_name, a.conversion_factor,
-           kit.article_code AS source_kit_code,
-           ru.name AS retail_unit, su.name AS storage_unit,
-           w.code AS warehouse_code, w.name AS warehouse_name,
-           t.reference, t.counterparty_name
-    FROM app.inventory_movements m
-    INNER JOIN app.inventory_transactions t ON t.id = m.transaction_id
-    INNER JOIN app.articles a ON a.id = m.article_id
-    INNER JOIN app.warehouses w ON w.id = m.warehouse_id
-    LEFT JOIN app.articles kit ON kit.id = m.source_kit_article_id
-    LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
-    LEFT JOIN app.units su ON su.id = a.storage_unit_id
-    WHERE 1=1
-      ${filters.article ? "AND (UPPER(a.article_code) LIKE @article OR UPPER(a.name) LIKE @article OR UPPER(kit.article_code) LIKE @article)" : ""}
-      ${filters.warehouse_code ? "AND UPPER(w.code) = @warehouse_code" : ""}
-      ${filters.from ? "AND CAST(t.occurred_at AS DATE) >= @from" : ""}
-      ${filters.to ? "AND CAST(t.occurred_at AS DATE) <= @to" : ""}
-    ORDER BY t.occurred_at ASC, m.id ASC;
-  `);
+  const params: unknown[] = [];
+  const clauses: string[] = [];
+
+  if (filters.article) {
+    params.push(`%${filters.article.toUpperCase()}%`);
+    const placeholder = `$${params.length}`;
+    clauses.push(`(
+      UPPER(a.article_code) LIKE ${placeholder}
+      OR UPPER(a.name) LIKE ${placeholder}
+      OR UPPER(kit.article_code) LIKE ${placeholder}
+    )`);
+  }
+  if (filters.warehouse_code) {
+    params.push(filters.warehouse_code.toUpperCase());
+    clauses.push(`UPPER(w.code) = $${params.length}`);
+  }
+  if (filters.from) {
+    params.push(filters.from);
+    clauses.push(`t.occurred_at::date >= $${params.length}`);
+  }
+  if (filters.to) {
+    params.push(filters.to);
+    clauses.push(`t.occurred_at::date <= $${params.length}`);
+  }
+
+  const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  const result = await query<KardexQueryRow>(
+    `SELECT
+       m.id,
+       t.transaction_code,
+       t.transaction_type,
+       t.occurred_at,
+       m.direction,
+       m.quantity_retail,
+       a.article_code,
+       a.name AS article_name,
+       a.conversion_factor,
+       kit.article_code AS source_kit_code,
+       ru.name AS retail_unit,
+       su.name AS storage_unit,
+       w.code AS warehouse_code,
+       w.name AS warehouse_name,
+       t.reference,
+       t.counterparty_name
+     FROM app.inventory_movements m
+     INNER JOIN app.inventory_transactions t ON t.id = m.transaction_id
+     INNER JOIN app.articles a ON a.id = m.article_id
+     INNER JOIN app.warehouses w ON w.id = m.warehouse_id
+     LEFT JOIN app.articles kit ON kit.id = m.source_kit_article_id
+     LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
+     LEFT JOIN app.units su ON su.id = a.storage_unit_id
+     ${whereClause}
+     ORDER BY t.occurred_at ASC, m.id ASC`,
+    params
+  );
   const balances = new Map<string, number>();
-  return result.recordset.map((row) => {
+  return result.rows.map((row) => {
     const key = `${row.article_code}:${row.warehouse_code}`;
     const prev = balances.get(key) ?? 0;
     const quantityRetail = Number(row.quantity_retail ?? 0);
@@ -1216,29 +1392,46 @@ export async function getStockSummary(filters: StockFilter = {}): Promise<StockS
     });
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  if (filters.article) req.input("article", sql.NVarChar(80), `%${filters.article.toUpperCase()}%`);
-  if (filters.warehouse_code) req.input("warehouse_code", sql.NVarChar(20), filters.warehouse_code.toUpperCase());
-  const result = await req.query<StockSummaryQueryRow>(`
-    SELECT a.article_code, a.name AS article_name,
-           w.code AS warehouse_code, w.name AS warehouse_name,
-           a.conversion_factor,
-           ru.name AS retail_unit, su.name AS storage_unit,
-           SUM(CASE WHEN m.direction = 'IN' THEN m.quantity_retail ELSE -m.quantity_retail END) AS available_retail
-    FROM app.inventory_movements m
-    INNER JOIN app.inventory_transactions t ON t.id = m.transaction_id
-    INNER JOIN app.articles a ON a.id = m.article_id
-    INNER JOIN app.warehouses w ON w.id = m.warehouse_id
-    LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
-    LEFT JOIN app.units su ON su.id = a.storage_unit_id
-    WHERE 1=1
-      ${filters.article ? "AND (UPPER(a.article_code) LIKE @article OR UPPER(a.name) LIKE @article)" : ""}
-      ${filters.warehouse_code ? "AND UPPER(w.code) = @warehouse_code" : ""}
-    GROUP BY a.article_code, a.name, w.code, w.name, a.conversion_factor, ru.name, su.name
-    ORDER BY a.article_code, w.code;
-  `);
-  return result.recordset.map((row) => {
+  const params: unknown[] = [];
+  const clauses: string[] = [];
+
+  if (filters.article) {
+    params.push(`%${filters.article.toUpperCase()}%`);
+    const placeholder = `$${params.length}`;
+    clauses.push(`(
+      UPPER(a.article_code) LIKE ${placeholder}
+      OR UPPER(a.name) LIKE ${placeholder}
+    )`);
+  }
+  if (filters.warehouse_code) {
+    params.push(filters.warehouse_code.toUpperCase());
+    clauses.push(`UPPER(w.code) = $${params.length}`);
+  }
+
+  const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  const result = await query<StockSummaryQueryRow>(
+    `SELECT
+       a.article_code,
+       a.name AS article_name,
+       w.code AS warehouse_code,
+       w.name AS warehouse_name,
+       a.conversion_factor,
+       ru.name AS retail_unit,
+       su.name AS storage_unit,
+       SUM(CASE WHEN m.direction = 'IN' THEN m.quantity_retail ELSE -m.quantity_retail END) AS available_retail
+     FROM app.inventory_movements m
+     INNER JOIN app.inventory_transactions t ON t.id = m.transaction_id
+     INNER JOIN app.articles a ON a.id = m.article_id
+     INNER JOIN app.warehouses w ON w.id = m.warehouse_id
+     LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
+     LEFT JOIN app.units su ON su.id = a.storage_unit_id
+     ${whereClause}
+     GROUP BY a.article_code, a.name, w.code, w.name, a.conversion_factor, ru.name, su.name
+     ORDER BY a.article_code, w.code`,
+    params
+  );
+  return result.rows.map((row) => {
     const availableRetail = Number(row.available_retail || 0);
     const conversionFactor = Number(row.conversion_factor || 0) || 1;
     return {
@@ -1281,24 +1474,45 @@ export async function listPurchases(filters: PurchaseListFilter = {}): Promise<P
     }));
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  if (filters.supplier) req.input("supplier", sql.NVarChar(160), `%${filters.supplier.toUpperCase()}%`);
-  if (filters.status) req.input("status", sql.NVarChar(12), filters.status);
-  if (filters.from) req.input("from", sql.Date, filters.from);
-  if (filters.to) req.input("to", sql.Date, filters.to);
-  const result = await req.query<PurchaseListRow>(`
-    SELECT t.id, t.transaction_code, t.reference, t.counterparty_name, t.occurred_at, t.status, t.total_amount, w.name AS warehouse_name
-    FROM app.inventory_transactions t
-    INNER JOIN app.warehouses w ON w.id = t.warehouse_id
-    WHERE t.transaction_type = 'PURCHASE'
-      ${filters.supplier ? "AND UPPER(t.counterparty_name) LIKE @supplier" : ""}
-      ${filters.status ? "AND t.status = @status" : ""}
-      ${filters.from ? "AND CAST(t.occurred_at AS DATE) >= @from" : ""}
-      ${filters.to ? "AND CAST(t.occurred_at AS DATE) <= @to" : ""}
-    ORDER BY t.occurred_at DESC, t.id DESC;
-  `);
-  return result.recordset.map((row) => {
+  const params: unknown[] = [];
+  const clauses: string[] = ["t.transaction_type = 'PURCHASE'"];
+
+  if (filters.supplier) {
+    params.push(`%${filters.supplier.toUpperCase()}%`);
+    clauses.push(`UPPER(t.counterparty_name) LIKE $${params.length}`);
+  }
+  if (filters.status) {
+    params.push(filters.status);
+    clauses.push(`t.status = $${params.length}`);
+  }
+  if (filters.from) {
+    params.push(filters.from);
+    clauses.push(`t.occurred_at::date >= $${params.length}`);
+  }
+  if (filters.to) {
+    params.push(filters.to);
+    clauses.push(`t.occurred_at::date <= $${params.length}`);
+  }
+
+  const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  const result = await query<PurchaseListRow>(
+    `SELECT
+       t.id,
+       t.transaction_code,
+       t.reference,
+       t.counterparty_name,
+       t.occurred_at,
+       t.status,
+       t.total_amount,
+       w.name AS warehouse_name
+     FROM app.inventory_transactions t
+     INNER JOIN app.warehouses w ON w.id = t.warehouse_id
+     ${whereClause}
+     ORDER BY t.occurred_at DESC, t.id DESC`,
+    params
+  );
+  return result.rows.map((row) => {
     const rawAmount = row.total_amount ?? 0;
     return {
       id: `sql-${row.id}`,
@@ -1352,30 +1566,55 @@ export async function listConsumptions(filters: ConsumptionListFilter = {}): Pro
     });
   }
 
-  const pool = await getPool();
-  const req = pool.request();
-  if (filters.article) req.input("article", sql.NVarChar(80), `%${filters.article.toUpperCase()}%`);
-  if (filters.from) req.input("from", sql.Date, filters.from);
-  if (filters.to) req.input("to", sql.Date, filters.to);
-  const result = await req.query<ConsumptionListRow>(`
-    SELECT m.id, t.occurred_at, a.article_code, a.name AS article_name,
-           t.reference AS reason, t.authorized_by, t.counterparty_name AS area,
-           m.quantity_retail, m.direction,
-           a.conversion_factor, ru.name AS retail_unit, su.name AS storage_unit,
-           kit.article_code AS source_kit_code
-    FROM app.inventory_movements m
-    INNER JOIN app.inventory_transactions t ON t.id = m.transaction_id AND t.transaction_type = 'CONSUMPTION'
-    INNER JOIN app.articles a ON a.id = m.article_id
-    LEFT JOIN app.articles kit ON kit.id = m.source_kit_article_id
-    LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
-    LEFT JOIN app.units su ON su.id = a.storage_unit_id
-    WHERE m.direction = 'OUT'
-      ${filters.article ? "AND (UPPER(a.article_code) LIKE @article OR UPPER(a.name) LIKE @article OR UPPER(kit.article_code) LIKE @article)" : ""}
-      ${filters.from ? "AND CAST(t.occurred_at AS DATE) >= @from" : ""}
-      ${filters.to ? "AND CAST(t.occurred_at AS DATE) <= @to" : ""}
-    ORDER BY t.occurred_at DESC, m.id DESC;
-  `);
-  return result.recordset.map((row) => {
+  const params: unknown[] = [];
+  const clauses: string[] = ["m.direction = 'OUT'", "t.transaction_type = 'CONSUMPTION'"];
+
+  if (filters.article) {
+    params.push(`%${filters.article.toUpperCase()}%`);
+    const placeholder = `$${params.length}`;
+    clauses.push(`(
+      UPPER(a.article_code) LIKE ${placeholder}
+      OR UPPER(a.name) LIKE ${placeholder}
+      OR UPPER(kit.article_code) LIKE ${placeholder}
+    )`);
+  }
+  if (filters.from) {
+    params.push(filters.from);
+    clauses.push(`t.occurred_at::date >= $${params.length}`);
+  }
+  if (filters.to) {
+    params.push(filters.to);
+    clauses.push(`t.occurred_at::date <= $${params.length}`);
+  }
+
+  const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  const result = await query<ConsumptionListRow>(
+    `SELECT
+       m.id,
+       t.occurred_at,
+       a.article_code,
+       a.name AS article_name,
+       t.reference AS reason,
+       t.authorized_by,
+       t.counterparty_name AS area,
+       m.quantity_retail,
+       m.direction,
+       a.conversion_factor,
+       ru.name AS retail_unit,
+       su.name AS storage_unit,
+       kit.article_code AS source_kit_code
+     FROM app.inventory_movements m
+     INNER JOIN app.inventory_transactions t ON t.id = m.transaction_id
+     INNER JOIN app.articles a ON a.id = m.article_id
+     LEFT JOIN app.articles kit ON kit.id = m.source_kit_article_id
+     LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
+     LEFT JOIN app.units su ON su.id = a.storage_unit_id
+     ${whereClause}
+     ORDER BY t.occurred_at DESC, m.id DESC`,
+    params
+  );
+  return result.rows.map((row) => {
     const conversionFactor = Number(row.conversion_factor || 0) || 1;
     const quantityRetail = Number(row.quantity_retail || 0);
     return {
