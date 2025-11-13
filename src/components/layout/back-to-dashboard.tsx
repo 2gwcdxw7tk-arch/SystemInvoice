@@ -21,7 +21,7 @@ export function BackToDashboard({ className, session }: { className?: string; se
   if (!pathname) return null;
 
   const normalizedRoles = (session?.roles ?? []).map((role) => role.trim().toUpperCase());
-  const isAdministrator = normalizedRoles.includes("ADMINISTRADOR");
+  const isAdministrator = session?.role === "admin" || normalizedRoles.includes("ADMINISTRADOR");
   const isFacturadorOnly = normalizedRoles.includes("FACTURADOR") && !isAdministrator;
   if (isFacturadorOnly) return null;
 

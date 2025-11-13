@@ -25,6 +25,10 @@ export function hasPermission(session: SessionPayload | null | undefined, permis
 }
 
 export function isAdministrator(session: SessionPayload | null | undefined): boolean {
+  if (!session) return false;
+  if (session.role === "admin") {
+    return true;
+  }
   const roles = normalizeRoles(session);
   return roles.includes("ADMINISTRADOR");
 }

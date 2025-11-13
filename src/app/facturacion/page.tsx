@@ -1255,7 +1255,7 @@ export default function FacturacionPage() {
   const modeParam = (searchParams?.get("mode") as FacturacionMode | null) ?? null;
   const session = useSession();
   const normalizedRoles = (session?.roles ?? []).map((role) => role.trim().toUpperCase());
-  const canManagePriceLists = normalizedRoles.includes("ADMINISTRADOR");
+  const canManagePriceLists = (session?.role === "admin") || normalizedRoles.includes("ADMINISTRADOR");
   const { toast } = useToast();
 
   useEffect(() => {

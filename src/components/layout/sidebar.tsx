@@ -42,7 +42,7 @@ export function Sidebar({ collapsed = false, onToggleCollapse, variant = "deskto
   const [currentHash, setCurrentHash] = useState<string>("#resumen");
 
   const normalizedRoles = (session?.roles ?? []).map((role) => role.trim().toUpperCase());
-  const isAdministrator = normalizedRoles.includes("ADMINISTRADOR");
+  const isAdministrator = session?.role === "admin" || normalizedRoles.includes("ADMINISTRADOR");
   const isFacturadorOnly = normalizedRoles.includes("FACTURADOR") && !isAdministrator;
 
   const allowedPathsForFacturador = new Set(["/facturacion"]);
