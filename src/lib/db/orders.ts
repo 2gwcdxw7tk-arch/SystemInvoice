@@ -264,7 +264,7 @@ async function syncTableState({ client, orderId }: SyncContext): Promise<void> {
 
   await client.query(
     `INSERT INTO app.table_state (table_id, assigned_waiter_id, assigned_waiter_name, status, pending_items, sent_items)
-     VALUES ($1, NULL, $2, $3, $4, '[]')
+     VALUES ($1, NULL, $2, $3, '[]', $4)
      ON CONFLICT (table_id)
      DO UPDATE SET
        assigned_waiter_id = EXCLUDED.assigned_waiter_id,
@@ -290,6 +290,143 @@ function syncMockTableState(order: MockOrder): void {
   // No podemos escribir en table_state mock directamente desde aquí, los módulos mock usan mapas internos.
   // Este bloque mantiene el side effect pero ignora errores para no interrumpir pruebas locales.
   void payload;
+}
+
+function sanitizeWaiterField(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function normalizeWaiterSyncItems(items: OrderLine[]): Array<{
+  articleCode: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  notes: string | null;
+}> {
+  return items.map((line) => ({
+    articleCode: line.articleCode,
+    name: line.name,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice ?? 0,
+    notes: line.notes ?? null,
+  }));
+}
+
+export async function syncWaiterOrderForTable(params: {
+  tableId: string;
+  waiterId: number | null;
+  waiterCode: string | null;
+  waiterName: string | null;
+  sentItems: OrderLine[];
+}): Promise<number | null> {
+  const normalizedCode = sanitizeWaiterField(params.waiterCode);
+  const normalizedName = sanitizeWaiterField(params.waiterName);
+  const items = normalizeWaiterSyncItems(params.sentItems);
+
+  if (env.useMockData) {
+    const existing = mockOrders.find((order) => order.tableId === params.tableId && order.status === "OPEN");
+    if (!existing) {
+      if (items.length === 0) {
+        return null;
+      }
+      return await createOrder({
+        tableId: params.tableId,
+        waiterCode: normalizedCode,
+        waiterName: normalizedName,
+        guests: null,
+        notes: null,
+        items: items.map((item) => ({
+          articleCode: item.articleCode,
+          name: item.name,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          modifiers: [],
+          notes: item.notes,
+        })),
+      });
+    }
+
+    existing.waiterCode = normalizedCode ?? existing.waiterCode;
+    existing.waiterName = normalizedName ?? existing.waiterName;
+    existing.items = items.map((item) => ({
+      id: ++mockItemAutoIncrement,
+      articleCode: item.articleCode,
+      name: item.name,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      modifiers: [],
+      notes: item.notes,
+    }));
+    syncMockTableState(existing);
+    return existing.id;
+  }
+
+  const existing = await query<{ id: number }>(
+    `SELECT id FROM app.orders WHERE table_id = $1 AND status = 'OPEN' ORDER BY opened_at ASC LIMIT 1`,
+    [params.tableId]
+  );
+
+  const orderId = existing.rows[0]?.id ?? null;
+  if (!orderId) {
+    if (items.length === 0) {
+      return null;
+    }
+    const newOrderId = await createOrder({
+      tableId: params.tableId,
+      waiterCode: normalizedCode,
+      waiterName: normalizedName,
+      guests: null,
+      notes: null,
+      items: items.map((item) => ({
+        articleCode: item.articleCode,
+        name: item.name,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        modifiers: [],
+        notes: item.notes,
+      })),
+    });
+
+    await query(
+      `UPDATE app.table_state
+          SET assigned_waiter_id = $2,
+              assigned_waiter_name = COALESCE($3, assigned_waiter_name),
+              updated_at = NOW()
+        WHERE table_id = $1`,
+      [params.tableId, params.waiterId ?? null, normalizedName]
+    );
+
+    return newOrderId;
+  }
+
+  await withTransaction(async (client) => {
+    await client.query(`UPDATE app.orders SET waiter_code = $2, waiter_name = $3 WHERE id = $1`, [orderId, normalizedCode, normalizedName]);
+    await client.query(`DELETE FROM app.order_items WHERE order_id = $1`, [orderId]);
+
+    if (items.length > 0) {
+      for (const item of items) {
+        await client.query(
+          `INSERT INTO app.order_items (order_id, article_code, description, quantity, unit_price, modifiers, notes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [orderId, item.articleCode, item.name, item.quantity, item.unitPrice, "[]", item.notes]
+        );
+      }
+    }
+
+    await syncTableState({ client, orderId });
+
+    await client.query(
+      `UPDATE app.table_state
+          SET assigned_waiter_id = $2,
+              assigned_waiter_name = COALESCE($3, assigned_waiter_name),
+              updated_at = NOW()
+        WHERE table_id = $1`,
+      [params.tableId, params.waiterId ?? null, normalizedName]
+    );
+  });
+  return orderId;
 }
 
 function ensureMockOrder(orderId: number): MockOrder {

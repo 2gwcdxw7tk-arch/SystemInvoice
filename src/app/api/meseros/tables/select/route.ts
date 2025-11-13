@@ -3,7 +3,8 @@ import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { getWaiterById } from "@/lib/db/auth";
-import { claimWaiterTable } from "@/lib/db/tables";
+import { claimWaiterTable, getWaiterTable } from "@/lib/db/tables";
+import { syncWaiterOrderForTable } from "@/lib/db/orders";
 
 const payloadSchema = z.object({
   table_id: z.string().trim().min(1),
@@ -37,7 +38,15 @@ export async function POST(request: NextRequest) {
       waiterId: waiter.id,
       waiterName: waiter.fullName,
     });
-    return NextResponse.json({ success: true, table });
+    await syncWaiterOrderForTable({
+      tableId: table.id,
+      waiterId: waiter.id,
+      waiterCode: waiter.code,
+      waiterName: waiter.fullName,
+      sentItems: table.order?.sent_items ?? [],
+    });
+    const refreshed = await getWaiterTable(table.id);
+    return NextResponse.json({ success: true, table: refreshed ?? table });
   } catch (error) {
     console.error("POST /api/meseros/tables/select", error);
     const message = error instanceof Error ? error.message : "No se pudo asignar la mesa";

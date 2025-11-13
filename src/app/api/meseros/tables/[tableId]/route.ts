@@ -4,6 +4,7 @@ import { z } from "zod";
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { getWaiterById } from "@/lib/db/auth";
 import { getWaiterTable, storeWaiterTableOrder } from "@/lib/db/tables";
+import { syncWaiterOrderForTable } from "@/lib/db/orders";
 
 const orderLineSchema = z.object({
   articleCode: z.string().trim().min(1),
@@ -66,6 +67,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ t
   }
 
   try {
+    const previous = await getWaiterTable(tableId);
     const waiter = await getWaiterById(waiterId);
     if (!waiter) {
       return NextResponse.json({ success: false, message: "Mesero no encontrado" }, { status: 404 });
@@ -77,7 +79,25 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ t
       pendingItems: parsed.data.pending_items,
       sentItems: parsed.data.sent_items,
     });
-    return NextResponse.json({ success: true, table });
+    const previousSentSignature = JSON.stringify(previous?.order?.sent_items ?? []);
+    const currentSentSignature = JSON.stringify(table.order?.sent_items ?? []);
+
+    let responseTable = table;
+    if (previousSentSignature !== currentSentSignature) {
+      await syncWaiterOrderForTable({
+        tableId,
+        waiterId: waiter.id,
+        waiterCode: waiter.code,
+        waiterName: waiter.fullName,
+        sentItems: table.order?.sent_items ?? [],
+      });
+      const refreshed = await getWaiterTable(tableId);
+      if (refreshed) {
+        responseTable = refreshed;
+      }
+    }
+
+    return NextResponse.json({ success: true, table: responseTable });
   } catch (error) {
     console.error(`PATCH /api/meseros/tables/${tableId}`, error);
     const message = error instanceof Error ? error.message : "No se pudo guardar la comanda";
