@@ -1,8 +1,27 @@
+-- Active: 1763061241801@@127.0.0.1@5432@facturador
 -- ========================================================
 -- Script maestro de base de datos para Facturador (PostgreSQL)
 -- Proposito: Mantener la estructura necesaria para autenticacion y operaciones basicas
 -- Ejecutar en el contexto de la base de datos configurada en DB_CONNECTION_STRING
 -- ========================================================
+
+DO $$
+BEGIN
+  IF current_database() = 'postgres' THEN
+    RAISE EXCEPTION 'Este script debe ejecutarse en la base Facturador. Conexión actual: %', current_database();
+  END IF;
+END;
+$$;
+
+-- ========================================================
+-- Paso 0: Crear la base de datos (ejecutar conectado a postgres)
+-- Ajusta el nombre si lo deseas. Si la base ya existe puedes omitir esta instruccion.
+-- ========================================================
+-- CREATE DATABASE facturador
+--   WITH ENCODING 'UTF8'
+--   TEMPLATE template1;
+
+-- Tras crearla, cambia la conexion al esquema "facturador" y continua con el resto del script.
 
 CREATE SCHEMA IF NOT EXISTS app;
 
@@ -100,6 +119,49 @@ FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 
 CREATE INDEX IF NOT EXISTS ix_exchange_rates_rate_date
   ON app.exchange_rates (rate_date DESC) INCLUDE (rate_value, base_currency_code, quote_currency_code);
+
+-- ========================================================
+-- Tabla: app.table_zones
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.table_zones (
+  id VARCHAR(40) NOT NULL PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_table_zones_touch_updated_at ON app.table_zones;
+CREATE TRIGGER trg_table_zones_touch_updated_at
+BEFORE UPDATE ON app.table_zones
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_table_zones_sort_order
+  ON app.table_zones (sort_order);
+
+-- ========================================================
+-- Tabla: app.tables
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.tables (
+  id VARCHAR(40) NOT NULL PRIMARY KEY,
+  label VARCHAR(120) NOT NULL,
+  zone_id VARCHAR(40) REFERENCES app.table_zones(id),
+  capacity INTEGER,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT ck_tables_capacity CHECK (capacity IS NULL OR capacity > 0)
+);
+
+DROP TRIGGER IF EXISTS trg_tables_touch_updated_at ON app.tables;
+CREATE TRIGGER trg_tables_touch_updated_at
+BEFORE UPDATE ON app.tables
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_tables_active_order
+  ON app.tables (is_active, sort_order) INCLUDE (label);
 
 -- ========================================================
 -- Tabla: app.orders
@@ -357,6 +419,9 @@ CREATE TABLE IF NOT EXISTS app.cash_register_session_payments (
 CREATE INDEX IF NOT EXISTS ix_cash_register_session_payments_session
   ON app.cash_register_session_payments (session_id);
 
+-- ========================================================
+-- Tabla: app.cash_registers (cajas de facturación)
+-- ========================================================
 -- ========================================================
 -- Tabla: app.roles y asignación de permisos
 -- ========================================================
@@ -679,49 +744,6 @@ CREATE INDEX IF NOT EXISTS ix_inventory_movements_article
 
 CREATE INDEX IF NOT EXISTS ix_inventory_movements_transaction
   ON app.inventory_movements (transaction_id);
-
--- ========================================================
--- Tabla: app.table_zones
--- ========================================================
-CREATE TABLE IF NOT EXISTS app.table_zones (
-  id VARCHAR(40) NOT NULL PRIMARY KEY,
-  name VARCHAR(120) NOT NULL,
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  sort_order INTEGER NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
-
-DROP TRIGGER IF EXISTS trg_table_zones_touch_updated_at ON app.table_zones;
-CREATE TRIGGER trg_table_zones_touch_updated_at
-BEFORE UPDATE ON app.table_zones
-FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
-
-CREATE INDEX IF NOT EXISTS ix_table_zones_sort_order
-  ON app.table_zones (sort_order);
-
--- ========================================================
--- Tabla: app.tables
--- ========================================================
-CREATE TABLE IF NOT EXISTS app.tables (
-  id VARCHAR(40) NOT NULL PRIMARY KEY,
-  label VARCHAR(120) NOT NULL,
-  zone_id VARCHAR(40) REFERENCES app.table_zones(id),
-  capacity INTEGER,
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  sort_order INTEGER NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT ck_tables_capacity CHECK (capacity IS NULL OR capacity > 0)
-);
-
-DROP TRIGGER IF EXISTS trg_tables_touch_updated_at ON app.tables;
-CREATE TRIGGER trg_tables_touch_updated_at
-BEFORE UPDATE ON app.tables
-FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
-
-CREATE INDEX IF NOT EXISTS ix_tables_active_order
-  ON app.tables (is_active, sort_order) INCLUDE (label);
 
 -- ========================================================
 -- Tabla: app.table_state
