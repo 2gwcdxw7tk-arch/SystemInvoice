@@ -18,7 +18,13 @@ export async function POST(request: NextRequest) {
   }
 
   const roles = Array.isArray(session.roles) ? session.roles : [];
-  if (!roles.includes("FACTURADOR")) {
+  const permissions = Array.isArray(session.permissions) ? session.permissions : [];
+  const canOpen =
+    roles.includes("FACTURADOR") ||
+    roles.includes("ADMINISTRADOR") ||
+    permissions.includes("cash.register.open");
+
+  if (!canOpen) {
     return NextResponse.json({ success: false, message: "No tienes permisos para abrir cajas" }, { status: 403 });
   }
 

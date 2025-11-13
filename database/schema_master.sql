@@ -419,6 +419,29 @@ WHERE NOT EXISTS (
   WHERE rp.role_id = rt.id AND rp.permission_code = perms.permission_code
 );
 
+INSERT INTO app.roles (code, name, description, is_active)
+SELECT 'ADMINISTRADOR', 'Administrador General', 'Acceso completo al mantenimiento y operaciones', TRUE
+WHERE NOT EXISTS (SELECT 1 FROM app.roles WHERE code = 'ADMINISTRADOR');
+
+WITH admin_role AS (
+  SELECT id FROM app.roles WHERE code = 'ADMINISTRADOR' LIMIT 1
+)
+INSERT INTO app.role_permissions (role_id, permission_code)
+SELECT ar.id, perms.permission_code
+FROM admin_role ar
+JOIN (VALUES
+  ('cash.register.open'),
+  ('cash.register.close'),
+  ('invoice.issue'),
+  ('cash.report.view'),
+  ('admin.users.manage')
+) AS perms(permission_code) ON TRUE
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM app.role_permissions rp
+  WHERE rp.role_id = ar.id AND rp.permission_code = perms.permission_code
+);
+
 -- ========================================================
 -- Tabla: app.articles
 -- ========================================================

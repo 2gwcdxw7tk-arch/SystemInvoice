@@ -1,8 +1,12 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { listWarehouses } from "@/lib/db/warehouses";
+import { requireAdministrator } from "@/lib/auth/access";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede consultar almacenes");
+  if ("response" in access) return access.response;
+
   try {
     const items = await listWarehouses();
     return NextResponse.json({ items });

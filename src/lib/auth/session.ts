@@ -1,3 +1,5 @@
+import { env } from "@/lib/env";
+
 const rawSessionSecret = process.env.SESSION_SECRET;
 
 if (!rawSessionSecret || rawSessionSecret.length < 32) {
@@ -57,6 +59,38 @@ function safeEquals(a: string, b: string): boolean {
     result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return result === 0;
+}
+
+function normalizeRolesInput(values: unknown): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return values
+    .map((role) => (typeof role === "string" ? role.trim().toUpperCase() : ""))
+    .filter((role) => role.length > 0);
+}
+
+function normalizePermissionsInput(values: unknown): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
 }
 
 export async function createSessionCookie(params: {
@@ -134,7 +168,30 @@ export async function parseSessionCookie(value: string | undefined | null): Prom
     if (payload.permissions && !Array.isArray(payload.permissions)) {
       return null;
     }
-    return payload;
+
+    const normalizedRoles = normalizeRolesInput(payload.roles);
+    const normalizedPermissions = normalizePermissionsInput(payload.permissions);
+
+    if (env.useMockData && payload.role === "admin") {
+      if (normalizedRoles.length === 0) {
+        normalizedRoles.push("ADMINISTRADOR");
+      }
+      if (normalizedPermissions.length === 0) {
+        normalizedPermissions.push(
+          "cash.register.open",
+          "cash.register.close",
+          "invoice.issue",
+          "cash.report.view",
+          "admin.users.manage"
+        );
+      }
+    }
+
+    return {
+      ...payload,
+      roles: normalizedRoles,
+      permissions: normalizedPermissions,
+    } satisfies SessionPayload;
   } catch (error) {
     console.error("Error al parsear la sesión", error);
     return null;

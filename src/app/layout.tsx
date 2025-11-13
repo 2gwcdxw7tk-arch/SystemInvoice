@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import "./globals.css";
 
 import { ToastProvider } from "@/components/ui/toast-provider";
@@ -7,6 +8,7 @@ import { ServiceWorkerProvider } from "@/components/providers/service-worker-pro
 import { AppShell } from "@/components/layout/app-shell";
 import { cn } from "@/lib/utils";
 import { siteConfig } from "@/config/site";
+import { SESSION_COOKIE_NAME, parseSessionCookie, type SessionPayload } from "@/lib/auth/session";
 
 export const metadata: Metadata = {
   title: {
@@ -26,18 +28,28 @@ export const viewport: Viewport = {
   themeColor: "#0f172a",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
-}>): React.JSX.Element {
+}>): Promise<React.JSX.Element> {
+  let session: SessionPayload | null = null;
+  try {
+    const cookieStore = await cookies();
+    const rawSession = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+    session = await parseSessionCookie(rawSession);
+  } catch (error) {
+    console.error("No se pudo recuperar la sesión inicial", error);
+    session = null;
+  }
+
   return (
     <html lang="es" suppressHydrationWarning>
       <body className={cn("min-h-screen bg-background font-sans antialiased")}>
         <ThemeProvider>
           <ServiceWorkerProvider>
             <ToastProvider>
-              <AppShell>{children}</AppShell>
+              <AppShell session={session}>{children}</AppShell>
             </ToastProvider>
           </ServiceWorkerProvider>
         </ThemeProvider>

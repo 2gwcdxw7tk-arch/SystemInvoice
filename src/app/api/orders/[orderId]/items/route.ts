@@ -12,8 +12,9 @@ const bodySchema = z.object({
   notes: z.string().trim().max(200).nullable().optional(),
 });
 
-export async function POST(request: NextRequest, { params }: { params: { orderId: string } }) {
-  const orderId = Number(params.orderId);
+export async function POST(request: NextRequest, context: { params: Promise<{ orderId: string }> }) {
+  const { orderId: rawOrderId } = await context.params;
+  const orderId = Number(rawOrderId);
   if (!Number.isFinite(orderId) || orderId <= 0) {
     return NextResponse.json({ success: false, message: "Identificador de pedido inválido" }, { status: 400 });
   }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { listTransfers, registerTransfer } from "@/lib/db/inventory";
+import { requireAdministrator } from "@/lib/auth/access";
 
 const numericInput = z.union([z.number(), z.string().trim().min(1)]);
 const quantitySchema = numericInput.refine((value) => {
@@ -26,6 +27,9 @@ const transferSchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede consultar traspasos");
+  if ("response" in access) return access.response;
+
   const { searchParams } = new URL(request.url);
   const article = searchParams.get("article") || undefined;
   const fromWarehouse = searchParams.get("fromWarehouse") || undefined;
@@ -49,6 +53,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede registrar traspasos");
+  if ("response" in access) return access.response;
+
   const body = await request.json().catch(() => null);
   const parsed = transferSchema.safeParse(body);
   if (!parsed.success) {

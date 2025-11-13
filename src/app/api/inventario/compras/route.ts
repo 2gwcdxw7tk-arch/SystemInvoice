@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { listPurchases, registerPurchase } from "@/lib/db/inventory";
+import { requireAdministrator } from "@/lib/auth/access";
 
 const numericInput = z.union([z.number(), z.string().trim().min(1)]);
 const quantitySchema = numericInput.refine((value) => {
@@ -31,6 +32,9 @@ const purchaseSchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede consultar compras de inventario");
+  if ("response" in access) return access.response;
+
   const { searchParams } = new URL(request.url);
   const supplier = searchParams.get("supplier") || undefined;
   const statusParam = searchParams.get("status") || undefined;
@@ -49,6 +53,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede registrar compras");
+  if ("response" in access) return access.response;
+
   const body = await request.json().catch(() => null);
   const parsed = purchaseSchema.safeParse(body);
   if (!parsed.success) {

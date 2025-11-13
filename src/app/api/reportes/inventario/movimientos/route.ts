@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getInventoryMovementsReport } from "@/lib/db/reports";
+import { requireAdministrator } from "@/lib/auth/access";
 
 const querySchema = z.object({
   from: z.string().trim().min(10, "La fecha inicial es obligatoria"),
@@ -12,6 +13,9 @@ const querySchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede consultar movimientos de inventario");
+  if ("response" in access) return access.response;
+
   const params = Object.fromEntries(new URL(request.url).searchParams.entries());
   const parsed = querySchema.safeParse(params);
   if (!parsed.success) {

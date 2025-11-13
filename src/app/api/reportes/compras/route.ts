@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getPurchasesReport } from "@/lib/db/reports";
+import { requireAdministrator } from "@/lib/auth/access";
 
 const purchaseStatusEnum = z.enum(["PENDIENTE", "PARCIAL", "PAGADA"]);
 type PurchaseStatusValue = z.infer<typeof purchaseStatusEnum>;
@@ -21,6 +22,9 @@ const querySchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede consultar el reporte de compras");
+  if ("response" in access) return access.response;
+
   const params = Object.fromEntries(new URL(request.url).searchParams.entries());
   const parsed = querySchema.safeParse(params);
   if (!parsed.success) {

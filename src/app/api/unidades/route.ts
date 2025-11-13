@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { listUnits, upsertUnit } from "@/lib/db/units";
+import { requireAdministrator } from "@/lib/auth/access";
 
 const unitSchema = z.object({
   code: z.string().trim().min(1).max(20),
@@ -8,7 +9,10 @@ const unitSchema = z.object({
   is_active: z.boolean().optional(),
 });
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede consultar unidades");
+  if ("response" in access) return access.response;
+
   try {
     const items = await listUnits();
     return NextResponse.json({ items });
@@ -19,6 +23,9 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede administrar unidades");
+  if ("response" in access) return access.response;
+
   const body = await request.json().catch(() => null);
   const parsed = unitSchema.safeParse(body);
   if (!parsed.success) {

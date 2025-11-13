@@ -45,7 +45,15 @@ export async function GET(request: NextRequest) {
   }
 
   const roles = Array.isArray(session.roles) ? session.roles : [];
-  if (!roles.includes("FACTURADOR")) {
+  const permissions = Array.isArray(session.permissions) ? session.permissions : [];
+  const canAccess =
+    roles.includes("FACTURADOR") ||
+    roles.includes("ADMINISTRADOR") ||
+    permissions.some((perm) =>
+      perm === "cash.register.open" || perm === "cash.register.close" || perm === "cash.report.view"
+    );
+
+  if (!canAccess) {
     return NextResponse.json({ success: false, message: "No tienes permisos para operar cajas" }, { status: 403 });
   }
 

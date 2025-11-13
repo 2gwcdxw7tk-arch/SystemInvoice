@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { SessionPayload } from "@/lib/auth/session";
 
 /**
  * Componente: BackToDashboard
@@ -14,10 +15,16 @@ import { cn } from "@/lib/utils";
  * - Compatible con tema claro/oscuro y contraste adecuado.
  * - Accesible por teclado (rol botón + aria-label descriptivo).
  */
-export function BackToDashboard({ className }: { className?: string }) {
+export function BackToDashboard({ className, session }: { className?: string; session: SessionPayload | null }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   if (!pathname) return null;
+
+  const normalizedRoles = (session?.roles ?? []).map((role) => role.trim().toUpperCase());
+  const isAdministrator = normalizedRoles.includes("ADMINISTRADOR");
+  const isFacturadorOnly = normalizedRoles.includes("FACTURADOR") && !isAdministrator;
+  if (isFacturadorOnly) return null;
+
   if (pathname === "/") return null;
   if (pathname.startsWith("/dashboard")) return null;
   const segments = pathname.split("/").filter(Boolean);

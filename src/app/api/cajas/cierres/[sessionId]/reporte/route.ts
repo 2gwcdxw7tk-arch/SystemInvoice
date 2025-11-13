@@ -29,7 +29,7 @@ function buildCsv(report: Awaited<ReturnType<typeof getCashRegisterClosureReport
   return lines.join("\n");
 }
 
-export async function GET(request: NextRequest, { params }: { params: { sessionId: string } }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   const session = await parseSessionCookie(rawSession);
   if (!session || session.role !== "admin") {
@@ -38,12 +38,16 @@ export async function GET(request: NextRequest, { params }: { params: { sessionI
 
   const permissions = Array.isArray(session.permissions) ? session.permissions : [];
   const roles = Array.isArray(session.roles) ? session.roles : [];
-  const canView = roles.includes("FACTURADOR") || permissions.some((perm) => perm === "cash.report.view");
+  const canView =
+    roles.includes("FACTURADOR") ||
+    roles.includes("ADMINISTRADOR") ||
+    permissions.some((perm) => perm === "cash.report.view");
   if (!canView) {
     return NextResponse.json({ success: false, message: "No tienes permisos para consultar reportes de caja" }, { status: 403 });
   }
 
-  const sessionId = Number(params.sessionId);
+  const { sessionId: rawSessionId } = await context.params;
+  const sessionId = Number(rawSessionId);
   if (!Number.isFinite(sessionId) || sessionId <= 0) {
     return NextResponse.json({ success: false, message: "Identificador de sesión inválido" }, { status: 400 });
   }

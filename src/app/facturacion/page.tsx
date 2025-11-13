@@ -16,6 +16,7 @@ import { formatCurrency } from "@/config/currency";
 import { SERVICE_RATE, VAT_RATE } from "@/config/taxes";
 import { Printer, Plus, Minus, Loader2, Ban, ArrowLeft, ArrowRight, Receipt, UtensilsCrossed, Tags } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useSession } from "@/components/providers/session-provider";
 
 /**
  * Página dedicada de Facturación.
@@ -92,7 +93,7 @@ interface DraftInvoice {
   items: OrderItem[];
 }
 
-function FacturacionHomeMenu() {
+function FacturacionHomeMenu({ allowPriceLists }: { allowPriceLists: boolean }) {
   const cards: Array<{ key: FacturacionMode; title: string; description: string; icon: LucideIcon; highlight?: string }> = [
     {
       key: "sin-pedido",
@@ -116,6 +117,8 @@ function FacturacionHomeMenu() {
     },
   ];
 
+  const visibleCards = allowPriceLists ? cards : cards.filter((card) => card.key !== "listas-precio");
+
   return (
     <section className="space-y-10 pb-16">
       <header className="space-y-2">
@@ -123,7 +126,7 @@ function FacturacionHomeMenu() {
       </header>
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {cards.map((card) => {
+        {visibleCards.map((card) => {
           const Icon = card.icon;
           return (
             <Card key={card.key} className="relative flex h-full flex-col justify-between rounded-3xl border bg-background/95 shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-md">
@@ -1250,6 +1253,21 @@ function PriceListWorkspace({
 export default function FacturacionPage() {
   const searchParams = useSearchParams();
   const modeParam = (searchParams?.get("mode") as FacturacionMode | null) ?? null;
+  const session = useSession();
+  const normalizedRoles = (session?.roles ?? []).map((role) => role.trim().toUpperCase());
+  const canManagePriceLists = normalizedRoles.includes("ADMINISTRADOR");
+  const { toast } = useToast();
+
+  useEffect(() => {
+    if (modeParam === "listas-precio" && !canManagePriceLists) {
+      toast({
+        variant: "warning",
+        title: "Acceso restringido",
+        description: "Solo un administrador puede administrar listas de precio.",
+      });
+    }
+  }, [modeParam, canManagePriceLists, toast]);
+
   const defaultCurrency = process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO";
   const envDefaultPriceListCode = process.env.DEFAULT_PRICE_LIST_CODE || "BASE";
   const [priceLists, setPriceLists] = useState<PriceList[]>(() => createInitialPriceLists(defaultCurrency, envDefaultPriceListCode));
@@ -1271,7 +1289,7 @@ export default function FacturacionPage() {
     setDefaultPriceListCode((prev) => (prev === id ? prev : id));
   }, []);
 
-  if (modeParam === "listas-precio") {
+  if (modeParam === "listas-precio" && canManagePriceLists) {
     return (
       <PriceListWorkspace
         defaultCurrency={defaultCurrency}
@@ -1296,8 +1314,8 @@ export default function FacturacionPage() {
     );
   }
 
-  return <FacturacionHomeMenu />;
-  }
+  return <FacturacionHomeMenu allowPriceLists={canManagePriceLists} />;
+}
 
   // Toggle deslizante accesible (módulo global para reutilizar en subcomponentes)
  function Switch({ checked, onChange, "aria-label": ariaLabel, disabled = false }: { checked: boolean; onChange: (v: boolean) => void; "aria-label"?: string; disabled?: boolean }) {

@@ -181,6 +181,13 @@ En este modo, las autenticaciones se resuelven en memoria y los registros de aud
 Las comandas, facturas y estados de mesa se conservan únicamente mientras el proceso de Node.js permanece activo; reiniciar el servidor limpia el historial.
 El guardado de sesión funciona igual: aunque el origen de datos sea simulado, las rutas protegidas seguirán requiriendo una cookie válida.
 
+### Roles y permisos disponibles
+
+- `ADMINISTRADOR`: acceso completo a mantenimiento y operaciones. Incluye permisos `cash.register.open`, `cash.register.close`, `invoice.issue`, `cash.report.view` y `admin.users.manage`.
+- `FACTURADOR`: orientado al punto de venta. Permite abrir/cerrar caja, emitir facturas y consultar reportes de caja (`cash.register.open`, `cash.register.close`, `invoice.issue`, `cash.report.view`).
+
+El usuario de demostración (`admin@facturador.demo`) posee el rol `ADMINISTRADOR`. Desde el nuevo módulo **Usuarios** puedes crear cuentas adicionales y asignarles roles. Para validar el aislamiento de permisos, crea un usuario con el rol `FACTURADOR`: tendrá acceso al flujo de facturación pero no podrá administrar otros usuarios ni catálogos restringidos.
+
 ## Monedas y tipo de cambio
 
 - Define tu moneda local mediante `NEXT_PUBLIC_LOCAL_CURRENCY_CODE` y `NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL`. La moneda extranjera por defecto es USD, pero puedes personalizarla con `NEXT_PUBLIC_FOREIGN_CURRENCY_CODE` y `NEXT_PUBLIC_FOREIGN_CURRENCY_SYMBOL`.

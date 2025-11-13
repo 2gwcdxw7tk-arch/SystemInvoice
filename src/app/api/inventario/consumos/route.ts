@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { listConsumptions, registerConsumption } from "@/lib/db/inventory";
+import { requireAdministrator } from "@/lib/auth/access";
 
 const numericInput = z.union([z.number(), z.string().trim().min(1)]);
 const quantitySchema = numericInput.refine((value) => {
@@ -25,6 +26,9 @@ const consumptionSchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede consultar consumos de inventario");
+  if ("response" in access) return access.response;
+
   const { searchParams } = new URL(request.url);
   const article = searchParams.get("article") || undefined;
   const from = searchParams.get("from") || undefined;
@@ -40,6 +44,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede registrar consumos");
+  if ("response" in access) return access.response;
+
   const body = await request.json().catch(() => null);
   const parsed = consumptionSchema.safeParse(body);
   if (!parsed.success) {

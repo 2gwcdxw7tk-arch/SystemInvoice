@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getStockSummary } from "@/lib/db/inventory";
+import { requireAdministrator } from "@/lib/auth/access";
 
 export async function GET(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede consultar existencias");
+  if ("response" in access) return access.response;
+
   const { searchParams } = new URL(request.url);
   const article = searchParams.get("article") || undefined;
   const warehouse_code = searchParams.get("warehouse_code") || undefined;

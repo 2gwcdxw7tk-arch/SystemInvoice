@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { upsertArticle, getArticles, getArticleByCode, deleteArticle } from "@/lib/db/articles";
 import { listUnits } from "@/lib/db/units";
+import { requireAdministrator, requireSession } from "@/lib/auth/access";
 
 const articleInputSchema = z.object({
   article_code: z.string().trim().min(1).max(40),
@@ -18,6 +19,9 @@ const articleInputSchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  const sessionResult = await requireSession(request);
+  if ("response" in sessionResult) return sessionResult.response;
+
   const { searchParams } = new URL(request.url);
   const article_code = searchParams.get("article_code");
   const price_list_code = searchParams.get("price_list_code") || undefined;
@@ -43,6 +47,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede administrar artículos");
+  if ("response" in access) return access.response;
+
   const body = await request.json().catch(() => null);
   const parsed = articleInputSchema.safeParse(body);
   if (!parsed.success) {
@@ -58,6 +65,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede administrar artículos");
+  if ("response" in access) return access.response;
+
   const { searchParams } = new URL(request.url);
   const article_code = searchParams.get("article_code");
   if (!article_code) return NextResponse.json({ success: false, message: "Falta article_code" }, { status: 400 });

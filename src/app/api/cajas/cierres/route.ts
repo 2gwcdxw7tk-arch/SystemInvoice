@@ -26,7 +26,10 @@ export async function POST(request: NextRequest) {
 
   const roles = Array.isArray(session.roles) ? session.roles : [];
   const permissions = Array.isArray(session.permissions) ? session.permissions : [];
-  const canClose = roles.includes("FACTURADOR") || permissions.some((perm) => perm === "cash.register.close" || perm === "cash.report.view");
+  const canClose =
+    roles.includes("FACTURADOR") ||
+    roles.includes("ADMINISTRADOR") ||
+    permissions.some((perm) => perm === "cash.register.close" || perm === "cash.report.view");
   if (!canClose) {
     return NextResponse.json({ success: false, message: "No tienes permisos para cerrar cajas" }, { status: 403 });
   }

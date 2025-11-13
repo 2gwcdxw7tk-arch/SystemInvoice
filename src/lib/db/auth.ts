@@ -2,7 +2,8 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 
 import { env } from "@/lib/env";
-import { query } from "@/lib/db/postgres";
+import { query, withTransaction } from "@/lib/db/postgres";
+import type { PoolClient } from "@/lib/db/postgres";
 import type { CashRegisterAssignment } from "@/lib/db/cash-registers";
 import { listCashRegistersForAdmin } from "@/lib/db/cash-registers";
 
@@ -25,6 +26,25 @@ export type WaiterDirectoryEntry = WaiterUser & {
   lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string | null;
+};
+
+export type AdminDirectoryEntry = {
+  id: number;
+  username: string;
+  displayName: string | null;
+  isActive: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  roles: string[];
+};
+
+export type RoleDefinition = {
+  id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  isActive: boolean;
 };
 
 function normalizeIdentifier(identifier: string): string {
@@ -63,10 +83,48 @@ type MockWaiterRecord = WaiterUser & {
   lastLoginAt: string | null;
 };
 
+type MockAdminRecord = AdminUser & {
+  passwordHash: string;
+  roles: string[];
+  permissions: string[];
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  lastLoginAt: string | null;
+};
+
+const MOCK_ROLE_PERMISSIONS: Record<string, string[]> = {
+  FACTURADOR: ["cash.register.open", "cash.register.close", "invoice.issue", "cash.report.view"],
+  ADMINISTRADOR: [
+    "cash.register.open",
+    "cash.register.close",
+    "invoice.issue",
+    "cash.report.view",
+    "admin.users.manage",
+  ],
+};
+
+const MOCK_ROLES: RoleDefinition[] = [
+  {
+    id: 1,
+    code: "FACTURADOR",
+    name: "Facturador POS",
+    description: "Puede aperturar y cerrar caja además de emitir facturas en punto de venta",
+    isActive: true,
+  },
+  {
+    id: 2,
+    code: "ADMINISTRADOR",
+    name: "Administrador General",
+    description: "Acceso completo al mantenimiento y operaciones",
+    isActive: true,
+  },
+];
+
 type MockContext = {
   adminCredentials: { username: string; password: string };
   waiterCredentials: { code: string; pin: string };
-  admins: Array<AdminUser & { passwordHash: string; roles: string[]; permissions: string[] }>;
+  admins: MockAdminRecord[];
   waiters: MockWaiterRecord[];
   auditLog: MockAuditEntry[];
 };
@@ -92,8 +150,12 @@ const mockContext: MockContext | null = env.useMockData
             username: normalizeIdentifier(adminCredentials.username),
             displayName: "Administradora Demo",
             passwordHash: bcrypt.hashSync(adminCredentials.password, 10),
-            roles: ["FACTURADOR"],
-            permissions: ["cash.register.open", "cash.register.close", "invoice.issue", "cash.report.view"],
+            roles: ["ADMINISTRADOR"],
+            permissions: MOCK_ROLE_PERMISSIONS.ADMINISTRADOR.slice(),
+            isActive: true,
+            createdAt: now,
+            updatedAt: now,
+            lastLoginAt: null,
           },
         ],
         waiters: [
@@ -129,6 +191,25 @@ type DbWaiterRow = {
   updated_at: Date | null;
 };
 
+type DbAdminDirectoryRow = {
+  id: number;
+  username: string;
+  display_name: string | null;
+  is_active: boolean;
+  last_login_at: Date | null;
+  created_at: Date;
+  updated_at: Date | null;
+  roles: string[] | null;
+};
+
+type DbRoleRow = {
+  id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+};
+
 function cloneDirectoryEntry(record: MockWaiterRecord): WaiterDirectoryEntry {
   return {
     id: record.id,
@@ -156,6 +237,69 @@ function mapDbWaiterRow(row: DbWaiterRow): WaiterDirectoryEntry {
     createdAt: toIso(row.created_at) ?? new Date().toISOString(),
     updatedAt: toIso(row.updated_at),
   };
+}
+
+function cloneAdminDirectoryEntry(record: MockAdminRecord): AdminDirectoryEntry {
+  return {
+    id: record.id,
+    username: record.username,
+    displayName: record.displayName ?? null,
+    isActive: record.isActive,
+    lastLoginAt: record.lastLoginAt,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    roles: record.roles.map((role) => role.toUpperCase()),
+  };
+}
+
+function mapDbAdminDirectoryRow(row: DbAdminDirectoryRow): AdminDirectoryEntry {
+  const toIso = (value: Date | string | null) => (value ? new Date(value).toISOString() : null);
+  return {
+    id: Number(row.id),
+    username: row.username,
+    displayName: row.display_name,
+    isActive: !!row.is_active,
+    lastLoginAt: toIso(row.last_login_at),
+    createdAt: toIso(row.created_at) ?? new Date().toISOString(),
+    updatedAt: toIso(row.updated_at),
+    roles: Array.isArray(row.roles) ? row.roles.map((role) => role.toUpperCase()).filter(Boolean) : [],
+  };
+}
+
+function resolveMockPermissionsForRoles(roles: string[]): string[] {
+  const accumulator: string[] = [];
+  for (const role of roles) {
+    const codes = MOCK_ROLE_PERMISSIONS[role.toUpperCase()] ?? [];
+    for (const permission of codes) {
+      if (!accumulator.includes(permission)) {
+        accumulator.push(permission);
+      }
+    }
+  }
+  return accumulator;
+}
+
+async function fetchAdminDirectoryEntry(adminUserId: number, client?: PoolClient): Promise<AdminDirectoryEntry | null> {
+  const executor = client ? client.query.bind(client) : query;
+  const result = await executor<DbAdminDirectoryRow>(
+    `SELECT au.id,
+            au.username,
+            au.display_name,
+            au.is_active,
+            au.last_login_at,
+            au.created_at,
+            au.updated_at,
+            COALESCE(array_agg(DISTINCT UPPER(r.code)) FILTER (WHERE r.code IS NOT NULL), '{}') AS roles
+       FROM app.admin_users au
+       LEFT JOIN app.admin_user_roles aur ON aur.admin_user_id = au.id
+       LEFT JOIN app.roles r ON r.id = aur.role_id
+      WHERE au.id = $1
+      GROUP BY au.id`,
+    [adminUserId]
+  );
+
+  const row = result.rows[0];
+  return row ? mapDbAdminDirectoryRow(row) : null;
 }
 
 function normalizeWaiterCode(code: string): string {
@@ -256,14 +400,14 @@ export async function verifyAdminCredentials(
     const normalizedUsername = normalizeIdentifier(username);
     const record = mockContext.admins.find((admin) => admin.username === normalizedUsername);
 
-    if (!record) {
+    if (!record || !record.isActive) {
       await upsertLoginAudit({
         loginType: "admin",
         identifier: normalizedUsername,
         success: false,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
-        notes: "Usuario no encontrado (mock)",
+        notes: record && !record.isActive ? "Usuario inactivo (mock)" : "Usuario no encontrado (mock)",
       });
       return { success: false, message: "Credenciales no válidas" };
     }
@@ -282,6 +426,10 @@ export async function verifyAdminCredentials(
     if (!passwordMatches) {
       return { success: false, message: "Credenciales no válidas" };
     }
+
+    const nowStamp = new Date().toISOString();
+    record.lastLoginAt = nowStamp;
+    record.updatedAt = nowStamp;
 
     const cashRegisters = await listCashRegistersForAdmin(record.id);
     const defaultCashRegister = cashRegisters.find((register) => register.isDefault) ?? cashRegisters[0] ?? null;
@@ -768,4 +916,271 @@ export async function resetWaiterPin(waiterId: number, newPin: string): Promise<
     throw new Error("Mesero no encontrado");
   }
   return mapDbWaiterRow(row);
+}
+
+export async function listAdminDirectory(options: { includeInactive?: boolean } = {}): Promise<AdminDirectoryEntry[]> {
+  const includeInactive = options.includeInactive ?? false;
+
+  if (env.useMockData && mockContext) {
+    return mockContext.admins
+      .filter((admin) => includeInactive || admin.isActive)
+      .map((admin) => cloneAdminDirectoryEntry(admin))
+      .sort((a, b) => a.username.localeCompare(b.username));
+  }
+
+  const result = await query<DbAdminDirectoryRow>(
+    `SELECT au.id,
+            au.username,
+            au.display_name,
+            au.is_active,
+            au.last_login_at,
+            au.created_at,
+            au.updated_at,
+            COALESCE(array_agg(DISTINCT UPPER(r.code)) FILTER (WHERE r.code IS NOT NULL), '{}') AS roles
+       FROM app.admin_users au
+       LEFT JOIN app.admin_user_roles aur ON aur.admin_user_id = au.id
+       LEFT JOIN app.roles r ON r.id = aur.role_id
+      WHERE $1::boolean IS TRUE OR au.is_active = TRUE
+      GROUP BY au.id
+      ORDER BY LOWER(au.username) ASC`,
+    [includeInactive]
+  );
+
+  return result.rows.map((row) => mapDbAdminDirectoryRow(row));
+}
+
+export async function listAdminRoleDefinitions(options: { includeInactive?: boolean } = {}): Promise<RoleDefinition[]> {
+  const includeInactive = options.includeInactive ?? false;
+
+  if (env.useMockData && mockContext) {
+    return MOCK_ROLES.filter((role) => includeInactive || role.isActive).map((role) => ({ ...role }));
+  }
+
+  const result = await query<DbRoleRow>(
+    `SELECT id, code, name, description, is_active
+       FROM app.roles
+      WHERE $1::boolean IS TRUE OR is_active = TRUE
+      ORDER BY name ASC`,
+    [includeInactive]
+  );
+
+  return result.rows.map((row) => mapDbRoleRow(row));
+}
+
+type CreateAdminParams = {
+  username: string;
+  displayName?: string | null;
+  password: string;
+  isActive?: boolean;
+  roleCodes?: string[];
+};
+
+export async function createAdminDirectoryEntry(params: CreateAdminParams): Promise<AdminDirectoryEntry> {
+  const username = normalizeIdentifier(params.username);
+  const displayName = sanitizeNullable(params.displayName);
+  const passwordHash = await bcrypt.hash(params.password, 10);
+  const isActive = params.isActive ?? true;
+  const roleCodes = dedupeUpper(params.roleCodes ?? []);
+
+  if (env.useMockData && mockContext) {
+    if (mockContext.admins.some((admin) => admin.username === username)) {
+      throw new Error("El usuario ya existe");
+    }
+    const nowIso = new Date().toISOString();
+    const newId = mockContext.admins.reduce((max, admin) => Math.max(max, admin.id), 0) + 1;
+    const permissions = resolveMockPermissionsForRoles(roleCodes);
+    const record: MockAdminRecord = {
+      id: newId,
+      username,
+      displayName: displayName ?? null,
+      passwordHash,
+      roles: roleCodes,
+      permissions,
+      isActive,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      lastLoginAt: null,
+    };
+    mockContext.admins.push(record);
+    return cloneAdminDirectoryEntry(record);
+  }
+
+  return withTransaction(async (client) => {
+    const insertResult = await client.query<DbAdminDirectoryRow>(
+      `INSERT INTO app.admin_users (username, password_hash, display_name, is_active)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, username, display_name, is_active, last_login_at, created_at, updated_at, '{}'::text[] AS roles`,
+      [username, passwordHash, displayName, isActive]
+    );
+
+    const inserted = insertResult.rows[0];
+    if (!inserted) {
+      throw new Error("No se pudo registrar al usuario");
+    }
+
+    if (roleCodes.length > 0) {
+      const rolesResult = await client.query<{ id: number; code: string }>(
+        `SELECT id, UPPER(code) AS code
+           FROM app.roles
+          WHERE UPPER(code) = ANY($1::text[]) AND is_active = TRUE`,
+        [roleCodes]
+      );
+
+      const foundCodes = rolesResult.rows.map((row) => row.code);
+      const missing = roleCodes.filter((code) => !foundCodes.includes(code));
+      if (missing.length > 0) {
+        throw new Error(`Los roles ${missing.join(", ")} no están disponibles`);
+      }
+
+      await client.query(`DELETE FROM app.admin_user_roles WHERE admin_user_id = $1`, [inserted.id]);
+
+      const roleMap = new Map(rolesResult.rows.map((row) => [row.code, row] as const));
+      for (let index = 0; index < roleCodes.length; index += 1) {
+        const code = roleCodes[index];
+        const roleRow = roleMap.get(code);
+        if (!roleRow) continue;
+        await client.query(
+          `INSERT INTO app.admin_user_roles (admin_user_id, role_id, is_primary)
+           VALUES ($1, $2, $3)`,
+          [inserted.id, roleRow.id, index === 0]
+        );
+      }
+    }
+
+    const entry = await fetchAdminDirectoryEntry(Number(inserted.id), client);
+    if (!entry) {
+      throw new Error("No se pudo cargar el usuario creado");
+    }
+    return entry;
+  });
+}
+
+type UpdateAdminParams = {
+  displayName?: string | null;
+  isActive?: boolean;
+  roleCodes?: string[];
+};
+
+export async function updateAdminDirectoryEntry(adminUserId: number, params: UpdateAdminParams): Promise<AdminDirectoryEntry> {
+  const roleCodes = typeof params.roleCodes === "undefined" ? undefined : dedupeUpper(params.roleCodes ?? []);
+  const displayName = params.displayName === undefined ? undefined : sanitizeNullable(params.displayName);
+  const isActive = params.isActive;
+
+  if (env.useMockData && mockContext) {
+    const record = mockContext.admins.find((admin) => admin.id === adminUserId);
+    if (!record) {
+      throw new Error("Usuario no encontrado");
+    }
+    if (typeof displayName !== "undefined") {
+      record.displayName = displayName ?? null;
+    }
+    if (typeof isActive !== "undefined") {
+      record.isActive = !!isActive;
+    }
+    if (typeof roleCodes !== "undefined") {
+      record.roles = roleCodes;
+      record.permissions = resolveMockPermissionsForRoles(roleCodes);
+    }
+    record.updatedAt = new Date().toISOString();
+    return cloneAdminDirectoryEntry(record);
+  }
+
+  return withTransaction(async (client) => {
+    const updates: string[] = [];
+    const values: unknown[] = [adminUserId];
+    let index = 2;
+
+    if (typeof displayName !== "undefined") {
+      updates.push(`display_name = $${index}`);
+      values.push(displayName);
+      index += 1;
+    }
+    if (typeof isActive !== "undefined") {
+      updates.push(`is_active = $${index}`);
+      values.push(!!isActive);
+      index += 1;
+    }
+
+    if (updates.length > 0) {
+      await client.query(
+        `UPDATE app.admin_users
+            SET ${updates.join(", ")}
+          WHERE id = $1`,
+        values
+      );
+    }
+
+    if (typeof roleCodes !== "undefined") {
+      await client.query(`DELETE FROM app.admin_user_roles WHERE admin_user_id = $1`, [adminUserId]);
+      if (roleCodes.length > 0) {
+        const rolesResult = await client.query<{ id: number; code: string }>(
+          `SELECT id, UPPER(code) AS code
+             FROM app.roles
+            WHERE UPPER(code) = ANY($1::text[]) AND is_active = TRUE`,
+          [roleCodes]
+        );
+        const foundCodes = rolesResult.rows.map((row) => row.code);
+        const missing = roleCodes.filter((code) => !foundCodes.includes(code));
+        if (missing.length > 0) {
+          throw new Error(`Los roles ${missing.join(", ")} no están disponibles`);
+        }
+        const roleMap = new Map(rolesResult.rows.map((row) => [row.code, row] as const));
+        for (let idx = 0; idx < roleCodes.length; idx += 1) {
+          const code = roleCodes[idx];
+          const roleRow = roleMap.get(code);
+          if (!roleRow) continue;
+          await client.query(
+            `INSERT INTO app.admin_user_roles (admin_user_id, role_id, is_primary)
+             VALUES ($1, $2, $3)`,
+            [adminUserId, roleRow.id, idx === 0]
+          );
+        }
+      }
+    }
+
+    const entry = await fetchAdminDirectoryEntry(adminUserId, client);
+    if (!entry) {
+      throw new Error("Usuario no encontrado");
+    }
+    return entry;
+  });
+}
+
+export async function resetAdminUserPassword(adminUserId: number, newPassword: string): Promise<AdminDirectoryEntry> {
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+
+  if (env.useMockData && mockContext) {
+    const record = mockContext.admins.find((admin) => admin.id === adminUserId);
+    if (!record) {
+      throw new Error("Usuario no encontrado");
+    }
+    record.passwordHash = passwordHash;
+    record.updatedAt = new Date().toISOString();
+    return cloneAdminDirectoryEntry(record);
+  }
+
+  await query(`UPDATE app.admin_users SET password_hash = $1 WHERE id = $2`, [passwordHash, adminUserId]);
+  const entry = await fetchAdminDirectoryEntry(adminUserId);
+  if (!entry) {
+    throw new Error("Usuario no encontrado");
+  }
+  return entry;
+}
+
+export async function getAdminDirectoryEntry(adminUserId: number): Promise<AdminDirectoryEntry | null> {
+  if (env.useMockData && mockContext) {
+    const record = mockContext.admins.find((admin) => admin.id === adminUserId);
+    return record ? cloneAdminDirectoryEntry(record) : null;
+  }
+  return fetchAdminDirectoryEntry(adminUserId);
+}
+
+function mapDbRoleRow(row: DbRoleRow): RoleDefinition {
+  return {
+    id: Number(row.id),
+    code: row.code.toUpperCase(),
+    name: row.name,
+    description: row.description,
+    isActive: !!row.is_active,
+  };
 }

@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { listPriceLists, upsertPriceList, setArticlePrice } from "@/lib/db/prices";
+import { requireAdministrator } from "@/lib/auth/access";
 
 const priceListSchema = z.object({ code: z.string().trim().min(1).max(30), name: z.string().trim().min(1).max(120).optional(), start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), is_active: z.boolean().optional() });
 const setPriceSchema = z.object({ article_code: z.string().trim().min(1).max(40), price_list_code: z.string().trim().min(1).max(30), price: z.number().nonnegative(), start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional() });
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede consultar listas de precio");
+  if ("response" in access) return access.response;
+
   try {
     const lists = await listPriceLists();
     return NextResponse.json({ lists });
@@ -16,6 +20,9 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const access = await requireAdministrator(request, "Solo un administrador puede administrar listas de precio");
+  if ("response" in access) return access.response;
+
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== "object") return NextResponse.json({ success: false, message: "Body inválido" }, { status: 400 });
   try {

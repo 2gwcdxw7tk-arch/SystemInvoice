@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { isFacturadorOnly } from "@/lib/auth/access";
 import { env } from "@/lib/env";
 
 const ADMIN_SECTIONS = [
@@ -14,7 +15,11 @@ const ADMIN_SECTIONS = [
   "/reportes",
   "/preferencias",
   "/unidades",
+  "/mesas",
+  "/usuarios",
 ];
+
+const FACTURADOR_ALLOWED_SECTIONS = ["/facturacion", "/facturas"] as const;
 
 export async function middleware(request: NextRequest) {
   const session = await parseSessionCookie(request.cookies.get(SESSION_COOKIE_NAME)?.value);
@@ -28,13 +33,24 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(redirectUrl);
   }
 
+  const pathname = request.nextUrl.pathname;
+
   if (session.role === "waiter") {
-    const pathname = request.nextUrl.pathname;
     const isAdminSection = ADMIN_SECTIONS.some(
       (section) => pathname === section || pathname.startsWith(`${section}/`)
     );
     if (isAdminSection) {
       const redirectUrl = new URL("/meseros/comandas", env.appUrl);
+      return NextResponse.redirect(redirectUrl);
+    }
+  }
+
+  if (isFacturadorOnly(session)) {
+    const isAllowed = FACTURADOR_ALLOWED_SECTIONS.some(
+      (section) => pathname === section || pathname.startsWith(`${section}/`)
+    );
+    if (!isAllowed) {
+      const redirectUrl = new URL("/facturacion", env.appUrl);
       return NextResponse.redirect(redirectUrl);
     }
   }
@@ -54,5 +70,7 @@ export const config = {
     "/preferencias/:path*",
     "/unidades/:path*",
     "/meseros/:path*",
+    "/mesas/:path*",
+    "/usuarios/:path*",
   ],
 };

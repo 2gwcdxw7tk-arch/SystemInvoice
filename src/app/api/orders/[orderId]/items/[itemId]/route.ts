@@ -28,7 +28,8 @@ function parseIds(params: { orderId: string; itemId: string }) {
   return { orderId, itemId };
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: { orderId: string; itemId: string } }) {
+export async function PATCH(request: NextRequest, context: { params: Promise<{ orderId: string; itemId: string }> }) {
+  const params = await context.params;
   const ids = parseIds(params);
   if (!ids) {
     return NextResponse.json({ success: false, message: "Identificadores inválidos" }, { status: 400 });
@@ -58,7 +59,8 @@ export async function PATCH(request: NextRequest, { params }: { params: { orderI
   }
 }
 
-export async function DELETE(_request: NextRequest, { params }: { params: { orderId: string; itemId: string } }) {
+export async function DELETE(_request: NextRequest, context: { params: Promise<{ orderId: string; itemId: string }> }) {
+  const params = await context.params;
   const ids = parseIds(params);
   if (!ids) {
     return NextResponse.json({ success: false, message: "Identificadores inválidos" }, { status: 400 });

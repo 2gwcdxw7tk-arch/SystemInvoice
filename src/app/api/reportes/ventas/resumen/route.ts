@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getSalesSummaryReport } from "@/lib/db/reports";
+import { requireFacturacionAccess } from "@/lib/auth/access";
 
 const querySchema = z.object({
   from: z.string().trim().min(10, "La fecha inicial es obligatoria"),
@@ -14,6 +15,9 @@ const querySchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  const access = await requireFacturacionAccess(request, "No tienes permisos para consultar el reporte de ventas");
+  if ("response" in access) return access.response;
+
   const searchParams = Object.fromEntries(new URL(request.url).searchParams.entries());
   const parsed = querySchema.safeParse(searchParams);
   if (!parsed.success) {

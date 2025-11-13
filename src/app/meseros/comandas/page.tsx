@@ -856,46 +856,48 @@ export default function MeserosComandasPage() {
                 <CardDescription>Selecciona articulos para agregarlos a la comanda.</CardDescription>
               </CardHeader>
               <CardContent className="flex h-full min-h-0 flex-col gap-4">
-                {loadingArticles ? (
-                  <div className="grid flex-1 grid-cols-2 gap-3 overflow-hidden lg:grid-cols-3">
-                    {Array.from({ length: 9 }).map((_, index) => (
-                      <div key={index} className="h-28 animate-pulse rounded-3xl bg-muted" />
-                    ))}
-                  </div>
-                ) : visibleArticles.length > 0 ? (
-                  <div className="grid flex-1 grid-cols-2 gap-3 overflow-y-auto pr-1 lg:grid-cols-3">
-                    {visibleArticles.map((article) => (
-                      <button
-                        key={article.article_code}
-                        type="button"
-                        onClick={() => handleAddArticle(article)}
-                        className="flex min-h-[7rem] flex-col justify-between rounded-3xl border bg-background/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                      >
-                        <div className="space-y-1">
-                          <p className="text-sm font-semibold text-foreground">{article.name}</p>
-                          <p className="text-xs uppercase tracking-wide text-muted-foreground">{article.article_code}</p>
-                        </div>
-                        <span className="text-sm font-bold text-primary">
-                          {formatCurrency(article.price?.base_price ?? 0)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex flex-1 items-center justify-center rounded-2xl border border-dashed border-muted-foreground/40 p-8 text-center">
-                    <div className="flex flex-col items-center justify-center space-y-3 text-center">
-                      <Table className="h-10 w-10 text-muted-foreground" />
-                      <p className="text-sm text-muted-foreground">
-                        No encontramos articulos con los filtros o busqueda seleccionados.
-                      </p>
-                      {searchEnabled ? (
-                        <Button variant="ghost" size="sm" onClick={() => setSearchTerm("")}>
-                          Limpiar busqueda
-                        </Button>
-                      ) : null}
+                <div className="flex-1 min-h-0">
+                  {loadingArticles ? (
+                    <div className="grid h-full grid-cols-2 gap-3 overflow-hidden lg:grid-cols-3">
+                      {Array.from({ length: 9 }).map((_, index) => (
+                        <div key={index} className="h-28 animate-pulse rounded-3xl bg-muted" />
+                      ))}
                     </div>
-                  </div>
-                )}
+                  ) : visibleArticles.length > 0 ? (
+                    <div className="grid h-full grid-cols-2 gap-3 overflow-y-auto pr-1 lg:grid-cols-3">
+                      {visibleArticles.map((article) => (
+                        <button
+                          key={article.article_code}
+                          type="button"
+                          onClick={() => handleAddArticle(article)}
+                          className="flex min-h-[7rem] flex-col justify-between rounded-3xl border bg-background/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        >
+                          <div className="space-y-1">
+                            <p className="text-sm font-semibold text-foreground">{article.name}</p>
+                            <p className="text-xs uppercase tracking-wide text-muted-foreground">{article.article_code}</p>
+                          </div>
+                          <span className="text-sm font-bold text-primary">
+                            {formatCurrency(article.price?.base_price ?? 0)}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex h-full min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-muted-foreground/40 bg-background/70 p-6 text-center">
+                      <div className="flex flex-col items-center justify-center space-y-3 text-center">
+                        <Table className="h-10 w-10 text-muted-foreground" />
+                        <p className="text-sm text-muted-foreground">
+                          No encontramos articulos con los filtros o busqueda seleccionados.
+                        </p>
+                        {searchEnabled ? (
+                          <Button variant="ghost" size="sm" onClick={() => setSearchTerm("")}>
+                            Limpiar busqueda
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
 

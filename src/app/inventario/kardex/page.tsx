@@ -7,6 +7,7 @@ import { ArrowLeft, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast-provider";
 
@@ -123,11 +124,11 @@ export default function KardexPage() {
           </div>
           <div className="space-y-1">
             <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
-            <Input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className="rounded-2xl" />
+            <DatePicker value={fromDate} onChange={setFromDate} className="rounded-2xl" />
           </div>
           <div className="space-y-1">
             <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
-            <Input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className="rounded-2xl" />
+            <DatePicker value={toDate} onChange={setToDate} className="rounded-2xl" />
           </div>
           <div className="flex items-end gap-2">
             <Button type="button" onClick={() => loadMovements()} disabled={loading} className="h-10 rounded-2xl px-4">
