@@ -1,0 +1,19 @@
+{
+  "name": "Facturador",
+  "short_name": "Facturador",
+  "description": "Facturador: punto de venta y backoffice para restaurantes.",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "es-MX",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

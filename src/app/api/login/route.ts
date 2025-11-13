@@ -1,0 +1,144 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+
+import { verifyAdminCredentials, verifyWaiterPin } from "@/lib/db/auth";
+import { createEmptySessionCookie, createSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { env } from "@/lib/env";
+
+const loginSchema = z
+  .object({
+    role: z.enum(["admin", "waiter"]),
+    username: z.string().trim().min(1).optional(),
+    password: z.string().min(1).optional(),
+    pin: z.string().min(4).max(6).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.role === "admin") {
+      if (!data.username) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Usuario requerido", path: ["username"] });
+      }
+      if (!data.password) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Contraseña requerida", path: ["password"] });
+      }
+    }
+
+    if (data.role === "waiter") {
+      if (!data.pin) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "PIN requerido", path: ["pin"] });
+      }
+    }
+  });
+
+function extractIp(request: NextRequest): string | null {
+  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  if (forwarded) return forwarded;
+  const realIp = request.headers.get("x-real-ip")?.trim();
+  if (realIp) return realIp;
+  return null;
+}
+
+export async function POST(request: NextRequest) {
+  const body = await request.json().catch(() => null);
+
+  const parsed = loginSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      {
+        success: false,
+        message: "Datos de inicio de sesión inválidos",
+        errors: parsed.error.flatten(),
+      },
+      { status: 400 }
+    );
+  }
+
+  const payload = parsed.data;
+  const meta = {
+    ipAddress: extractIp(request),
+    userAgent: request.headers.get("user-agent"),
+  };
+
+  if (payload.role === "admin") {
+    const result = await verifyAdminCredentials(payload.username!, payload.password!, meta);
+    const response = NextResponse.json(
+      {
+        success: result.success,
+        message: result.message,
+        user: result.user,
+      },
+      { status: result.success ? 200 : 401 }
+    );
+
+    if (result.success && result.user) {
+      const session = await createSessionCookie({
+        sub: String(result.user.id),
+        role: "admin",
+        name: result.user.displayName ?? result.user.username,
+      });
+
+      response.cookies.set({
+        name: SESSION_COOKIE_NAME,
+        value: session.value,
+        httpOnly: true,
+        secure: env.isProduction,
+        sameSite: "lax",
+        expires: session.expires,
+        path: "/",
+      });
+    } else {
+      const emptySession = createEmptySessionCookie();
+      response.cookies.set({
+        name: SESSION_COOKIE_NAME,
+        value: emptySession.value,
+        httpOnly: true,
+        secure: env.isProduction,
+        sameSite: "lax",
+        expires: emptySession.expires,
+        path: "/",
+      });
+    }
+
+    return response;
+  }
+
+  const result = await verifyWaiterPin(payload.pin!, meta);
+  const response = NextResponse.json(
+    {
+      success: result.success,
+      message: result.message,
+      waiter: result.waiter,
+    },
+    { status: result.success ? 200 : 401 }
+  );
+
+  if (result.success && result.waiter) {
+    const session = await createSessionCookie({
+      sub: String(result.waiter.id),
+      role: "waiter",
+      name: result.waiter.fullName,
+    });
+
+    response.cookies.set({
+      name: SESSION_COOKIE_NAME,
+      value: session.value,
+      httpOnly: true,
+      secure: env.isProduction,
+      sameSite: "lax",
+      expires: session.expires,
+      path: "/",
+    });
+  } else {
+    const emptySession = createEmptySessionCookie();
+    response.cookies.set({
+      name: SESSION_COOKIE_NAME,
+      value: emptySession.value,
+      httpOnly: true,
+      secure: env.isProduction,
+      sameSite: "lax",
+      expires: emptySession.expires,
+      path: "/",
+    });
+  }
+
+  return response;
+}
