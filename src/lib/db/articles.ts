@@ -4,6 +4,7 @@ import { env } from "@/lib/env";
 import type { PoolClient } from "@/lib/db/postgres";
 import { query, withTransaction } from "@/lib/db/postgres";
 import { listUnits } from "@/lib/db/units";
+import { getDefaultPriceListCodeFromDb } from "@/lib/db/prices";
 
 export interface ArticleInput {
   article_code: string;
@@ -84,8 +85,12 @@ const mockArticles: MockArticle[] = [];
 const mockPriceLists: { id: number; code: string; name: string; start_date: string; end_date: string | null; is_active: boolean }[] = [];
 const mockPrices: { id: number; article_id: number; price_list_id: number; price: number; start_date: string; end_date: string | null }[] = [];
 
-function getDefaultPriceListCode(): string {
-  return process.env.DEFAULT_PRICE_LIST_CODE || "BASE";
+async function resolveDefaultPriceListCode(): Promise<string> {
+  if (env.useMockData) {
+    return process.env.DEFAULT_PRICE_LIST_CODE || "BASE";
+  }
+  const fromDb = await getDefaultPriceListCodeFromDb();
+  return fromDb ?? process.env.DEFAULT_PRICE_LIST_CODE ?? "BASE";
 }
 
 type ArticleQueryRow = {
@@ -232,7 +237,7 @@ export async function upsertArticle(input: ArticleInput): Promise<{ id: number }
 }
 
 export async function getArticles(params: EffectivePriceQuery = {}): Promise<Array<ArticleRow & { price: EffectivePriceResult | null }>> {
-  const priceListCode = (params.price_list_code || getDefaultPriceListCode()).toUpperCase();
+  const priceListCode = (params.price_list_code ? params.price_list_code : await resolveDefaultPriceListCode()).toUpperCase();
   const today = params.on_date || new Date().toISOString().slice(0,10);
   const preferUnit = params.unit || "RETAIL";
 
@@ -290,8 +295,7 @@ export async function getArticles(params: EffectivePriceQuery = {}): Promise<Arr
        FROM app.article_prices ap
        WHERE ap.article_id = a.id
          AND ap.price_list_id IN (SELECT id FROM pl)
-         AND ap.start_date <= $2::date
-         AND (ap.end_date IS NULL OR ap.end_date >= $2::date)
+         AND ap.is_active = TRUE
        ORDER BY ap.start_date DESC
        LIMIT 1
      ) ap ON true`,

@@ -42,6 +42,36 @@ Para inicializar la base de datos desde cero, importa `database/schema_master.sq
 
 El endpoint `GET /api/health` ejecuta un `SELECT 1` para validar la conectividad.
 
+### Inicialización de base y primer administrador
+
+1. Crea la base desde `postgres` (ajusta el nombre si lo requires):
+	```sql
+	CREATE DATABASE facturador WITH ENCODING 'UTF8';
+	```
+2. Cambia la sesión a la base recién creada antes de ejecutar el resto del script. En `psql` usa `\c facturador`; en clientes gráficos, selecciona `facturador` en la herramienta de consultas. El script maestro incluye un guard clause (`DO $$ ... IF current_database() = 'postgres' THEN RAISE EXCEPTION ...`) que aborta si sigues conectado a `postgres`.
+3. Ejecuta el esquema completo dentro de `facturador`:
+	```bash
+	psql -d facturador -f database/schema_master.sql
+	```
+4. Genera un hash bcrypt para la contraseña del primer usuario administrador (reemplaza `TuPassword$123` por la clave deseada):
+	```bash
+	node -e "console.log(require('bcryptjs').hashSync('TuPassword$123', 10))"
+	```
+5. Inserta el usuario y asígnale el rol `ADMINISTRADOR` (sustituye `<HASH_BCRYPT>` por el valor impreso y ajusta el correo si lo deseas):
+	```sql
+	INSERT INTO app.admin_users (username, password_hash, display_name, is_active)
+	VALUES ('admin@tuempresa.com', '<HASH_BCRYPT>', 'Admin Principal', TRUE)
+	RETURNING id;
+	```
+	Con el `id` devuelto, enlaza el rol:
+	```sql
+	INSERT INTO app.admin_user_roles (admin_user_id, role_id, is_primary)
+	SELECT <ID_DEVUELTO>, r.id, TRUE
+	FROM app.roles r
+	WHERE r.code = 'ADMINISTRADOR';
+	```
+6. Inicia sesión en la aplicación usando el correo y la contraseña originales (no el hash). Ese usuario ya contará con todos los permisos administrativos.
+
 ## Variables de entorno
 
 | Variable | Descripción | Ejemplo |

@@ -632,8 +632,36 @@ CREATE TABLE IF NOT EXISTS app.price_lists (
   start_date DATE NOT NULL,
   end_date DATE,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  description VARCHAR(200),
+  currency_code VARCHAR(3) NOT NULL DEFAULT 'NIO',
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE app.price_lists
+  ADD COLUMN IF NOT EXISTS description VARCHAR(200);
+
+ALTER TABLE app.price_lists
+  ADD COLUMN IF NOT EXISTS currency_code VARCHAR(3) NOT NULL DEFAULT 'NIO';
+
+ALTER TABLE app.price_lists
+  ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE app.price_lists
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE app.price_lists
+  ALTER COLUMN currency_code TYPE VARCHAR(3);
+
+DROP TRIGGER IF EXISTS trg_price_lists_touch_updated_at ON app.price_lists;
+CREATE TRIGGER trg_price_lists_touch_updated_at
+BEFORE UPDATE ON app.price_lists
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_price_lists_default
+  ON app.price_lists (is_default)
+  WHERE is_default;
 
 -- ========================================================
 -- Tabla: app.article_prices
@@ -645,11 +673,27 @@ CREATE TABLE IF NOT EXISTS app.article_prices (
   price NUMERIC(18,6) NOT NULL CHECK (price >= 0),
   start_date DATE NOT NULL,
   end_date DATE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS ix_article_prices_keys
   ON app.article_prices (article_id, price_list_id, start_date DESC) INCLUDE (price);
+
+ALTER TABLE app.article_prices
+  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+
+ALTER TABLE app.article_prices
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+
+DROP TRIGGER IF EXISTS trg_article_prices_touch_updated_at ON app.article_prices;
+CREATE TRIGGER trg_article_prices_touch_updated_at
+BEFORE UPDATE ON app.article_prices
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_article_prices_article_list
+  ON app.article_prices (article_id, price_list_id);
 
 -- ========================================================
 -- Tabla: app.article_price_rules

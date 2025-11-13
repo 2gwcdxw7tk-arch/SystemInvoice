@@ -220,101 +220,6 @@ const getCurrencyFormatter = (() => {
   };
 })();
 
-const createInitialPriceLists = (currency: string, defaultCode: string): PriceList[] => {
-  const now = Date.now();
-  return [
-    {
-      id: "BASE",
-      name: "Lista base",
-      currency,
-      description: "Aplicable a todas las ventas estándar.",
-      isActive: true,
-      isDefault: defaultCode === "BASE",
-      lastUpdated: formatTimestampLocale(new Date(now)),
-    },
-    {
-      id: "HH",
-      name: "Happy Hour",
-      currency,
-      description: "Descuentos activos entre 17:00 y 19:00 hrs.",
-      isActive: true,
-      isDefault: defaultCode === "HH",
-      lastUpdated: formatTimestampLocale(new Date(now - 86400000)),
-    },
-    {
-      id: "EMPRESAS",
-      name: "Convenios empresariales",
-      currency,
-      description: "Tarifa especial para clientes corporativos.",
-      isActive: false,
-      isDefault: defaultCode === "EMPRESAS",
-      lastUpdated: formatTimestampLocale(new Date(now - 172800000)),
-    },
-  ];
-};
-
-const createInitialPriceListItems = (currency: string): Record<string, PriceListItem[]> => {
-  const now = Date.now();
-  return {
-    BASE: [
-      {
-        articleId: 101,
-        articleCode: "CAF-001",
-        name: "Café latte 12oz",
-        unit: "Vaso",
-        listPrice: 95,
-        currency,
-        isActive: true,
-        lastUpdated: formatTimestampLocale(new Date(now - 3600000)),
-      },
-      {
-        articleId: 155,
-        articleCode: "DES-014",
-        name: "Cheesecake frutos rojos",
-        unit: "Porción",
-        listPrice: 125,
-        currency,
-        isActive: true,
-        lastUpdated: formatTimestampLocale(new Date(now - 7200000)),
-      },
-    ],
-    HH: [
-      {
-        articleId: 101,
-        articleCode: "CAF-001",
-        name: "Café latte 12oz",
-        unit: "Vaso",
-        listPrice: 80,
-        currency,
-        isActive: true,
-        lastUpdated: formatTimestampLocale(new Date(now - 5400000)),
-      },
-      {
-        articleId: 205,
-        articleCode: "BEB-009",
-        name: "Cerveza artesanal 355ml",
-        unit: "Botella",
-        listPrice: 70,
-        currency,
-        isActive: true,
-        lastUpdated: formatTimestampLocale(new Date(now - 10800000)),
-      },
-    ],
-    EMPRESAS: [
-      {
-        articleId: 330,
-        articleCode: "ALM-004",
-        name: "Menú ejecutivo",
-        unit: "Servicio",
-        listPrice: 198,
-        currency,
-        isActive: true,
-        lastUpdated: formatTimestampLocale(new Date(now - 86400000)),
-      },
-    ],
-  };
-};
-
 const createInitialManualDraft = (): DraftInvoice => ({
   reference: "Factura manual",
   waiter: "Caja",
@@ -328,9 +233,11 @@ const createInitialPaymentsState = (): Payment[] => [{ method: "CASH", amount: "
 interface PriceListWorkspaceProps {
   defaultCurrency: string;
   priceLists: PriceList[];
-  setPriceLists: Dispatch<SetStateAction<PriceList[]>>;
+  priceListsLoading: boolean;
+  refreshPriceLists: () => Promise<void>;
   priceListItems: Record<string, PriceListItem[]>;
-  setPriceListItems: Dispatch<SetStateAction<Record<string, PriceListItem[]>>>;
+  priceListItemsLoading: Record<string, boolean>;
+  refreshPriceListItems: (code: string, options?: { force?: boolean }) => Promise<void>;
   defaultPriceListCode: string;
   onDefaultPriceListChange: (id: string) => void;
 }
@@ -338,9 +245,11 @@ interface PriceListWorkspaceProps {
 function PriceListWorkspace({
   defaultCurrency,
   priceLists,
-  setPriceLists,
+  priceListsLoading,
+  refreshPriceLists,
   priceListItems,
-  setPriceListItems,
+  priceListItemsLoading,
+  refreshPriceListItems,
   defaultPriceListCode,
   onDefaultPriceListChange,
 }: PriceListWorkspaceProps) {
@@ -349,18 +258,21 @@ function PriceListWorkspace({
   const [showInactive, setShowInactive] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [listsMutating, setListsMutating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Omit<PriceList, "lastUpdated" | "isDefault"> & { isDefault?: boolean }>(
     { id: "", name: "", currency: defaultCurrency, description: "", isActive: true, isDefault: false }
   );
   const [itemsModalOpen, setItemsModalOpen] = useState(false);
   const [selectedPriceList, setSelectedPriceList] = useState<PriceList | null>(null);
+  const currentItemsLoading = selectedPriceList ? Boolean(priceListItemsLoading[selectedPriceList.id]) : false;
   const [itemsSearchTerm, setItemsSearchTerm] = useState("");
   const [showInactiveItems, setShowInactiveItems] = useState(true);
   const [itemFormOpen, setItemFormOpen] = useState(false);
   const [itemFormDraft, setItemFormDraft] = useState<{ articleId: number | null; price: string }>({ articleId: null, price: "" });
   const [itemFormEditingId, setItemFormEditingId] = useState<number | null>(null);
   const [itemsSaving, setItemsSaving] = useState(false);
+  const [itemsMutating, setItemsMutating] = useState(false);
   const [articleCatalog, setArticleCatalog] = useState<ArticleCatalogItem[]>([]);
   const [articlesLoading, setArticlesLoading] = useState(false);
   const articlesRequestedRef = useRef(false);
@@ -531,73 +443,89 @@ function PriceListWorkspace({
     setModalOpen(true);
   };
 
-  const handleToggleActive = (id: string) => {
-    const timestamp = formatTimestampLocale();
-    setPriceLists((prev) => prev.map((item) => (
-      item.id === id
-        ? { ...item, isActive: !item.isActive, lastUpdated: timestamp }
-        : item
-    )));
-    toast({ variant: "success", title: "Listas de precio", description: "Estado actualizado correctamente." });
+  const handleToggleActive = async (list: PriceList) => {
+    setListsMutating(true);
+    try {
+      const response = await fetch("/api/precios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "toggle-active", payload: { code: list.id, is_active: !list.isActive } }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      await refreshPriceLists();
+      toast({ variant: "success", title: "Listas de precio", description: "Estado actualizado correctamente." });
+    } catch (error) {
+      console.error("No se pudo actualizar el estado de la lista", error);
+      toast({ variant: "error", title: "Listas de precio", description: "No se pudo actualizar el estado de la lista." });
+    } finally {
+      setListsMutating(false);
+    }
   };
 
-  const handleSetDefault = (id: string) => {
-    const timestamp = formatTimestampLocale();
-    if (defaultPriceListCode === id) return;
-    setPriceLists((prev) => prev.map((item) => ({
-      ...item,
-      isDefault: item.id === id,
-      lastUpdated: item.id === id ? timestamp : item.lastUpdated,
-    })));
-    onDefaultPriceListChange(id);
-    toast({ variant: "success", title: "Listas de precio", description: `La lista ${id} es ahora la predeterminada.` });
+  const handleSetDefault = async (list: PriceList) => {
+    if (defaultPriceListCode === list.id) return;
+    setListsMutating(true);
+    try {
+      const response = await fetch("/api/precios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-default", payload: { code: list.id } }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      await refreshPriceLists();
+      onDefaultPriceListChange(list.id);
+      toast({ variant: "success", title: "Listas de precio", description: `La lista ${list.id} es ahora la predeterminada.` });
+    } catch (error) {
+      console.error("No se pudo actualizar la lista predeterminada", error);
+      toast({ variant: "error", title: "Listas de precio", description: "No fue posible definir la lista predeterminada." });
+    } finally {
+      setListsMutating(false);
+    }
   };
 
   const handleSave = async () => {
-    if (!form.id.trim() || !form.name.trim()) {
+    const normalizedId = form.id.trim().toUpperCase();
+    const normalizedName = form.name.trim();
+    if (!normalizedId || !normalizedName) {
       toast({ variant: "warning", title: "Validación", description: "Código y nombre son obligatorios." });
       return;
     }
+
     setSaving(true);
     try {
-      const timestamp = formatTimestampLocale();
-      setPriceLists((prev) => {
-        const normalizedId = form.id.trim().toUpperCase();
-        const existing = prev.find((item) => item.id === normalizedId);
-        let nextLists: PriceList[];
-        if (existing) {
-          nextLists = prev.map((item) =>
-            item.id === normalizedId
-              ? { ...item, name: form.name.trim(), currency: form.currency, description: form.description.trim(), isActive: form.isActive, isDefault: !!form.isDefault, lastUpdated: timestamp }
-              : form.isDefault
-              ? { ...item, isDefault: false }
-              : item
-          );
-        } else {
-          const next: PriceList = {
-            id: normalizedId,
-            name: form.name.trim(),
-            currency: form.currency,
-            description: form.description.trim(),
-            isActive: form.isActive,
-            isDefault: !!form.isDefault,
-            lastUpdated: timestamp,
-          };
-          nextLists = [next, ...prev.map((item) => (form.isDefault ? { ...item, isDefault: false } : item))];
-        }
-        const nextDefault = nextLists.find((item) => item.isDefault) ?? nextLists[0] ?? null;
-        if (nextDefault && nextDefault.id !== defaultPriceListCode) {
-          onDefaultPriceListChange(nextDefault.id);
-        }
-        return nextLists;
+      const response = await fetch("/api/precios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "price-list",
+          payload: {
+            code: normalizedId,
+            name: normalizedName,
+            description: form.description.trim() || undefined,
+            currency_code: form.currency,
+            is_active: form.isActive,
+            is_default: form.isDefault,
+          },
+        }),
       });
-      setPriceListItems((prev) => {
-        const normalizedId = form.id.trim().toUpperCase();
-        if (prev[normalizedId]) return prev;
-        return { ...prev, [normalizedId]: [] };
-      });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => null);
+        throw new Error(errorPayload?.message || "Operación rechazada");
+      }
+      await refreshPriceLists();
+      if (form.isDefault) {
+        onDefaultPriceListChange(normalizedId);
+        await refreshPriceListItems(normalizedId, { force: true });
+      }
       toast({ variant: "success", title: "Listas de precio", description: editingId ? "Lista actualizada" : "Lista creada" });
       setModalOpen(false);
+    } catch (error) {
+      console.error("No se pudo guardar la lista", error);
+      toast({ variant: "error", title: "Listas de precio", description: "No se pudo guardar la lista." });
     } finally {
       setSaving(false);
     }
@@ -606,6 +534,7 @@ function PriceListWorkspace({
   const handleOpenItemsModal = (list: PriceList) => {
     setSelectedPriceList(list);
     setItemsModalOpen(true);
+    void refreshPriceListItems(list.id);
   };
 
   const handleCloseItemsModal = () => {
@@ -655,7 +584,7 @@ function PriceListWorkspace({
     setItemFormOpen(true);
   };
 
-  const handleSubmitItemForm = () => {
+  const handleSubmitItemForm = async () => {
     if (!selectedPriceList) {
       toast({ variant: "error", title: "Listas de precio", description: "Selecciona una lista para continuar." });
       return;
@@ -664,65 +593,68 @@ function PriceListWorkspace({
       toast({ variant: "warning", title: "Listas de precio", description: "Completa los datos del formulario." });
       return;
     }
+
     const listId = selectedPriceList.id;
-    const timestamp = formatTimestampLocale();
     const normalizedPrice = Number(itemFormPriceNumber.toFixed(2));
+    let targetArticleCode: string | null = null;
+
+    if (itemFormEditingId != null) {
+      const target = (priceListItems[listId] ?? []).find((entry) => entry.articleId === itemFormEditingId);
+      if (!target) {
+        toast({ variant: "error", title: "Listas de precio", description: "No se encontró el artículo a editar." });
+        return;
+      }
+      targetArticleCode = target.articleCode;
+    } else {
+      if (itemFormDraft.articleId == null) {
+        toast({ variant: "warning", title: "Listas de precio", description: "Selecciona un artículo del catálogo." });
+        return;
+      }
+      const alreadyExists = (priceListItems[listId] ?? []).some((entry) => entry.articleId === itemFormDraft.articleId);
+      if (alreadyExists) {
+        toast({ variant: "warning", title: "Listas de precio", description: "El artículo ya está asignado a la lista." });
+        return;
+      }
+      const catalogItem = articleCatalog.find((entry) => entry.id === itemFormDraft.articleId);
+      if (!catalogItem) {
+        toast({ variant: "error", title: "Listas de precio", description: "No se encontró el artículo seleccionado." });
+        return;
+      }
+      targetArticleCode = catalogItem.articleCode;
+    }
+
     setItemsSaving(true);
     try {
-      if (itemFormEditingId != null) {
-        setPriceListItems((prev) => {
-          const current = prev[listId] ?? [];
-          const exists = current.some((entry) => entry.articleId === itemFormEditingId);
-          if (!exists) return prev;
-          const updated = current.map((entry) =>
-            entry.articleId === itemFormEditingId
-              ? { ...entry, listPrice: normalizedPrice, lastUpdated: timestamp }
-              : entry
-          );
-          return { ...prev, [listId]: updated };
-        });
-        setPriceLists((prev) => prev.map((list) => (list.id === listId ? { ...list, lastUpdated: timestamp } : list)));
-        toast({ variant: "success", title: "Listas de precio", description: "Precio actualizado correctamente." });
-      } else {
-        if (itemFormDraft.articleId == null) {
-          toast({ variant: "warning", title: "Listas de precio", description: "Selecciona un artículo del catálogo." });
-          return;
-        }
-        const alreadyExists = (priceListItems[listId] ?? []).some((entry) => entry.articleId === itemFormDraft.articleId);
-        if (alreadyExists) {
-          toast({ variant: "warning", title: "Listas de precio", description: "El artículo ya está asignado a la lista." });
-          return;
-        }
-        const catalogItem = articleCatalog.find((entry) => entry.id === itemFormDraft.articleId);
-        if (!catalogItem) {
-          toast({ variant: "error", title: "Listas de precio", description: "No se encontró el artículo seleccionado." });
-          return;
-        }
-        const newItem: PriceListItem = {
-          articleId: catalogItem.id,
-          articleCode: catalogItem.articleCode,
-          name: catalogItem.name,
-          unit: catalogItem.unit,
-          listPrice: normalizedPrice,
-          currency: selectedPriceList.currency,
-          isActive: true,
-          lastUpdated: timestamp,
-        };
-        setPriceListItems((prev) => {
-          const current = prev[listId] ?? [];
-          const sorted = [...current, newItem].sort((a, b) => a.articleCode.localeCompare(b.articleCode));
-          return { ...prev, [listId]: sorted };
-        });
-        setPriceLists((prev) => prev.map((list) => (list.id === listId ? { ...list, lastUpdated: timestamp } : list)));
-        toast({ variant: "success", title: "Listas de precio", description: "Artículo agregado a la lista." });
+      const response = await fetch("/api/precios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set-price",
+          payload: {
+            article_code: targetArticleCode,
+            price_list_code: listId,
+            price: normalizedPrice,
+            start_date: new Date().toISOString().slice(0, 10),
+          },
+        }),
+      });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => null);
+        throw new Error(errorPayload?.message || "No se pudo guardar el precio");
       }
+
+      await refreshPriceListItems(listId, { force: true });
+      toast({ variant: "success", title: "Listas de precio", description: itemFormEditingId != null ? "Precio actualizado correctamente." : "Artículo agregado a la lista." });
       setItemFormOpen(false);
+    } catch (error) {
+      console.error("No se pudo registrar el precio", error);
+      toast({ variant: "error", title: "Listas de precio", description: "No se pudo guardar el precio." });
     } finally {
       setItemsSaving(false);
     }
   };
 
-  const handleToggleItemActive = (articleId: number) => {
+  const handleToggleItemActive = async (articleId: number) => {
     if (!selectedPriceList) return;
     const listId = selectedPriceList.id;
     const current = priceListItems[listId] ?? [];
@@ -731,19 +663,35 @@ function PriceListWorkspace({
       toast({ variant: "warning", title: "Listas de precio", description: "No se encontró el artículo en la lista." });
       return;
     }
-    const timestamp = formatTimestampLocale();
-    const nextActive = !target.isActive;
-    setPriceListItems((prev) => ({
-      ...prev,
-      [listId]: current.map((item) =>
-        item.articleId === articleId ? { ...item, isActive: nextActive, lastUpdated: timestamp } : item
-      ),
-    }));
-    setPriceLists((prev) => prev.map((list) => (list.id === listId ? { ...list, lastUpdated: timestamp } : list)));
-    toast({ variant: "success", title: "Listas de precio", description: nextActive ? "Producto activado." : "Producto desactivado." });
+
+    setItemsMutating(true);
+    try {
+      const response = await fetch("/api/precios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "toggle-article",
+          payload: {
+            price_list_code: listId,
+            article_code: target.articleCode,
+            is_active: !target.isActive,
+          },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      await refreshPriceListItems(listId, { force: true });
+      toast({ variant: "success", title: "Listas de precio", description: target.isActive ? "Producto desactivado." : "Producto activado." });
+    } catch (error) {
+      console.error("No se pudo alternar el estado del artículo", error);
+      toast({ variant: "error", title: "Listas de precio", description: "No se pudo actualizar el estado del artículo." });
+    } finally {
+      setItemsMutating(false);
+    }
   };
 
-  const handleRemoveItem = (articleId: number) => {
+  const handleRemoveItem = async (articleId: number) => {
     if (!selectedPriceList) {
       toast({ variant: "error", title: "Listas de precio", description: "Selecciona una lista para administrar sus productos." });
       return;
@@ -754,20 +702,39 @@ function PriceListWorkspace({
     }
     const listId = selectedPriceList.id;
     const current = priceListItems[listId] ?? [];
-    if (!current.some((item) => item.articleId === articleId)) {
+    const target = current.find((item) => item.articleId === articleId);
+    if (!target) {
       toast({ variant: "warning", title: "Listas de precio", description: "El artículo no está asignado a la lista." });
       return;
     }
-    const timestamp = formatTimestampLocale();
-    setPriceListItems((prev) => ({
-      ...prev,
-      [listId]: (prev[listId] ?? []).filter((item) => item.articleId !== articleId),
-    }));
-    setPriceLists((prev) => prev.map((list) => (list.id === listId ? { ...list, lastUpdated: timestamp } : list)));
-    toast({ variant: "success", title: "Listas de precio", description: "Artículo removido de la lista." });
+
+    setItemsMutating(true);
+    try {
+      const response = await fetch("/api/precios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete-article",
+          payload: {
+            price_list_code: listId,
+            article_code: target.articleCode,
+          },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      await refreshPriceListItems(listId, { force: true });
+      toast({ variant: "success", title: "Listas de precio", description: "Artículo removido de la lista." });
+    } catch (error) {
+      console.error("No se pudo remover el artículo", error);
+      toast({ variant: "error", title: "Listas de precio", description: "No se pudo remover el artículo." });
+    } finally {
+      setItemsMutating(false);
+    }
   };
 
-  const handleMatchBasePrice = (articleId: number) => {
+  const handleMatchBasePrice = async (articleId: number) => {
     if (!selectedPriceList) return;
     if (selectedPriceList.id === defaultPriceListCode) return;
     const listId = selectedPriceList.id;
@@ -782,16 +749,33 @@ function PriceListWorkspace({
       toast({ variant: "warning", title: "Listas de precio", description: "No existe precio base en la lista predeterminada." });
       return;
     }
-    const timestamp = formatTimestampLocale();
-    const normalizedPrice = Number(reference.toFixed(2));
-    setPriceListItems((prev) => ({
-      ...prev,
-      [listId]: current.map((item) =>
-        item.articleId === articleId ? { ...item, listPrice: normalizedPrice, lastUpdated: timestamp } : item
-      ),
-    }));
-    setPriceLists((prev) => prev.map((list) => (list.id === listId ? { ...list, lastUpdated: timestamp } : list)));
-    toast({ variant: "success", title: "Listas de precio", description: "El precio se alineó con el valor base." });
+
+    setItemsMutating(true);
+    try {
+      const response = await fetch("/api/precios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set-price",
+          payload: {
+            article_code: target.articleCode,
+            price_list_code: listId,
+            price: Number(reference.toFixed(2)),
+            start_date: new Date().toISOString().slice(0, 10),
+          },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      await refreshPriceListItems(listId, { force: true });
+      toast({ variant: "success", title: "Listas de precio", description: "El precio se alineó con el valor base." });
+    } catch (error) {
+      console.error("No se pudo alinear el precio", error);
+      toast({ variant: "error", title: "Listas de precio", description: "No se pudo actualizar el precio." });
+    } finally {
+      setItemsMutating(false);
+    }
   };
 
   return (
@@ -811,7 +795,7 @@ function PriceListWorkspace({
               <h1 className="text-3xl font-semibold tracking-tight text-foreground">Listas de precio</h1>
             </div>
           </div>
-          <Button type="button" className="rounded-2xl" onClick={handleOpenNew}>Nueva lista</Button>
+          <Button type="button" className="rounded-2xl" onClick={handleOpenNew} disabled={priceListsLoading || listsMutating}>Nueva lista</Button>
         </div>
         <div className="grid gap-3 md:grid-cols-[1fr,auto]">
           <div className="space-y-1">
@@ -837,6 +821,12 @@ function PriceListWorkspace({
           <CardTitle className="text-xl font-semibold">Listado</CardTitle>
         </CardHeader>
         <CardContent>
+          {priceListsLoading ? (
+            <div className="flex items-center gap-2 pb-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Actualizando listas desde la base de datos...</span>
+            </div>
+          ) : null}
           <div className="overflow-x-auto">
             <table className="min-w-full table-auto text-left text-sm text-foreground">
               <thead className="border-b text-xs uppercase text-muted-foreground">
@@ -888,7 +878,8 @@ function PriceListWorkspace({
                             size="sm"
                             variant="outline"
                             className="h-8 rounded-xl px-3 text-xs"
-                            onClick={() => handleToggleActive(list.id)}
+                            onClick={() => handleToggleActive(list)}
+                            disabled={listsMutating}
                           >
                             {list.isActive ? "Desactivar" : "Activar"}
                           </Button>
@@ -897,8 +888,8 @@ function PriceListWorkspace({
                             size="sm"
                             variant={list.isDefault ? "default" : "outline"}
                             className="h-8 rounded-xl px-3 text-xs"
-                            onClick={() => handleSetDefault(list.id)}
-                            disabled={list.isDefault}
+                            onClick={() => handleSetDefault(list)}
+                            disabled={list.isDefault || listsMutating}
                           >
                             {list.isDefault ? "Predeterminada" : "Hacer predeterminada"}
                           </Button>
@@ -1037,7 +1028,7 @@ function PriceListWorkspace({
                 size="icon"
                 className="h-6 w-6 rounded-full"
                 onClick={handleStartCreateItem}
-                disabled={!selectedPriceList}
+                disabled={!selectedPriceList || itemsMutating || currentItemsLoading}
                 aria-label="Agregar producto a la lista"
               >
                 <Plus className="h-3 w-3" />
@@ -1060,7 +1051,16 @@ function PriceListWorkspace({
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {filteredItems.length > 0 ? (
+                  {currentItemsLoading ? (
+                    <tr>
+                      <td colSpan={7} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                        <span className="inline-flex items-center justify-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Cargando artículos de la lista...
+                        </span>
+                      </td>
+                    </tr>
+                  ) : filteredItems.length > 0 ? (
                     filteredItems.map((item) => {
                       const isDefaultList = selectedPriceList?.id === defaultPriceListCode;
                       const basePrice = isDefaultList ? null : basePriceLookup.get(item.articleId) ?? null;
@@ -1102,6 +1102,7 @@ function PriceListWorkspace({
                                 variant="outline"
                                 className="h-8 rounded-xl px-3 text-xs"
                                 onClick={() => handleStartEditItem(item)}
+                                disabled={itemsMutating || currentItemsLoading}
                               >
                                 Editar
                               </Button>
@@ -1111,6 +1112,7 @@ function PriceListWorkspace({
                                 variant="outline"
                                 className="h-8 rounded-xl px-3 text-xs"
                                 onClick={() => handleToggleItemActive(item.articleId)}
+                                disabled={itemsMutating || currentItemsLoading}
                               >
                                 {item.isActive ? "Desactivar" : "Activar"}
                               </Button>
@@ -1121,6 +1123,7 @@ function PriceListWorkspace({
                                   variant="outline"
                                   className="h-8 rounded-xl px-3 text-xs"
                                   onClick={() => handleRemoveItem(item.articleId)}
+                                  disabled={itemsMutating || currentItemsLoading}
                                 >
                                   Quitar
                                 </Button>
@@ -1132,6 +1135,7 @@ function PriceListWorkspace({
                                   variant="outline"
                                   className="h-8 rounded-xl px-3 text-xs"
                                   onClick={() => handleMatchBasePrice(item.articleId)}
+                                  disabled={itemsMutating || currentItemsLoading}
                                 >
                                   Igualar base
                                 </Button>
@@ -1270,33 +1274,131 @@ export default function FacturacionPage() {
 
   const defaultCurrency = process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO";
   const envDefaultPriceListCode = process.env.DEFAULT_PRICE_LIST_CODE || "BASE";
-  const [priceLists, setPriceLists] = useState<PriceList[]>(() => createInitialPriceLists(defaultCurrency, envDefaultPriceListCode));
-  const [priceListItems, setPriceListItems] = useState<Record<string, PriceListItem[]>>(() => createInitialPriceListItems(defaultCurrency));
-  const [defaultPriceListCode, setDefaultPriceListCode] = useState(() => {
-    const initial = createInitialPriceLists(defaultCurrency, envDefaultPriceListCode);
-    return initial.find((list) => list.isDefault)?.id ?? envDefaultPriceListCode;
-  });
+  const [priceLists, setPriceLists] = useState<PriceList[]>([]);
+  const [priceListItems, setPriceListItems] = useState<Record<string, PriceListItem[]>>({});
+  const [priceListsLoading, setPriceListsLoading] = useState(false);
+  const [priceListItemsLoading, setPriceListItemsLoading] = useState<Record<string, boolean>>({});
+  const [defaultPriceListCode, setDefaultPriceListCode] = useState(envDefaultPriceListCode);
+  const loadedPriceListItemsRef = useRef<Set<string>>(new Set());
+
+  const mapServerPriceList = useCallback((entry: any): PriceList => {
+    const updatedAtRaw = entry?.updated_at ?? entry?.created_at ?? null;
+    const updatedAt = updatedAtRaw ? new Date(updatedAtRaw) : new Date();
+    const code = String(entry?.code ?? "").toUpperCase();
+    const resolvedName = entry?.name ? String(entry.name) : code || "Lista";
+    return {
+      id: code,
+      name: resolvedName,
+      currency: String(entry?.currency_code ?? defaultCurrency),
+      description: typeof entry?.description === "string" ? entry.description : "",
+      isActive: Boolean(entry?.is_active ?? true),
+      isDefault: Boolean(entry?.is_default ?? false),
+      lastUpdated: formatTimestampLocale(updatedAt),
+    } satisfies PriceList;
+  }, [defaultCurrency]);
+
+  const mapServerPriceListItem = useCallback((entry: any): PriceListItem => {
+    const updatedAtRaw = entry?.updated_at ?? entry?.created_at ?? null;
+    const updatedAt = updatedAtRaw ? new Date(updatedAtRaw) : new Date();
+    return {
+      articleId: Number(entry?.article_id ?? 0),
+      articleCode: String(entry?.article_code ?? ""),
+      name: String(entry?.name ?? "Artículo"),
+      unit: String(entry?.unit ?? "Unidad"),
+      listPrice: Number(entry?.price ?? 0),
+      currency: String(entry?.currency_code ?? defaultCurrency),
+      isActive: Boolean(entry?.is_active ?? true),
+      lastUpdated: formatTimestampLocale(updatedAt),
+    } satisfies PriceListItem;
+  }, [defaultCurrency]);
+
+  const refreshPriceListItems = useCallback(
+    async (code: string, options?: { force?: boolean }) => {
+      const normalized = code.trim().toUpperCase();
+      if (!normalized) return;
+      if (!options?.force && loadedPriceListItemsRef.current.has(normalized)) {
+        return;
+      }
+      setPriceListItemsLoading((prev) => ({ ...prev, [normalized]: true }));
+      try {
+        const response = await fetch(`/api/precios?code=${encodeURIComponent(normalized)}&include=items`, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const payload = await response.json();
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        const mapped = items.map(mapServerPriceListItem);
+        setPriceListItems((prev) => ({ ...prev, [normalized]: mapped }));
+        loadedPriceListItemsRef.current.add(normalized);
+      } catch (error) {
+        console.error(`No se pudieron obtener los artículos de la lista ${code}`, error);
+        toast({ variant: "error", title: "Listas de precio", description: "No se pudieron cargar los artículos de la lista." });
+      } finally {
+        setPriceListItemsLoading((prev) => ({ ...prev, [normalized]: false }));
+      }
+    },
+    [mapServerPriceListItem, toast]
+  );
+
+  const refreshPriceLists = useCallback(async () => {
+    setPriceListsLoading(true);
+    try {
+      const response = await fetch("/api/precios", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = await response.json();
+      const lists = Array.isArray(payload.lists) ? payload.lists : [];
+      const mapped = lists.map(mapServerPriceList);
+      setPriceLists(mapped);
+      setPriceListsLoading(false);
+
+      setPriceListItems((prev) => {
+        const next = { ...prev } as Record<string, PriceListItem[]>;
+        const validIds = new Set(mapped.map((list: PriceList) => list.id));
+        for (const key of Object.keys(next)) {
+          if (!validIds.has(key)) {
+            delete next[key];
+            loadedPriceListItemsRef.current.delete(key);
+          }
+        }
+        return next;
+      });
+
+      const preferredDefault = mapped.find((list: PriceList) => list.isDefault)
+        ?? mapped.find((list: PriceList) => list.id === envDefaultPriceListCode.toUpperCase())
+        ?? (mapped[0] as PriceList | undefined)
+        ?? null;
+      if (preferredDefault) {
+        setDefaultPriceListCode((prev) => (prev === preferredDefault.id ? prev : preferredDefault.id));
+        void refreshPriceListItems(preferredDefault.id);
+      }
+    } catch (error) {
+      console.error("No se pudieron obtener las listas de precio", error);
+      toast({ variant: "error", title: "Listas de precio", description: "No se pudieron obtener las listas de precio." });
+      setPriceListsLoading(false);
+    }
+  }, [envDefaultPriceListCode, mapServerPriceList, refreshPriceListItems, toast]);
 
   useEffect(() => {
-    if (priceLists.some((list) => list.id === defaultPriceListCode)) return;
-    const fallback = priceLists.find((list) => list.isDefault) ?? priceLists[0];
-    if (fallback) {
-      setDefaultPriceListCode(fallback.id);
-    }
-  }, [priceLists, defaultPriceListCode]);
+    void refreshPriceLists();
+  }, [refreshPriceLists]);
 
   const handleDefaultPriceListChange = useCallback((id: string) => {
     setDefaultPriceListCode((prev) => (prev === id ? prev : id));
-  }, []);
+    void refreshPriceListItems(id);
+  }, [refreshPriceListItems]);
 
   if (modeParam === "listas-precio" && canManagePriceLists) {
     return (
       <PriceListWorkspace
         defaultCurrency={defaultCurrency}
         priceLists={priceLists}
-        setPriceLists={setPriceLists}
+        priceListsLoading={priceListsLoading}
+        refreshPriceLists={refreshPriceLists}
         priceListItems={priceListItems}
-        setPriceListItems={setPriceListItems}
+        priceListItemsLoading={priceListItemsLoading}
+        refreshPriceListItems={refreshPriceListItems}
         defaultPriceListCode={defaultPriceListCode}
         onDefaultPriceListChange={handleDefaultPriceListChange}
       />

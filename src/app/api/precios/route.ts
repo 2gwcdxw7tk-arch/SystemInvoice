@@ -1,16 +1,79 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { listPriceLists, upsertPriceList, setArticlePrice } from "@/lib/db/prices";
+import {
+  getPriceListByCode,
+  listPriceListItems,
+  listPriceLists,
+  removeArticleFromPriceList,
+  setArticlePrice,
+  setArticlePriceActive,
+  setPriceListActiveState,
+  setPriceListAsDefault,
+  upsertPriceList,
+} from "@/lib/db/prices";
 import { requireAdministrator } from "@/lib/auth/access";
 
-const priceListSchema = z.object({ code: z.string().trim().min(1).max(30), name: z.string().trim().min(1).max(120).optional(), start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(), is_active: z.boolean().optional() });
-const setPriceSchema = z.object({ article_code: z.string().trim().min(1).max(40), price_list_code: z.string().trim().min(1).max(30), price: z.number().nonnegative(), start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional() });
+const priceListSchema = z.object({
+  code: z.string().trim().min(1).max(30),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(200).optional(),
+  currency_code: z.string().trim().length(3).optional(),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  is_active: z.boolean().optional(),
+  is_default: z.boolean().optional(),
+});
+
+const togglePriceListSchema = z.object({
+  code: z.string().trim().min(1).max(30),
+  is_active: z.boolean(),
+});
+
+const setDefaultSchema = z.object({
+  code: z.string().trim().min(1).max(30),
+});
+
+const setPriceSchema = z.object({
+  article_code: z.string().trim().min(1).max(40),
+  price_list_code: z.string().trim().min(1).max(30),
+  price: z.number().nonnegative(),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+});
+
+const toggleArticleSchema = z.object({
+  price_list_code: z.string().trim().min(1).max(30),
+  article_code: z.string().trim().min(1).max(40),
+  is_active: z.boolean(),
+});
+
+const deleteArticleSchema = z.object({
+  price_list_code: z.string().trim().min(1).max(30),
+  article_code: z.string().trim().min(1).max(40),
+});
 
 export async function GET(request: NextRequest) {
   const access = await requireAdministrator(request, "Solo un administrador puede consultar listas de precio");
   if ("response" in access) return access.response;
 
   try {
+    const searchParams = request.nextUrl.searchParams;
+    const code = searchParams.get("code")?.trim().toUpperCase() ?? null;
+    const includeRaw = searchParams.get("include") ?? "";
+    const includeItems = includeRaw
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .includes("items");
+
+    if (code) {
+      const list = await getPriceListByCode(code);
+      if (!list) {
+        return NextResponse.json({ success: false, message: "Lista no encontrada" }, { status: 404 });
+      }
+      const items = includeItems ? await listPriceListItems(code) : undefined;
+      return NextResponse.json({ list, items });
+    }
+
     const lists = await listPriceLists();
     return NextResponse.json({ lists });
   } catch (error) {
@@ -30,13 +93,41 @@ export async function POST(request: NextRequest) {
       const parsed = priceListSchema.safeParse(body.payload);
       if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
       const res = await upsertPriceList(parsed.data);
-      return NextResponse.json({ id: res.id }, { status: 201 });
+      return NextResponse.json({ success: true, id: res.id });
+    }
+
+    if (body.action === "toggle-active") {
+      const parsed = togglePriceListSchema.safeParse(body.payload);
+      if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
+      await setPriceListActiveState(parsed.data.code, parsed.data.is_active);
+      return NextResponse.json({ success: true });
+    }
+
+    if (body.action === "set-default") {
+      const parsed = setDefaultSchema.safeParse(body.payload);
+      if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
+      await setPriceListAsDefault(parsed.data.code);
+      return NextResponse.json({ success: true });
     }
     if (body.action === "set-price") {
       const parsed = setPriceSchema.safeParse(body.payload);
       if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
       await setArticlePrice(parsed.data);
-      return NextResponse.json({ success: true }, { status: 201 });
+      return NextResponse.json({ success: true });
+    }
+
+    if (body.action === "toggle-article") {
+      const parsed = toggleArticleSchema.safeParse(body.payload);
+      if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
+      await setArticlePriceActive(parsed.data);
+      return NextResponse.json({ success: true });
+    }
+
+    if (body.action === "delete-article") {
+      const parsed = deleteArticleSchema.safeParse(body.payload);
+      if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
+      await removeArticleFromPriceList(parsed.data);
+      return NextResponse.json({ success: true });
     }
     return NextResponse.json({ success: false, message: "Acción no soportada" }, { status: 400 });
   } catch (error) {

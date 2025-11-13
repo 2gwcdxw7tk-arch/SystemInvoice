@@ -181,8 +181,12 @@ export default function Home() {
                   <Input
                     id="username"
                     name="username"
-                    type="email"
-                    placeholder="admin@empresa.com"
+                    type="text"
+                    inputMode="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    placeholder="admin"
                     autoComplete="username"
                     required
                     disabled={isPending}
