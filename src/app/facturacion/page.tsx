@@ -64,6 +64,8 @@ const paymentMethodOptions: ComboboxOption<PaymentMethod>[] = [
 ];
 
 const DEFAULT_MANUAL_CUSTOMER_NAME = "Cliente mostrador";
+const MANUAL_EXIT_WARNING =
+  "Tienes una factura manual en progreso. Si sales sin generar la factura se perderán los datos capturados. ¿Deseas abandonar la captura?";
 
 type FacturacionMode = "sin-pedido" | "con-pedido" | "listas-precio";
 type InvoiceMode = "sin-pedido" | "con-pedido";
@@ -305,6 +307,8 @@ const createInitialManualDraft = (): DraftInvoice => ({
   notes: "",
   items: [],
 });
+
+const createInitialPaymentsState = (): Payment[] => [{ method: "CASH", amount: "" }];
 
 interface PriceListWorkspaceProps {
   defaultCurrency: string;
@@ -726,6 +730,30 @@ function PriceListWorkspace({
     }));
     setPriceLists((prev) => prev.map((list) => (list.id === listId ? { ...list, lastUpdated: timestamp } : list)));
     toast({ variant: "success", title: "Listas de precio", description: nextActive ? "Producto activado." : "Producto desactivado." });
+  };
+
+  const handleRemoveItem = (articleId: number) => {
+    if (!selectedPriceList) {
+      toast({ variant: "error", title: "Listas de precio", description: "Selecciona una lista para administrar sus productos." });
+      return;
+    }
+    if (selectedPriceList.id === defaultPriceListCode) {
+      toast({ variant: "warning", title: "Listas de precio", description: "La lista predeterminada no admite remover artículos." });
+      return;
+    }
+    const listId = selectedPriceList.id;
+    const current = priceListItems[listId] ?? [];
+    if (!current.some((item) => item.articleId === articleId)) {
+      toast({ variant: "warning", title: "Listas de precio", description: "El artículo no está asignado a la lista." });
+      return;
+    }
+    const timestamp = formatTimestampLocale();
+    setPriceListItems((prev) => ({
+      ...prev,
+      [listId]: (prev[listId] ?? []).filter((item) => item.articleId !== articleId),
+    }));
+    setPriceLists((prev) => prev.map((list) => (list.id === listId ? { ...list, lastUpdated: timestamp } : list)));
+    toast({ variant: "success", title: "Listas de precio", description: "Artículo removido de la lista." });
   };
 
   const handleMatchBasePrice = (articleId: number) => {
@@ -1447,7 +1475,7 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
       : initialOrders.find(order => order.status === "OCCUPIED")?.tableId ?? null
   );
   const [manualPriceListCode, setManualPriceListCode] = useState(defaultPriceListCode);
-  const [payments, setPayments] = useState<Payment[]>([{ method: "CASH", amount: "" }]);
+  const [payments, setPayments] = useState<Payment[]>(() => createInitialPaymentsState());
   const [amountReceived, setAmountReceived] = useState("0");
   const [serviceEnabled, setServiceEnabled] = useState(false);
   const [applyVAT, setApplyVAT] = useState(() => vatRate > 0);
@@ -1604,6 +1632,20 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
   }, [selectedCatalogQty]);
   const highlightTimeoutRef = useRef<number | null>(null);
 
+  const manualDraftBaseline = useMemo(() => createInitialManualDraft(), []);
+  const paymentsDirty = useMemo(() => {
+    if (payments.length > 1) {
+      return true;
+    }
+    return payments.some((payment) => {
+      const normalizedAmount = Number(String(payment.amount).replace(/,/g, ".")) || 0;
+      if (normalizedAmount > 0) {
+        return true;
+      }
+      return Boolean(payment.reference && payment.reference.trim().length > 0);
+    });
+  }, [payments]);
+
    useEffect(() => () => { if (highlightTimeoutRef.current) window.clearTimeout(highlightTimeoutRef.current); }, []);
 
   const tableOptions = useMemo<ComboboxOption<string>[]>(() => {
@@ -1647,8 +1689,45 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
     }
   }, [tableOptions, selectedTableId, mode]);
 
-    const selectedOrder = useMemo(() => orders.find(o => o.tableId === selectedTableId) ?? null, [orders, selectedTableId]);
-    const isDraft = selectedTableId === NEW_INVOICE_ID;
+  const selectedOrder = useMemo(() => orders.find((order) => order.tableId === selectedTableId) ?? null, [orders, selectedTableId]);
+  const isDraft = selectedTableId === NEW_INVOICE_ID;
+  const manualWorkInProgress = useMemo(() => {
+    if (!isDraft) {
+      return false;
+    }
+    if (!manualDraftBaseline) {
+      return false;
+    }
+    if (draftInvoice.items.length > 0) {
+      return true;
+    }
+    if (draftInvoice.notes.trim().length > 0) {
+      return true;
+    }
+    if (draftInvoice.reference.trim() !== manualDraftBaseline.reference) {
+      return true;
+    }
+    if (draftInvoice.waiter.trim() !== manualDraftBaseline.waiter) {
+      return true;
+    }
+    if (draftInvoice.guests !== manualDraftBaseline.guests) {
+      return true;
+    }
+    if (customerName.trim() !== DEFAULT_MANUAL_CUSTOMER_NAME) {
+      return true;
+    }
+    if (customerTaxId.trim().length > 0) {
+      return true;
+    }
+    if (paymentsDirty) {
+      return true;
+    }
+    if (serviceEnabled) {
+      return true;
+    }
+    return false;
+  }, [customerName, customerTaxId, draftInvoice, isDraft, manualDraftBaseline, paymentsDirty, serviceEnabled]);
+  const shouldWarnOnManualExit = mode === "sin-pedido" && manualWorkInProgress;
   const manualHasItems = isDraft && draftInvoice.items.length > 0;
     const itemsForSummary = useMemo(() => (isDraft ? draftInvoice.items : selectedOrder?.items ?? []), [isDraft, draftInvoice, selectedOrder]);
     const activeLabel = isDraft ? (draftInvoice.reference.trim() || "Factura manual") : selectedOrder?.tableLabel ?? "Sin mesa";
@@ -1674,6 +1753,67 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
     if (typeof selectedCatalogId !== "number") return null;
     return catalog.find(item => item.id === selectedCatalogId) ?? null;
   }, [catalog, selectedCatalogId]);
+
+  useEffect(() => {
+    if (!shouldWarnOnManualExit) {
+      return;
+    }
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = MANUAL_EXIT_WARNING;
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [shouldWarnOnManualExit]);
+
+  useEffect(() => {
+    if (!shouldWarnOnManualExit) {
+      return;
+    }
+    const handleAnchorNavigation = (event: MouseEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      if (event.button !== 0) {
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      const anchor = (event.target as HTMLElement | null)?.closest<HTMLAnchorElement>("a[href]");
+      if (!anchor) {
+        return;
+      }
+      if (anchor.dataset.guardBypass === "true") {
+        return;
+      }
+      if (anchor.target && anchor.target !== "_self") {
+        return;
+      }
+      if (anchor.hasAttribute("download")) {
+        return;
+      }
+      const href = anchor.getAttribute("href");
+      if (!href) {
+        return;
+      }
+      if (href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:") || href.startsWith("javascript:")) {
+        return;
+      }
+      const url = new URL(href, window.location.href);
+      const sameLocation = url.pathname === window.location.pathname && url.search === window.location.search;
+      if (sameLocation) {
+        return;
+      }
+      const allowNavigation = window.confirm(MANUAL_EXIT_WARNING);
+      if (!allowNavigation) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener("click", handleAnchorNavigation, true);
+    return () => document.removeEventListener("click", handleAnchorNavigation, true);
+  }, [shouldWarnOnManualExit]);
 
   const handleConfirmCatalogItem = () => {
     if (typeof selectedCatalogId !== "number") return;
@@ -1728,7 +1868,7 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
       const nextOccupied = updatedOrders.find((order) => order.status === "OCCUPIED");
       return nextOccupied?.tableId ?? null;
     });
-    setPayments([{ method: "CASH", amount: "" }]);
+  setPayments(createInitialPaymentsState());
     setServiceEnabled(false);
     setApplyVAT(vatRate > 0);
     setAddItemModalOpen(false);
@@ -1766,7 +1906,7 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
       const fallback = activeLists.find((list) => list.id === defaultPriceListCode) ?? activeLists[0];
       return fallback.id;
     });
-    setPayments([{ method: "CASH", amount: "" }]);
+  setPayments(createInitialPaymentsState());
     setServiceEnabled(false);
     setApplyVAT(vatRate > 0);
     setCustomerName(mode === "sin-pedido" ? DEFAULT_MANUAL_CUSTOMER_NAME : "");

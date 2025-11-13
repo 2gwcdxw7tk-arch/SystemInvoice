@@ -1,18 +1,29 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { TableAdminSnapshot, TableZone } from "@/lib/db/tables";
+import { CalendarPlus, CalendarX, Filter, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Combobox } from "@/components/ui/combobox";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
-import { Combobox } from "@/components/ui/combobox";
-import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/components/ui/toast-provider";
-import { CalendarPlus, CalendarX, Filter, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import type { TableAdminSnapshot, TableZone } from "@/lib/db/tables";
 
 const DATETIME_FORMATTER = new Intl.DateTimeFormat("es-MX", { dateStyle: "short", timeStyle: "short" });
+
+type StatusTone = "success" | "warning" | "danger" | "info" | "muted";
+
+const statusToneStyles: Record<StatusTone, string> = {
+  success: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  warning: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  danger: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+  info: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  muted: "bg-muted text-muted-foreground",
+};
 
 type TableFormState = {
   id: string;
@@ -87,130 +98,124 @@ function combineDateTime(date: string, time: string): string {
   return `${date}T${normalizedTime}`;
 }
 
-function getStatusMeta(table: TableAdminSnapshot): { label: string; tone: "success" | "warning" | "danger" | "info" | "muted" } {
+function getStatusMeta(table: TableAdminSnapshot): { label: string; tone: StatusTone } {
   if (!table.is_active) {
-        <CardContent className="space-y-4">
-          <div className="overflow-x-auto">
-            <table className="min-w-full table-auto text-left text-sm">
-              <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2">Código</th>
-                  <th className="px-3 py-2">Zona</th>
-                  <th className="px-3 py-2">Capacidad</th>
-                  <th className="px-3 py-2">Estado</th>
-                  <th className="px-3 py-2">Mesero asignado</th>
-                  <th className="px-3 py-2">Reservación</th>
-                  <th className="px-3 py-2">Último cambio</th>
-                  <th className="px-3 py-2">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {loadingTables ? (
-                  <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
-                      <span className="inline-flex items-center justify-center gap-2">
-                        <Loader2 className="h-4 w-4 animate-spin" /> Cargando mesas...
-                      </span>
-                    </td>
-                  </tr>
-                ) : filteredTables.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
-                      No hay mesas registradas con los filtros actuales.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredTables.map((table) => {
-                    const statusMeta = getStatusMeta(table);
-                    const available = isTableAvailable(table);
-                    return (
-                      <tr key={table.id} className="align-top hover:bg-muted/40">
-                        <td className="px-3 py-2 font-mono text-xs">{table.id}</td>
-                        <td className="px-3 py-2">{table.zone ?? "—"}</td>
-                        <td className="px-3 py-2">{table.capacity ?? "—"}</td>
-                        <td className="px-3 py-2">
-                          <span className={`inline-flex items-center rounded-2xl px-2.5 py-1 text-xs font-semibold ${statusToneStyles[statusMeta.tone]}`}>
-                            {statusMeta.label}
-                          </span>
-                          {table.pending_items_count > 0 || table.sent_items_count > 0 ? (
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              Pendientes: {table.pending_items_count} · Servidos: {table.sent_items_count}
-                            </p>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-2">
-                          {table.assigned_waiter_name ? (
-                            <div className="space-y-0.5">
-                              <p className="font-medium">{table.assigned_waiter_name}</p>
-                              <p className="text-xs text-muted-foreground">ID: {table.assigned_waiter_id}</p>
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {table.reservation ? (
-                            <div className="space-y-1">
-                              <p className="font-medium">{table.reservation.reserved_by}</p>
-                              {table.reservation.scheduled_for ? (
-                                <p className="text-xs text-muted-foreground">{formatDate(table.reservation.scheduled_for)}</p>
-                              ) : null}
-                              {table.reservation.party_size ? (
-                                <p className="text-xs text-muted-foreground">{table.reservation.party_size} personas</p>
-                              ) : null}
-                              {table.reservation.contact_phone ? (
-                                <p className="text-xs text-muted-foreground">Tel. {table.reservation.contact_phone}</p>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">{formatDate(table.updated_state_at ?? table.updated_at)}</td>
-                        <td className="px-3 py-2">
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-8 rounded-xl px-3 text-xs"
-                              onClick={() => openEditTableModal(table)}
-                            >
-                              <Pencil className="mr-1 h-4 w-4" /> Editar
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-8 rounded-xl px-3 text-xs"
-                              disabled={releaseInFlight === table.id}
-                              onClick={() => void handleReleaseTable(table.id)}
-                            >
-                              {releaseInFlight === table.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <CalendarX className="mr-1 h-4 w-4" />}
-                              Liberar
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={available ? "outline" : "destructive"}
-                              className="h-8 rounded-xl px-3 text-xs"
-                              disabled={deletingTableId === table.id}
-                              onClick={() => void handleDeleteTable(table.id)}
-                            >
-                              {deletingTableId === table.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1 h-4 w-4" />}
-                              {available ? "Desactivar" : "Eliminar"}
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-  const scheduledDate = extractDatePart(reservationForm.scheduledFor);
-  const scheduledTime = extractTimePart(reservationForm.scheduledFor);
+    return { label: "Inactiva", tone: "muted" };
+  }
+
+  if (table.reservation) {
+    const label = table.reservation.status === "seated" ? "Reservada en sala" : "Reservada";
+    return { label, tone: "warning" };
+  }
+
+  if (table.order_status === "libre") {
+    return { label: "Disponible", tone: "success" };
+  }
+
+  if (table.order_status === "normal") {
+    return { label: "En servicio", tone: "info" };
+  }
+
+  if (table.order_status === "facturado") {
+    return { label: "Facturada", tone: "success" };
+  }
+
+  if (table.order_status === "anulado") {
+    return { label: "Anulada", tone: "danger" };
+  }
+
+  return { label: "En servicio", tone: "info" };
+}
+
+export default function MesasPage(): JSX.Element {
+  const { toast } = useToast();
+  const [tables, setTables] = useState<TableAdminSnapshot[]>([]);
+  const [zones, setZones] = useState<TableZone[]>([]);
+  const [loadingTables, setLoadingTables] = useState(false);
+  const [showAvailableOnly, setShowAvailableOnly] = useState(false);
+
+  const [tableModalOpen, setTableModalOpen] = useState(false);
+  const [reservationModalOpen, setReservationModalOpen] = useState(false);
+  const [editingTableId, setEditingTableId] = useState<string | null>(null);
+  const [reservationTableId, setReservationTableId] = useState<string | null>(null);
+  const [tableForm, setTableForm] = useState<TableFormState>(emptyTableForm);
+  const [reservationForm, setReservationForm] = useState<ReservationFormState>(emptyReservationForm);
+  const [savingTable, setSavingTable] = useState(false);
+  const [reservationSaving, setReservationSaving] = useState(false);
+  const [deletingTableId, setDeletingTableId] = useState<string | null>(null);
+  const [releaseInFlight, setReleaseInFlight] = useState<string | null>(null);
+
+  const zoneOptions = useMemo(
+    () =>
+      zones.map((zone) => ({
+        value: zone.id,
+        label: zone.name,
+        description: zone.is_active ? undefined : "Inactiva",
+      })),
+    [zones]
+  );
+
+  const stats = useMemo(() => {
+    const total = tables.length;
+    const available = tables.filter(isTableAvailable).length;
+    const reserved = tables.filter((table) => !!table.reservation).length;
+    const occupied = tables.filter((table) => table.order_status !== "libre" && table.order_status !== "anulado").length;
+    const inactive = tables.filter((table) => !table.is_active).length;
+    return { total, available, reserved, occupied, inactive };
+  }, [tables]);
+
+  const filteredTables = useMemo(() => {
+    const base = showAvailableOnly ? tables.filter(isTableAvailable) : tables;
+    return [...base].sort((a, b) => {
+      const zoneA = (a.zone ?? "").toLocaleLowerCase("es-MX");
+      const zoneB = (b.zone ?? "").toLocaleLowerCase("es-MX");
+      if (zoneA === zoneB) {
+        return a.label.localeCompare(b.label, "es-MX");
+      }
+      return zoneA.localeCompare(zoneB, "es-MX");
+    });
+  }, [tables, showAvailableOnly]);
+
+  const loadTables = useCallback(async () => {
+    setLoadingTables(true);
+    try {
+      const res = await fetch("/api/tables", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error("No se pudieron cargar las mesas");
+      }
+      const data = (await res.json()) as { tables?: TableAdminSnapshot[] };
+      setTables(Array.isArray(data.tables) ? data.tables : []);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "No se pudieron cargar las mesas";
+      toast({ variant: "error", title: "Mesas", description: message });
+      setTables([]);
+    } finally {
+      setLoadingTables(false);
+    }
+  }, [toast]);
+
+  const loadZones = useCallback(async () => {
+    try {
+      const res = await fetch("/api/tables/zones?include_inactive=true", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error("No se pudieron cargar las zonas");
+      }
+      const data = (await res.json()) as { zones?: TableZone[] };
+      setZones(Array.isArray(data.zones) ? data.zones : []);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "No se pudieron cargar las zonas";
+      toast({ variant: "error", title: "Zonas", description: message });
+      setZones([]);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void loadTables();
+  }, [loadTables]);
+
+  useEffect(() => {
+    void loadZones();
+  }, [loadZones]);
 
   const handleReservationDateChange = useCallback((nextDate: string) => {
     setReservationForm((current) => {
@@ -234,10 +239,11 @@ function getStatusMeta(table: TableAdminSnapshot): { label: string; tone: "succe
   }, []);
 
   function openCreateModal(): void {
+    const defaultZone = zones.find((zone) => zone.is_active);
     setEditingTableId(null);
     setTableForm({
       ...emptyTableForm,
-      zoneId: zoneOptions[0]?.value ?? "",
+      zoneId: defaultZone?.id ?? "",
     });
     setTableModalOpen(true);
   }
@@ -311,12 +317,12 @@ function getStatusMeta(table: TableAdminSnapshot): { label: string; tone: "succe
         throw new Error(message?.message ?? "No se pudo guardar la mesa");
       }
 
-  toast({ variant: "success", title: "Mesas", description: editingTableId ? "Mesa actualizada" : "Mesa registrada" });
-  setTableModalOpen(false);
-  setTableForm({ ...emptyTableForm, zoneId: zoneOptions[0]?.value ?? "" });
-  setEditingTableId(null);
-  await loadTables();
-  await loadZones();
+      toast({ variant: "success", title: "Mesas", description: editingTableId ? "Mesa actualizada" : "Mesa registrada" });
+      setTableModalOpen(false);
+      setTableForm({ ...emptyTableForm, zoneId: zones.find((zone) => zone.is_active)?.id ?? "" });
+      setEditingTableId(null);
+      await loadTables();
+      await loadZones();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "No se pudo guardar la mesa";
       toast({ variant: "error", title: "Mesas", description: message });
@@ -409,6 +415,13 @@ function getStatusMeta(table: TableAdminSnapshot): { label: string; tone: "succe
     }
   }
 
+  const scheduledDate = extractDatePart(reservationForm.scheduledFor);
+  const scheduledTime = extractTimePart(reservationForm.scheduledFor);
+  const activeReservationTable = useMemo(
+    () => tables.find((table) => table.id === reservationTableId) ?? null,
+    [tables, reservationTableId]
+  );
+
   return (
     <section className="space-y-10 pb-16">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -471,30 +484,38 @@ function getStatusMeta(table: TableAdminSnapshot): { label: string; tone: "succe
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {loadingTables ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Cargando mesas...
-            </div>
-          ) : filteredTables.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No hay mesas registradas con los filtros actuales.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full table-auto text-left text-sm">
-                <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
+          <div className="overflow-x-auto">
+            <table className="min-w-full table-auto text-left text-sm">
+              <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Código</th>
+                  <th className="px-3 py-2">Zona</th>
+                  <th className="px-3 py-2">Capacidad</th>
+                  <th className="px-3 py-2">Estado</th>
+                  <th className="px-3 py-2">Mesero asignado</th>
+                  <th className="px-3 py-2">Reservación</th>
+                  <th className="px-3 py-2">Último cambio</th>
+                  <th className="px-3 py-2">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {loadingTables ? (
                   <tr>
-                    <th className="px-3 py-2">Código</th>
-                    <th className="px-3 py-2">Zona</th>
-                    <th className="px-3 py-2">Capacidad</th>
-                    <th className="px-3 py-2">Estado</th>
-                    <th className="px-3 py-2">Mesero asignado</th>
-                    <th className="px-3 py-2">Reservación</th>
-                    <th className="px-3 py-2">Último cambio</th>
-                    <th className="px-3 py-2">Acciones</th>
+                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Cargando mesas...
+                      </span>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {filteredTables.map((table) => {
+                ) : filteredTables.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      No hay mesas registradas con los filtros actuales.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredTables.map((table) => {
                     const statusMeta = getStatusMeta(table);
                     const available = isTableAvailable(table);
                     return (
@@ -590,11 +611,11 @@ function getStatusMeta(table: TableAdminSnapshot): { label: string; tone: "succe
                         </td>
                       </tr>
                     );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
           <div className="flex justify-end">
             <Button type="button" variant="outline" onClick={() => void loadTables()} className="rounded-2xl">
               <RefreshCw className="mr-2 h-4 w-4" />
