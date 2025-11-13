@@ -2,13 +2,13 @@
 
 # Facturador
 
-Plataforma de facturación electrónica construida con Next.js 15 (App Router) y React 18. Incluye integración con SQL Server mediante el paquete `mssql`, componentes accesibles usando TailwindCSS + Radix UI vía shadcn/ui y un flujo de construcción Docker multietapa listo para despliegue.
+Plataforma de facturación electrónica construida con Next.js 15 (App Router) y React 18. Utiliza PostgreSQL mediante un pool compartido, componentes accesibles usando TailwindCSS + Radix UI vía shadcn/ui y un flujo de construcción Docker multietapa listo para despliegue.
 
 ## Stack principal
 
 - Next.js 15 (App Router) + React 18 + TypeScript.
 - TailwindCSS 3 + Radix UI (shadcn/ui) + Theme Provider con `next-themes`.
-- SQL Server con pool de conexiones reutilizable (`mssql`).
+- PostgreSQL con pool de conexiones reutilizable.
 - Zod para validación de variables de entorno.
 - Dockerfile multietapa (`node:20-alpine`) y `.dockerignore` optimizado.
 
@@ -16,7 +16,7 @@ Plataforma de facturación electrónica construida con Next.js 15 (App Router) y
 
 - Node.js >= 18.18 (recomendado 20 LTS).
 - npm >= 10.
-- Acceso a una instancia de SQL Server (local o remota).
+- Acceso a una instancia de PostgreSQL (local o remota).
 
 ## Configuración inicial
 
@@ -32,9 +32,9 @@ Plataforma de facturación electrónica construida con Next.js 15 (App Router) y
 - `npm run lint` – ejecuta `eslint . --max-warnings=0`.
 - `npm run typecheck` – valida los tipos con TypeScript.
 
-## Integración con SQL Server
+## Integración con PostgreSQL
 
-La conexión se maneja desde `src/lib/db/mssql.ts` usando un pool global.
+La conexión se maneja desde `src/lib/db/postgres.ts` usando un pool global.
 
 Variables importantes (`.env.local`):
 
@@ -49,7 +49,7 @@ NEXT_PUBLIC_VAT_RATE=15 # IVA configurable: usa 15 o 0.15; default 15% si se omi
 NEXT_PUBLIC_SERVICE_RATE=10 # Servicio (%): usa 10 o 0.10; default 10% si se omite (toggle con/sin cargo)
 DEFAULT_PRICE_LIST_CODE=BASE # Lista de precios por defecto para cálculo de precios vigentes
 NEXT_APP_URL="http://localhost:3000" # URL base usada para redirecciones de login/logout
-DB_CONNECTION_STRING="Server=tcp:localhost,1433;Database=facturador;User Id=sa;Password=super_seguro;Encrypt=false;TrustServerCertificate=true;MultipleActiveResultSets=true"
+DB_CONNECTION_STRING="postgres://postgres:super_seguro@localhost:5432/facturador"
 MOCK_DATA=false
 SESSION_SECRET="cambia-esta-clave-super-secreta-32caracteres"
 ```
@@ -136,7 +136,7 @@ La respuesta exitosa incluye `transaction_id` y `transaction_code`. Las validaci
 
 ## Modo mock (datos en memoria)
 
-Para realizar pruebas sin depender de una instancia de SQL Server, activa el modo simulado configurando `MOCK_DATA=true` en `.env.local`.
+Para realizar pruebas sin depender de una instancia de PostgreSQL, activa el modo simulado configurando `MOCK_DATA=true` en `.env.local`.
 
 Credenciales disponibles en modo mock:
 

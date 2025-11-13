@@ -1,11 +1,10 @@
 import "server-only";
 
-import { Pool, PoolClient, QueryConfig, QueryResult } from "pg";
+import { Pool, PoolClient, QueryConfig, QueryResult, QueryResultRow } from "pg";
 
 import { env } from "@/lib/env";
 
 declare global {
-  // eslint-disable-next-line no-var
   var __PG_POOL__: Pool | undefined;
 }
 
@@ -39,7 +38,14 @@ export async function getPool(): Promise<Pool> {
   return globalThis.__PG_POOL__;
 }
 
-export async function query<T = unknown>(
+export async function query<T extends QueryResultRow = QueryResultRow>(
+  text: string,
+  values?: unknown[]
+): Promise<QueryResult<T>>;
+export async function query<T extends QueryResultRow = QueryResultRow>(
+  config: QueryConfig,
+): Promise<QueryResult<T>>;
+export async function query<T extends QueryResultRow = QueryResultRow>(
   config: string | QueryConfig,
   values?: unknown[]
 ): Promise<QueryResult<T>> {

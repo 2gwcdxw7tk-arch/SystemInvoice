@@ -2,13 +2,13 @@
 
 ## Architecture
 - Next.js 15 App Router project; route segments and API handlers live under `src/app/**` (e.g., `src/app/facturacion/page.tsx`, `src/app/api/invoices/route.ts`).
-- SQL Server access goes through `src/lib/db/mssql.ts` and thin data modules (`src/lib/db/*.ts`); when `MOCK_DATA=true` endpoints short-circuit to in-memory stores.
+- PostgreSQL access goes through `src/lib/db/postgres.ts` and thin data modules (`src/lib/db/*.ts`); when `MOCK_DATA=true` endpoints short-circuit to in-memory stores.
 - Shared UI utilities (shadcn/ui, Tailwind tokens) sit in `src/components/ui` and `src/lib/utils.ts`; respect these instead of reinventing styling helpers.
 
 ## Key Workflows
 - Install deps with `npm install`; run locally via `npm run dev`. Production build uses `npm run build && npm run start` (mirrors Dockerfile release stage).
 - Mandatory quality gates: `npm run lint` and `npm run typecheck`; run both before proposing merges.
-- API smoke tests: execute `GET /api/health` (SQL connectivity) and `POST /api/invoices` with sample payloads from `README.md` when touching persistence layers.
+- API smoke tests: ejecuta `GET /api/health` (conectividad PostgreSQL) y `POST /api/invoices` con los payloads de `README.md` cuando modifiques persistencia.
 
 ## Domain Patterns
 - Facturación UI (`src/app/facturacion/page.tsx`) separates flows by search param `mode`; reuse the existing mode switch instead of new routes.

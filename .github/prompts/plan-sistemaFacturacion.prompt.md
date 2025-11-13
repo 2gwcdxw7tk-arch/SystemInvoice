@@ -9,6 +9,6 @@
 - Mantén mocks (`env.useMockData`) sin cambios funcionales; asegúrate que rutas devuelvan mismas formas de datos tras refactor.
 - Valida en conjunto: actualiza pruebas en `tests/api/*.md` con ejemplos Postgres, agrega tests nuevos si cambian invariantes; ejecuta `npm run lint` y `npm run typecheck`.
 - QA end-to-end: levanta Postgres local, carga datos base, corre `npm run dev`, verifica flujos clave (login, facturación manual, catálogos, reportes, inventario); prueba API `/api/health` conectando a `pg`.
-- Despliegue: adapta Dockerfile e `npm run build` para incluir libs nuevas; si hay pipelines CI/CD, añade servicio Postgres; documenta rollback (backup SQL Server), checklist de cutover y monitoreo.
+- Despliegue: adapta Dockerfile e `npm run build` para incluir libs nuevas; si hay pipelines CI/CD, añade servicio Postgres; documenta rollback (backup PostgreSQL), checklist de cutover y monitoreo.
 
 Siguiente paso recomendado: crear `src/lib/db/postgres.ts` y migrar un módulo sencillo (por ejemplo `exchange-rate.ts`) para validar patrón antes del resto.

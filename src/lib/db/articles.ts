@@ -420,5 +420,5 @@ export async function deleteArticle(article_code: string): Promise<{ deleted: bo
     `DELETE FROM app.articles WHERE article_code = $1 RETURNING 1 AS affected`,
     [article_code]
   );
-  return { deleted: result.rowCount > 0 };
+  return { deleted: (result.rowCount ?? 0) > 0 };
 }

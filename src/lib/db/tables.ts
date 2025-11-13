@@ -52,29 +52,38 @@ export type TableDefinition = {
   is_active: boolean;
   sort_order: number;
   created_at: string;
-  return withTransaction(async (client: PoolClient) => {
-    const duplicate = await client.query(`SELECT 1 FROM app.tables WHERE id = $1 LIMIT 1;`, [id]);
-    if (duplicate.rowCount > 0) {
+  updated_at: string | null;
+};
+
+export type TableAdminSnapshot = TableDefinition & {
+  assigned_waiter_id: number | null;
   assigned_waiter_name: string | null;
   updated_state_at: string | null;
   order_status: OrderStatus | "libre";
-      const zoneResult = await client.query(`SELECT 1 FROM app.table_zones WHERE id = $1 LIMIT 1;`, [zoneId]);
-      if (zoneResult.rowCount === 0) {
+  pending_items_count: number;
+  sent_items_count: number;
+  reservation: TableReservationSnapshot | null;
+  order: {
     status: OrderStatus;
     pending_items: OrderLine[];
     sent_items: OrderLine[];
-    const sortOrderResult = await client.query<{ next_sort_order: number }>(
-      `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_sort_order FROM app.tables;`
-    );
-    const sortOrder = Number(sortOrderResult.rows[0]?.next_sort_order ?? 1);
-    await client.query(
-      `
-        INSERT INTO app.tables (id, label, zone_id, capacity, is_active, sort_order, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NULL);
-      `,
-      [id, label, zoneId, capacityValue, isActive, sortOrder]
-    );
-    const snapshot = await fetchSnapshotOrThrow(id, client);
+  } | null;
+};
+
+type TableDefinitionRecord = {
+  id: string;
+  label: string;
+  zoneId: string | null;
+  zoneName: string | null;
+  capacity: number | null;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string | null;
+};
+
+type TableReservationRecord = {
+  status: "holding" | "seated";
   reservedBy: string;
   contactName: string | null;
   contactPhone: string | null;
@@ -1067,12 +1076,12 @@ async function createTableDefinitionDb(input: {
   const isActive = input.isActive ?? true;
   return withTransaction(async (client: PoolClient) => {
     const duplicate = await client.query(`SELECT 1 FROM app.tables WHERE id = $1 LIMIT 1;`, [id]);
-    if (duplicate.rowCount > 0) {
+    if ((duplicate.rowCount ?? 0) > 0) {
       throw new Error("Ya existe una mesa con ese código");
     }
     if (zoneId) {
       const zoneResult = await client.query(`SELECT 1 FROM app.table_zones WHERE id = $1 LIMIT 1;`, [zoneId]);
-      if (zoneResult.rowCount === 0) {
+      if ((zoneResult.rowCount ?? 0) === 0) {
         throw new Error("La zona seleccionada no existe");
       }
     }
