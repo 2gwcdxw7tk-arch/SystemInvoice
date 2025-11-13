@@ -12,6 +12,14 @@ const invoiceSchema = z.object({
   invoice_number: z.string().trim().min(1).max(40),
   table_code: z.string().trim().max(40).nullable().optional(),
   waiter_code: z.string().trim().max(50).nullable().optional(),
+  invoice_date: z
+    .string()
+    .trim()
+    .refine((value) => {
+      const date = new Date(value);
+      return !Number.isNaN(date.getTime());
+    }, { message: "Fecha de factura inválida" }),
+  origin_order_id: z.number().int().positive().nullable().optional(),
   subtotal: z.number().nonnegative(),
   service_charge: z.number().nonnegative(),
   vat_amount: z.number().nonnegative(),
@@ -45,6 +53,8 @@ export async function POST(request: NextRequest) {
       invoice_number: payload.invoice_number,
       table_code: payload.table_code ?? null,
       waiter_code: payload.waiter_code ?? null,
+      invoiceDate: new Date(payload.invoice_date),
+      originOrderId: payload.origin_order_id ?? null,
       subtotal: payload.subtotal,
       service_charge: payload.service_charge,
       vat_amount: payload.vat_amount,

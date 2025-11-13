@@ -27,26 +27,37 @@ import type { LucideIcon } from "lucide-react";
  * - Impresión de ticket térmico 80mm
  */
 
-// Tipos locales (en producción vendrán de la capa de datos real)
- type TableOrderStatus = "OCCUPIED" | "AVAILABLE" | "RESERVED";
- interface OrderItem { name: string; qty: number; unitPrice: number; modifiers?: string[]; }
+// Tipos locales (en producción vendrán de la capa de datos)
+ type KitchenOrderStatus = "OPEN" | "INVOICED" | "CANCELLED";
+ interface OrderItem {
+   id?: number | string;
+   articleCode?: string;
+   name: string;
+   qty: number;
+   unitPrice: number;
+   modifiers?: string[];
+   notes?: string | null;
+ }
  interface TableOrder {
-   tableId: string;
+   orderId: number;
+  orderCode: string;
+   tableId: string | null;
    tableLabel: string;
-   status: TableOrderStatus;
-   waiter: string;
-   guests: number;
+   status: KitchenOrderStatus;
+   waiter: string | null;
+   waiterCode: string | null;
+   guests: number | null;
    openedAt: string;
    items: OrderItem[];
-   notes?: string;
+   notes?: string | null;
  }
  type PaymentMethod = "CASH" | "CARD" | "TRANSFER" | "OTHER";
  interface Payment { method: PaymentMethod; amount: string; reference?: string }
 
-const tableStatusLabels: Record<TableOrderStatus, string> = {
-  OCCUPIED: "Ocupada",
-  AVAILABLE: "Disponible",
-  RESERVED: "Reservada",
+const tableStatusLabels: Record<KitchenOrderStatus, string> = {
+  OPEN: "Ocupada",
+  INVOICED: "Facturado",
+  CANCELLED: "Anulado",
 };
 
 const paymentMethodLabels: Record<PaymentMethod, string> = {
@@ -370,20 +381,6 @@ function PriceListWorkspace({
     return match?.currency ?? defaultCurrency;
   }, [defaultCurrency, defaultPriceListCode, priceLists]);
 
-  const articleOptions = useMemo<ComboboxOption<number>[]>(() => {
-    return articleCatalog.map((item) => {
-      const basePrice = basePriceLookup.get(item.id);
-      const descriptionParts: string[] = [];
-      if (item.unit) descriptionParts.push(item.unit);
-      if (basePrice != null) descriptionParts.push(`Base ${formatMoney(basePrice, defaultListCurrency)}`);
-      return {
-        value: item.id,
-        label: `${item.articleCode} • ${item.name}`,
-        description: descriptionParts.length > 0 ? descriptionParts.join(" • ") : undefined,
-      };
-    });
-  }, [articleCatalog, basePriceLookup, defaultListCurrency, formatMoney]);
-
   const currentPriceListItems = useMemo(() => {
     if (!selectedPriceList) return [] as PriceListItem[];
     return priceListItems[selectedPriceList.id] ?? [];
@@ -392,31 +389,41 @@ function PriceListWorkspace({
   const filteredItems = useMemo(() => {
     const term = itemsSearchTerm.trim().toLowerCase();
     return currentPriceListItems.filter((item) => {
-      if (!showInactiveItems && !item.isActive) return false;
-      if (!term) return true;
-      return (
-        item.articleCode.toLowerCase().includes(term) ||
-        item.name.toLowerCase().includes(term)
-      );
+      const matches = term
+        ? `${item.articleCode} ${item.name}`.toLowerCase().includes(term)
+        : true;
+      const statusMatches = showInactiveItems ? true : item.isActive;
+      return matches && statusMatches;
     });
   }, [currentPriceListItems, itemsSearchTerm, showInactiveItems]);
+
+  const articleOptions = useMemo(() => {
+    return articleCatalog.map((item) => ({
+      value: item.id,
+      label: `${item.articleCode} • ${item.name}`,
+      description: `Unidad: ${item.unit}`,
+    }));
+  }, [articleCatalog]);
 
   const emptyPriceListMessage = currentPriceListItems.length === 0
     ? "Aún no hay artículos asignados a esta lista."
     : "No se encontraron artículos con los filtros aplicados.";
 
   const selectedItemForForm = useMemo<FormItemPreview | null>(() => {
+    const activeListId = selectedPriceList?.id ?? null;
     if (itemFormEditingId != null) {
-      const existing = currentPriceListItems.find((item) => item.articleId === itemFormEditingId);
+      if (!activeListId) return null;
+      const scopedItems = priceListItems[activeListId] ?? [];
+      const existing = scopedItems.find((item) => item.articleId === itemFormEditingId);
       if (!existing) return null;
-      const isDefault = selectedPriceList?.id === defaultPriceListCode;
+      const isDefault = activeListId === defaultPriceListCode;
       const baseRef = isDefault ? null : (basePriceLookup.get(existing.articleId) ?? null);
       return { ...existing, basePrice: baseRef ?? null };
     }
     if (itemFormDraft.articleId != null) {
       const catalogItem = articleCatalog.find((item) => item.id === itemFormDraft.articleId);
       if (!catalogItem) return null;
-      const isDefault = selectedPriceList?.id === defaultPriceListCode;
+      const isDefault = activeListId === defaultPriceListCode;
       const baseRef = isDefault ? null : (basePriceLookup.get(catalogItem.id) ?? null);
       return {
         articleId: catalogItem.id,
@@ -427,7 +434,7 @@ function PriceListWorkspace({
       };
     }
     return null;
-  }, [articleCatalog, basePriceLookup, currentPriceListItems, defaultPriceListCode, itemFormDraft.articleId, itemFormEditingId, selectedPriceList?.id]);
+  }, [articleCatalog, basePriceLookup, defaultPriceListCode, itemFormDraft.articleId, itemFormEditingId, priceListItems, selectedPriceList?.id]);
 
   const itemFormPriceNumber = useMemo(() => {
     const normalized = itemFormDraft.price.replace(/,/g, ".").trim();
@@ -1289,49 +1296,9 @@ export default function FacturacionPage() {
   }
 
   return <FacturacionHomeMenu />;
-}
+  }
 
- const initialOrders: TableOrder[] = [
-   {
-     tableId: "M-12",
-     tableLabel: "Mesa 12",
-     status: "OCCUPIED",
-     waiter: "María P.",
-     guests: 3,
-     openedAt: "18:05",
-     items: [
-       { name: "Pasta al pesto", qty: 2, unitPrice: 195, modifiers: ["+ pollo orgánico"] },
-       { name: "Flat white 12oz", qty: 2, unitPrice: 140 },
-       { name: "Cheesecake frutos rojos", qty: 1, unitPrice: 145 },
-     ],
-     notes: "Mesa cumpleañera, pastel listo en barra.",
-   },
-   {
-     tableId: "M-7",
-     tableLabel: "Mesa 7",
-     status: "OCCUPIED",
-     waiter: "Jorge M.",
-     guests: 2,
-     openedAt: "17:40",
-     items: [
-       { name: "Ensalada mediterránea", qty: 1, unitPrice: 265 },
-       { name: "Latte de avena", qty: 1, unitPrice: 130 },
-       { name: "Agua mineral", qty: 1, unitPrice: 48 },
-     ],
-   },
-   {
-     tableId: "VIP-1",
-     tableLabel: "Mesa VIP",
-     status: "RESERVED",
-     waiter: "Por asignar",
-     guests: 5,
-     openedAt: "19:30",
-     items: [],
-     notes: "Reserva 19:45, confirmar llegada 10 minutos antes.",
-   },
- ];
-
- // Toggle deslizante accesible (módulo global para reutilizar en subcomponentes)
+  // Toggle deslizante accesible (módulo global para reutilizar en subcomponentes)
  function Switch({ checked, onChange, "aria-label": ariaLabel, disabled = false }: { checked: boolean; onChange: (v: boolean) => void; "aria-label"?: string; disabled?: boolean }) {
    return (
      <button
@@ -1468,12 +1435,10 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
   const vatRate = VAT_RATE;
   const serviceRate = SERVICE_RATE;
   const modeTitle = mode === "sin-pedido" ? "Facturación sin pedido" : "Facturación con pedido";
-  const [orders, setOrders] = useState<TableOrder[]>(initialOrders);
-  const [selectedTableId, setSelectedTableId] = useState<string | null>(
-    mode === "sin-pedido"
-      ? NEW_INVOICE_ID
-      : initialOrders.find(order => order.status === "OCCUPIED")?.tableId ?? null
-  );
+  const [orders, setOrders] = useState<TableOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [selectedTableId, setSelectedTableId] = useState<string | null>(mode === "sin-pedido" ? NEW_INVOICE_ID : null);
   const [manualPriceListCode, setManualPriceListCode] = useState(defaultPriceListCode);
   const [payments, setPayments] = useState<Payment[]>(() => createInitialPaymentsState());
   const [amountReceived, setAmountReceived] = useState("0");
@@ -1510,6 +1475,8 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
   const [selectedCatalogId, setSelectedCatalogId] = useState<number | "">("");
   const [selectedCatalogQty, setSelectedCatalogQty] = useState("1");
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+
+  const orderSelectionKey = useCallback((order: TableOrder) => order.tableId ?? `__order_${order.orderId}`, []);
 
   const defaultPriceList = useMemo(() => priceLists.find((list) => list.id === defaultPriceListCode) ?? null, [priceLists, defaultPriceListCode]);
   const manualPriceListOptions = useMemo<ComboboxOption<string>[]>(() => {
@@ -1554,6 +1521,96 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
 
   const { toast } = useToast();
 
+  const loadOrders = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (mode !== "con-pedido") {
+        setOrders([]);
+        setOrdersError(null);
+        return;
+      }
+      const silent = options?.silent ?? false;
+      setOrdersLoading(true);
+      if (!silent) {
+        setOrdersError(null);
+      }
+      try {
+        const response = await fetch("/api/orders", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const data = (await response.json()) as {
+          orders?: Array<{
+            id: number;
+            orderCode: string;
+            tableId: string | null;
+            tableLabel: string | null;
+            status: KitchenOrderStatus;
+            waiterCode: string | null;
+            waiterName: string | null;
+            guests: number | null;
+            openedAt: string;
+            notes: string | null;
+            items?: Array<{
+              id: number;
+              articleCode: string;
+              name: string;
+              quantity: number;
+              unitPrice: number;
+              modifiers?: string[];
+              notes?: string | null;
+            }>;
+          }>;
+        };
+        const mapped: TableOrder[] = (Array.isArray(data.orders) ? data.orders : []).map((order) => ({
+          orderId: order.id,
+          orderCode: order.orderCode,
+          tableId: order.tableId ?? null,
+          tableLabel: order.tableLabel ?? order.orderCode,
+          status: order.status,
+          waiter: order.waiterName ?? order.waiterCode ?? null,
+          waiterCode: order.waiterCode ?? null,
+          guests: order.guests ?? null,
+          openedAt: order.openedAt,
+          notes: order.notes ?? null,
+          items: Array.isArray(order.items)
+            ? order.items.map((item) => ({
+                id: item.id,
+                articleCode: item.articleCode,
+                name: item.name,
+                qty: Number(item.quantity),
+                unitPrice: Number(item.unitPrice),
+                modifiers: item.modifiers ?? [],
+                notes: item.notes ?? null,
+              }))
+            : [],
+        }));
+        setOrders(mapped);
+        setOrdersError(null);
+        setSelectedTableId((prev) => {
+          if (mode !== "con-pedido") {
+            return prev;
+          }
+          if (prev && mapped.some((order) => orderSelectionKey(order) === prev)) {
+            return prev;
+          }
+          const next = mapped[0];
+          return next ? orderSelectionKey(next) : null;
+        });
+      } catch (error) {
+        console.error("Error cargando pedidos", error);
+        setOrdersError("No se pudieron cargar los pedidos activos.");
+        if (!silent) {
+          toast({ variant: "error", title: "Pedidos", description: "No fue posible cargar los pedidos activos." });
+        }
+      } finally {
+        setOrdersLoading(false);
+      }
+    },
+    [mode, orderSelectionKey, toast]
+  );
+
+  const refreshOrders = useCallback(() => loadOrders({ silent: true }), [loadOrders]);
+
   const loadCatalog = useCallback(async (force = false) => {
     const isManualFlow = mode === "sin-pedido" && selectedTableId === NEW_INVOICE_ID;
     const activePriceListCode = isManualFlow ? manualPriceListCode : defaultPriceListCode;
@@ -1585,6 +1642,17 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
   useEffect(() => {
     catalogMetaRef.current.hasItems = catalog.length > 0;
   }, [catalog.length]);
+
+  useEffect(() => {
+    if (mode === "con-pedido") {
+      void loadOrders({ silent: true });
+    } else {
+      setOrders([]);
+      setOrdersError(null);
+      setOrdersLoading(false);
+      setSelectedTableId(NEW_INVOICE_ID);
+    }
+  }, [loadOrders, mode]);
 
   useEffect(() => {
     if (mode !== "sin-pedido") return;
@@ -1649,35 +1717,20 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
    useEffect(() => () => { if (highlightTimeoutRef.current) window.clearTimeout(highlightTimeoutRef.current); }, []);
 
   const tableOptions = useMemo<ComboboxOption<string>[]>(() => {
-    const options: ComboboxOption<string>[] = [];
     if (mode === "sin-pedido") {
-      const manualLabel = draftInvoice.reference.trim() || "Factura sin pedido";
+      const manualLabel = draftInvoice.reference.trim() || "Factura manual";
       const manualDescription = draftInvoice.waiter.trim()
         ? `Responsable: ${draftInvoice.waiter.trim()}`
         : "Registrar consumo manual sin asignar mesa";
-      options.push({ value: NEW_INVOICE_ID, label: manualLabel, description: manualDescription });
-      orders
-        .filter((order) => order.status !== "OCCUPIED")
-        .forEach((order) => {
-          options.push({
-            value: order.tableId,
-            label: `${order.tableLabel} • ${tableStatusLabels[order.status]}`,
-            description: order.waiter ? `Asignada a ${order.waiter}` : "Sin mesero asignado",
-          });
-        });
-    } else {
-      orders
-        .filter((order) => order.status === "OCCUPIED")
-        .forEach((order) => {
-          options.push({
-            value: order.tableId,
-            label: `${order.tableLabel} • ${tableStatusLabels[order.status]}`,
-            description: order.waiter ? `Atiende ${order.waiter}` : "Sin mesero asignado",
-          });
-        });
+      return [{ value: NEW_INVOICE_ID, label: manualLabel, description: manualDescription }];
     }
-    return options;
-  }, [mode, draftInvoice.reference, draftInvoice.waiter, orders]);
+
+    return orders.map((order) => ({
+      value: orderSelectionKey(order),
+      label: `${order.tableLabel} • ${tableStatusLabels[order.status] ?? "Ocupada"}`,
+      description: order.waiter ? `Atiende ${order.waiter}` : `Folio ${order.orderCode}`,
+    }));
+  }, [draftInvoice.reference, draftInvoice.waiter, mode, orderSelectionKey, orders]);
 
   useEffect(() => {
     if (tableOptions.length === 0) {
@@ -1689,7 +1742,10 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
     }
   }, [tableOptions, selectedTableId, mode]);
 
-  const selectedOrder = useMemo(() => orders.find((order) => order.tableId === selectedTableId) ?? null, [orders, selectedTableId]);
+  const selectedOrder = useMemo(
+    () => orders.find((order) => orderSelectionKey(order) === selectedTableId) ?? null,
+    [orderSelectionKey, orders, selectedTableId]
+  );
   const isDraft = selectedTableId === NEW_INVOICE_ID;
   const manualWorkInProgress = useMemo(() => {
     if (!isDraft) {
@@ -1815,7 +1871,7 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
     return () => document.removeEventListener("click", handleAnchorNavigation, true);
   }, [shouldWarnOnManualExit]);
 
-  const handleConfirmCatalogItem = () => {
+  const handleConfirmCatalogItem = async () => {
     if (typeof selectedCatalogId !== "number") return;
     const art = catalog.find(c => c.id === selectedCatalogId);
     const qtyNumber = Math.max(1, selectedCatalogQtyNumber || 1);
@@ -1823,59 +1879,89 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
       toast({ variant: "warning", title: "Catálogo", description: "Artículo sin precio disponible" });
       return;
     }
+    const articleCode = String(art.article_code ?? "").trim();
+    if (!articleCode) {
+      toast({ variant: "warning", title: "Catálogo", description: "El artículo seleccionado no tiene código asociado." });
+      return;
+    }
 
     if (isDraft) {
       setDraftInvoice((prev) => ({
         ...prev,
-        items: [...prev.items, { name: art.name, qty: qtyNumber, unitPrice: art.price!.base_price || 0 }],
+        items: [
+          ...prev.items,
+          {
+            id: `manual-${Date.now()}`,
+            articleCode,
+            name: art.name ?? art.article_code ?? "Artículo",
+            qty: qtyNumber,
+            unitPrice: Number(art.price!.base_price) || 0,
+          },
+        ],
       }));
     } else if (selectedOrder) {
-      setOrders(prev => prev.map(o => o.tableId === selectedOrder.tableId ? {
-        ...o,
-        items: [...o.items, { name: art.name, qty: qtyNumber, unitPrice: art.price!.base_price || 0 }]
-      } : o));
+      try {
+        const response = await fetch(`/api/orders/${selectedOrder.orderId}/items`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            article_code: articleCode,
+            description: art.name ?? articleCode,
+            quantity: qtyNumber,
+            unit_price: Number(art.price!.base_price) || 0,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        await refreshOrders().catch((refreshError) => {
+          console.error("No se pudo refrescar los pedidos", refreshError);
+        });
+      } catch (error) {
+        console.error("Error agregando artículo al pedido", error);
+        toast({ variant: "error", title: "Pedidos", description: "No se pudo agregar el artículo al pedido." });
+        return;
+      }
     }
 
     toast({ variant: "success", title: "Producto agregado", description: `${art.article_code} • ${art.name} x${qtyNumber} → ${activeLabel}` });
     setAddItemModalOpen(false);
   };
 
-  const handleCancelOrder = useCallback((): boolean => {
-    if (mode !== "con-pedido") return false;
+  const handleCancelOrder = useCallback(async (): Promise<boolean> => {
+    if (mode !== "con-pedido") {
+      return false;
+    }
     if (!selectedOrder) {
       toast({ variant: "warning", title: "Anulación no disponible", description: "Selecciona una mesa ocupada para anular su pedido." });
       return false;
     }
 
-    const targetId = selectedOrder.tableId;
-    const targetLabel = selectedOrder.tableLabel;
-    const updatedOrders = orders.map((order): TableOrder => {
-      if (order.tableId !== targetId) {
-        return order;
+    try {
+      const response = await fetch(`/api/orders/${selectedOrder.orderId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "CANCELLED" }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
       }
-
-      return {
-        ...order,
-        status: "AVAILABLE" as TableOrderStatus,
-        items: [] as OrderItem[],
-        notes: "",
-      };
-    });
-
-    setOrders(updatedOrders);
-    setSelectedTableId((prev) => {
-      if (prev !== targetId) return prev;
-      const nextOccupied = updatedOrders.find((order) => order.status === "OCCUPIED");
-      return nextOccupied?.tableId ?? null;
-    });
-  setPayments(createInitialPaymentsState());
-    setServiceEnabled(false);
-    setApplyVAT(vatRate > 0);
-    setAddItemModalOpen(false);
-
-    toast({ variant: "success", title: "Pedido anulado", description: `${targetLabel} quedó libre.` });
-    return true;
-  }, [mode, orders, selectedOrder, toast, vatRate]);
+      await refreshOrders();
+      setPayments(createInitialPaymentsState());
+      setServiceEnabled(false);
+      setApplyVAT(vatRate > 0);
+      setAddItemModalOpen(false);
+      toast({ variant: "success", title: "Pedido anulado", description: `${selectedOrder.tableLabel} quedó libre.` });
+      return true;
+    } catch (error) {
+      console.error("Error al anular el pedido", error);
+      toast({ variant: "error", title: "Pedidos", description: "No se pudo anular el pedido seleccionado." });
+      await refreshOrders().catch((refreshError) => {
+        console.error("No se pudo refrescar los pedidos", refreshError);
+      });
+      return false;
+    }
+  }, [mode, refreshOrders, selectedOrder, toast, vatRate]);
 
    useEffect(() => {
      // sincroniza monto recibido con suma de pagos
@@ -1927,10 +2013,10 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
     }
     const normalizedTableCode = isDraft
       ? (draftInvoice.reference.trim() || "MANUAL")
-      : selectedOrder!.tableId;
+      : selectedOrder!.tableId ?? selectedOrder!.orderCode;
     const normalizedWaiter = isDraft
       ? (draftInvoice.waiter.trim() || "CAJA")
-      : selectedOrder!.waiter;
+      : selectedOrder!.waiterCode ?? selectedOrder!.waiter ?? null;
 
     const payload = {
       invoice_number: `F-${Date.now()}`,
@@ -1942,7 +2028,7 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
       vat_amount: Number((applyVAT ? summary.taxAmount : 0).toFixed(2)),
       vat_rate: Number((applyVAT ? vatRate : 0).toFixed(4)),
       total_amount: Number(summary.total.toFixed(2)),
-      currency_code: process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO",
+      currency_code: process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "MXN",
       customer_name: customerName.trim() || null,
       customer_tax_id: customerTaxId.trim() || null,
       notes: activeNotes.trim() ? activeNotes.trim() : null,
@@ -1954,15 +2040,26 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
           amount: Number(String(p.amount).replace(/,/g, ".")) || 0,
           reference: p.reference || null,
         })),
+      origin_order_id: isDraft ? null : selectedOrder!.orderId,
     };
 
-    const res = await fetch("/api/invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res.ok) {
-      console.error("Error al guardar la factura", await res.text());
-  return { id: null, invoiceNumber: null };
+    try {
+      const res = await fetch("/api/invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const data = (await res.json()) as { id: number };
+      if (mode === "con-pedido") {
+        await refreshOrders().catch((refreshError) => {
+          console.error("No se pudo refrescar los pedidos", refreshError);
+        });
+      }
+      return { id: data?.id ?? null, invoiceNumber: payload.invoice_number };
+    } catch (error) {
+      console.error("Error al guardar la factura", error);
+      toast({ variant: "error", title: "Facturación", description: "No se pudo guardar la factura." });
+      return { id: null, invoiceNumber: null };
     }
-    const data = (await res.json()) as { id: number };
-    return { id: data?.id ?? null, invoiceNumber: payload.invoice_number };
   }
 
   const handlePrint = async () => {
@@ -1996,7 +2093,7 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
 
     const metaLine = manualFlowActive
       ? `Referencia: ${invoiceLabel}${invoiceWaiter ? ` • Responsable: ${invoiceWaiter}` : ""}`
-      : `Mesa: ${orderSnapshot!.tableLabel} • Mesero: ${orderSnapshot!.waiter}`;
+      : `Mesa: ${orderSnapshot?.tableLabel ?? orderSnapshot?.orderCode ?? "N/D"} • Mesero: ${orderSnapshot?.waiter ?? "No asignado"}`;
 
     const html = `
       <div class="ticket">
@@ -2031,6 +2128,13 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
 
     if (manualFlowActive) {
       resetManualInvoice();
+    } else {
+      setPayments(createInitialPaymentsState());
+      setServiceEnabled(false);
+      setApplyVAT(vatRate > 0);
+      setCustomerName("");
+      setCustomerTaxId("");
+      setAddItemModalOpen(false);
     }
   };
 
@@ -2151,6 +2255,11 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
              {/* Se elimina chip de Mesero como indicas */}
             </CardHeader>
             <CardContent className="flex flex-1 flex-col gap-3 px-6 pb-6 pt-4 min-h-[24rem]">
+              {!isDraft && ordersError ? (
+                <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+                  {ordersError}
+                </div>
+              ) : null}
               <div className="flex-1 min-h-0">
                 {(isDraft || selectedOrder) ? (
                   <div className="overflow-x-auto">
@@ -2185,15 +2294,46 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
                                         ...prev,
                                         items: prev.items.map((it, idx) => (idx === i ? { ...it, qty } : it)),
                                       }));
-                                    } else if (selectedOrder) {
+                                    } else if (selectedOrder && item.id != null) {
+                                      const selectedKey = orderSelectionKey(selectedOrder);
                                       setOrders((prev) =>
                                         prev.map((o) =>
-                                          o.tableId === selectedOrder.tableId
-                                            ? { ...o, items: o.items.map((it, idx) => (idx === i ? { ...it, qty } : it)) }
+                                          orderSelectionKey(o) === selectedKey
+                                            ? {
+                                                ...o,
+                                                items: o.items.map((it) =>
+                                                  it.id === item.id ? { ...it, qty } : it
+                                                ),
+                                              }
                                             : o
                                         )
                                       );
                                     }
+                                  }}
+                                  onBlur={(e) => {
+                                    if (isDraft || !selectedOrder || item.id == null) {
+                                      return;
+                                    }
+                                    const qty = Math.max(1, Number(e.currentTarget.value) || 1);
+                                    void (async () => {
+                                      try {
+                                        const response = await fetch(`/api/orders/${selectedOrder.orderId}/items/${item.id}`, {
+                                          method: "PATCH",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ quantity: qty }),
+                                        });
+                                        if (!response.ok) {
+                                          throw new Error(await response.text());
+                                        }
+                                        await refreshOrders();
+                                      } catch (error) {
+                                        console.error("Error actualizando cantidad", error);
+                                        toast({ variant: "error", title: "Pedidos", description: "No se pudo actualizar la cantidad." });
+                                        await refreshOrders().catch((refreshError) => {
+                                          console.error("No se pudo refrescar los pedidos", refreshError);
+                                        });
+                                      }
+                                    })();
                                   }}
                                   className="h-7 w-16 rounded-lg bg-background/90 text-center text-[11px]"
                                 />
@@ -2212,14 +2352,34 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
                                         ...prev,
                                         items: prev.items.filter((_, idx) => idx !== i),
                                       }));
-                                    } else if (selectedOrder) {
+                                    } else if (selectedOrder && item.id != null) {
+                                      const snapshot = orders;
+                                      const selectedKey = orderSelectionKey(selectedOrder);
                                       setOrders((prev) =>
                                         prev.map((o) =>
-                                          o.tableId === selectedOrder.tableId
-                                            ? { ...o, items: o.items.filter((_, idx) => idx !== i) }
+                                          orderSelectionKey(o) === selectedKey
+                                            ? { ...o, items: o.items.filter((it) => it.id !== item.id) }
                                             : o
                                         )
                                       );
+                                      void (async () => {
+                                        try {
+                                          const response = await fetch(`/api/orders/${selectedOrder.orderId}/items/${item.id}`, {
+                                            method: "DELETE",
+                                          });
+                                          if (!response.ok) {
+                                            throw new Error(await response.text());
+                                          }
+                                          await refreshOrders();
+                                        } catch (error) {
+                                          console.error("Error eliminando artículo del pedido", error);
+                                          setOrders(snapshot);
+                                          toast({ variant: "error", title: "Pedidos", description: "No se pudo eliminar el artículo." });
+                                          await refreshOrders().catch((refreshError) => {
+                                            console.error("No se pudo refrescar los pedidos", refreshError);
+                                          });
+                                        }
+                                      })();
                                     }
                                   }}
                                   aria-label="Quitar producto"
@@ -2239,6 +2399,11 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
                       </tbody>
                     </table>
                   </div>
+                ) : ordersLoading ? (
+                  <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-muted bg-muted/10 p-5 text-xs text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Cargando pedidos activos...
+                  </div>
                 ) : (
                   <div className="rounded-2xl border border-dashed border-muted bg-muted/10 p-5 text-center text-xs text-muted-foreground">No hay mesas registradas.</div>
                 )}
@@ -2255,8 +2420,34 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
                       if (isDraft) {
                         setDraftInvoice((prev) => ({ ...prev, notes: v }));
                       } else if (selectedOrder) {
-                        setOrders(prev => prev.map(o => o.tableId === selectedOrder.tableId ? { ...o, notes: v } : o));
+                        const selectedKey = orderSelectionKey(selectedOrder);
+                        setOrders(prev => prev.map(o => orderSelectionKey(o) === selectedKey ? { ...o, notes: v } : o));
                       }
+                    }}
+                    onBlur={(e) => {
+                      if (isDraft || !selectedOrder) {
+                        return;
+                      }
+                      const value = e.target.value;
+                      void (async () => {
+                        try {
+                          const response = await fetch(`/api/orders/${selectedOrder.orderId}`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ notes: value }),
+                          });
+                          if (!response.ok) {
+                            throw new Error(await response.text());
+                          }
+                          await refreshOrders();
+                        } catch (error) {
+                          console.error("Error actualizando notas del pedido", error);
+                          toast({ variant: "error", title: "Pedidos", description: "No se pudieron guardar las notas." });
+                          await refreshOrders().catch((refreshError) => {
+                            console.error("No se pudo refrescar los pedidos", refreshError);
+                          });
+                        }
+                      })();
                     }}
                     rows={3}
                     className="w-full rounded-xl border border-muted bg-background/90 p-2 text-sm outline-none focus:border-primary"
@@ -2444,7 +2635,7 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
               size="icon"
               className="h-6 w-6 rounded-full"
               disabled={!selectedCatalogItem || selectedCatalogQtyNumber <= 0}
-              onClick={handleConfirmCatalogItem}
+              onClick={() => { void handleConfirmCatalogItem(); }}
               aria-label="Agregar producto al consumo"
             >
               <Plus className="h-3 w-3" />
@@ -2474,9 +2665,11 @@ function FacturacionWorkspace({ mode, priceLists, defaultPriceListCode }: { mode
               variant="destructive"
               className="rounded-2xl"
               onClick={() => {
-                if (handleCancelOrder()) {
-                  setCancelConfirmOpen(false);
-                }
+                void handleCancelOrder().then((success) => {
+                  if (success) {
+                    setCancelConfirmOpen(false);
+                  }
+                });
               }}
             >
               Anular ahora

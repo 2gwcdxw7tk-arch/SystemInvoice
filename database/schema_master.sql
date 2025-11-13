@@ -102,6 +102,56 @@ CREATE INDEX IF NOT EXISTS ix_exchange_rates_rate_date
   ON app.exchange_rates (rate_date DESC) INCLUDE (rate_value, base_currency_code, quote_currency_code);
 
 -- ========================================================
+-- Tabla: app.orders
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.orders (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  order_code VARCHAR(60) NOT NULL UNIQUE,
+  table_id VARCHAR(40) REFERENCES app.tables(id) ON DELETE SET NULL,
+  waiter_code VARCHAR(50),
+  waiter_name VARCHAR(150),
+  guests INTEGER,
+  status VARCHAR(20) NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CANCELLED', 'INVOICED')),
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  closed_at TIMESTAMPTZ,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_orders_touch_updated_at ON app.orders;
+CREATE TRIGGER trg_orders_touch_updated_at
+BEFORE UPDATE ON app.orders
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_orders_status_opened_at
+  ON app.orders (status, opened_at DESC);
+
+-- ========================================================
+-- Tabla: app.order_items
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.order_items (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  order_id BIGINT NOT NULL REFERENCES app.orders(id) ON DELETE CASCADE,
+  article_code VARCHAR(40) NOT NULL,
+  description VARCHAR(200) NOT NULL,
+  quantity NUMERIC(18,4) NOT NULL CHECK (quantity > 0),
+  unit_price NUMERIC(18,6) NOT NULL CHECK (unit_price >= 0),
+  modifiers JSONB,
+  notes VARCHAR(200),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_order_items_touch_updated_at ON app.order_items;
+CREATE TRIGGER trg_order_items_touch_updated_at
+BEFORE UPDATE ON app.order_items
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_order_items_order_id
+  ON app.order_items (order_id) INCLUDE (article_code, quantity, unit_price);
+
+-- ========================================================
 -- Tabla: app.invoices
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.invoices (
@@ -109,6 +159,8 @@ CREATE TABLE IF NOT EXISTS app.invoices (
   invoice_number VARCHAR(40) NOT NULL UNIQUE,
   table_code VARCHAR(40),
   waiter_code VARCHAR(50),
+  invoice_date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  origin_order_id BIGINT REFERENCES app.orders(id) ON DELETE SET NULL,
   subtotal NUMERIC(18,2) NOT NULL DEFAULT 0,
   service_charge NUMERIC(18,2) NOT NULL DEFAULT 0,
   vat_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
@@ -120,6 +172,9 @@ CREATE TABLE IF NOT EXISTS app.invoices (
   customer_tax_id VARCHAR(40),
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS ix_invoices_origin_order
+  ON app.invoices (origin_order_id);
 
 -- ========================================================
 -- Tabla: app.invoice_payments

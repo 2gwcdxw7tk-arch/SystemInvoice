@@ -14,6 +14,8 @@ export interface InvoiceInsertInput {
   invoice_number: string;
   table_code: string | null;
   waiter_code: string | null;
+  invoiceDate: Date;
+  originOrderId?: number | null;
   subtotal: number;
   service_charge: number;
   vat_amount: number;
@@ -49,21 +51,27 @@ export async function insertInvoice(data: InvoiceInsertInput): Promise<InvoiceIn
       });
     }
     data.payments.forEach(p => mockPayments.push({ invoice_id: id, payment: p }));
+    if (data.originOrderId) {
+      const { markOrderAsInvoiced } = await import("@/lib/db/orders");
+      await markOrderAsInvoiced(data.originOrderId, data.invoiceDate);
+    }
     return record;
   }
 
-  const insertResult = await withTransaction(async (client) => {
+  const { id: invoiceId } = await withTransaction(async (client) => {
     const inserted = await client.query<{ id: number }>(
       `INSERT INTO app.invoices (
-         invoice_number, table_code, waiter_code, subtotal, service_charge, vat_amount, vat_rate, total_amount, currency_code, notes, customer_name, customer_tax_id
+         invoice_number, table_code, waiter_code, invoice_date, origin_order_id, subtotal, service_charge, vat_amount, vat_rate, total_amount, currency_code, notes, customer_name, customer_tax_id
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
        )
        RETURNING id`,
       [
         data.invoice_number,
         data.table_code,
         data.waiter_code,
+        data.invoiceDate,
+        data.originOrderId ?? null,
         data.subtotal,
         data.service_charge,
         data.vat_amount,
@@ -105,8 +113,12 @@ export async function insertInvoice(data: InvoiceInsertInput): Promise<InvoiceIn
 
     return { id: invoiceId, invoice_number: data.invoice_number } as InvoiceInsertResult;
   });
+  if (data.originOrderId) {
+    const { markOrderAsInvoiced } = await import("@/lib/db/orders");
+    await markOrderAsInvoiced(data.originOrderId, data.invoiceDate);
+  }
 
-  return insertResult;
+  return { id: invoiceId, invoice_number: data.invoice_number };
 }
 
 export async function getInvoiceByNumber(invoiceNumber: string): Promise<InvoiceInsertResult | null> {
