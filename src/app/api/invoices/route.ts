@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { insertInvoice } from "@/lib/db/invoices";
 import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
-import { getActiveCashRegisterSessionByAdmin } from "@/lib/db/cash-registers";
+import { cashRegisterService } from "@/lib/services/CashRegisterService";
+import { invoiceService } from "@/lib/services/InvoiceService";
 
 const paymentSchema = z.object({
   method: z.enum(["CASH", "CARD", "TRANSFER", "OTHER"]),
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, message: "Sesión inválida" }, { status: 401 });
   }
 
-  const activeSession = await getActiveCashRegisterSessionByAdmin(issuerAdminId);
+  const activeSession = await cashRegisterService.getActiveCashRegisterSessionByAdmin(issuerAdminId);
   if (!activeSession) {
     return NextResponse.json({ success: false, message: "Debes abrir una caja antes de facturar" }, { status: 409 });
   }
@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const payload = parsed.data;
-    const result = await insertInvoice({
+    const result = await invoiceService.createInvoice({
       invoice_number: payload.invoice_number,
       table_code: payload.table_code ?? null,
       waiter_code: payload.waiter_code ?? null,

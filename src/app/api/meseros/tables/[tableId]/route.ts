@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { getWaiterById } from "@/lib/db/auth";
 import { getWaiterTable, storeWaiterTableOrder } from "@/lib/db/tables";
 import { syncWaiterOrderForTable } from "@/lib/db/orders";
+import { waiterService } from "@/lib/services/WaiterService";
 
 const orderLineSchema = z.object({
   articleCode: z.string().trim().min(1),
@@ -68,7 +68,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ t
 
   try {
     const previous = await getWaiterTable(tableId);
-    const waiter = await getWaiterById(waiterId);
+    const waiter = await waiterService.getWaiterById(waiterId);
     if (!waiter) {
       return NextResponse.json({ success: false, message: "Mesero no encontrado" }, { status: 404 });
     }

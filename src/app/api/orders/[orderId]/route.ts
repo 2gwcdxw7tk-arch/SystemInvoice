@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { cancelOrder, updateOrderGuests, updateOrderNotes } from "@/lib/db/orders";
+import { OrderService } from "@/lib/services/orders/OrderService";
+import { OrderRepository } from "@/lib/repositories/orders/OrderRepository";
+
+const orderService = new OrderService(new OrderRepository());
 
 const patchSchema = z
   .object({
@@ -13,8 +16,8 @@ const patchSchema = z
     message: "Debe enviar al menos un campo para actualizar",
   });
 
-export async function PATCH(request: NextRequest, context: { params: Promise<{ orderId: string }> }) {
-  const { orderId: rawOrderId } = await context.params;
+export async function PATCH(request: NextRequest, context: { params: { orderId: string } }) {
+  const { orderId: rawOrderId } = context.params;
   const orderId = Number(rawOrderId);
   if (!Number.isFinite(orderId) || orderId <= 0) {
     return NextResponse.json({ success: false, message: "Identificador de pedido inválido" }, { status: 400 });
@@ -32,13 +35,13 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ o
   try {
     const payload = parsed.data;
     if (payload.status === "CANCELLED") {
-      await cancelOrder(orderId);
+      await orderService.cancelOrder(orderId);
     }
     if (payload.notes !== undefined) {
-      await updateOrderNotes(orderId, payload.notes ?? null);
+      await orderService.updateOrderNotes(orderId, payload.notes ?? null);
     }
     if (payload.guests !== undefined) {
-      await updateOrderGuests(orderId, payload.guests ?? null);
+      await orderService.updateOrderGuests(orderId, payload.guests ?? null);
     }
 
     return NextResponse.json({ success: true });

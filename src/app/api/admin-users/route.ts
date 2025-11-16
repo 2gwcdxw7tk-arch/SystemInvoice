@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { createAdminDirectoryEntry, listAdminDirectory } from "@/lib/db/auth";
+import { adminUserService } from "@/lib/services/AdminUserService";
 
 const createAdminUserSchema = z.object({
   username: z
@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const includeInactive = request.nextUrl.searchParams.get("include_inactive") === "true";
-    const users = await listAdminDirectory({ includeInactive });
+    const users = await adminUserService.listAdminDirectory({ includeInactive });
     return NextResponse.json({ success: true, users });
   } catch (error) {
     console.error("GET /api/admin-users", error);
@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const user = await createAdminDirectoryEntry({
+    const user = await adminUserService.createAdminDirectoryEntry({
       username: parsed.data.username,
       displayName: parsed.data.display_name ?? null,
       password: parsed.data.password,

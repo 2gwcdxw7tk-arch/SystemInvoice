@@ -61,13 +61,7 @@ const mockPriceLists: MockPriceList[] = [
 
 const mockPrices: MockPrice[] = [];
 
-function normalizeCurrency(code: string | undefined | null): string {
-  const fallback = process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO";
-  const trimmed = (code || fallback).trim().toUpperCase();
-  return trimmed.length === 3 ? trimmed : fallback;
-}
-
-function mapDbPriceListRow(row: {
+type PriceListDbRow = {
   id: number;
   code: string;
   name: string;
@@ -79,7 +73,29 @@ function mapDbPriceListRow(row: {
   is_default: boolean;
   created_at: Date;
   updated_at: Date | null;
-}): PriceListRow {
+};
+
+type PriceListItemDbRow = {
+  article_id: number;
+  article_code: string;
+  name: string;
+  unit_label: string;
+  price: number;
+  currency_code: string;
+  is_active: boolean;
+  start_date: Date;
+  end_date: Date | null;
+  created_at: Date;
+  updated_at: Date | null;
+};
+
+function normalizeCurrency(code: string | undefined | null): string {
+  const fallback = process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO";
+  const trimmed = (code || fallback).trim().toUpperCase();
+  return trimmed.length === 3 ? trimmed : fallback;
+}
+
+function mapDbPriceListRow(row: PriceListDbRow): PriceListRow {
   return {
     id: Number(row.id),
     code: row.code,
@@ -100,7 +116,7 @@ export async function listPriceLists(): Promise<PriceListRow[]> {
     return mockPriceLists.map((row) => ({ ...row }));
   }
 
-  const res = await query({
+  const res = await query<PriceListDbRow>({
     text: `SELECT id,
                   code,
                   name,
@@ -126,7 +142,7 @@ export async function getPriceListByCode(code: string): Promise<PriceListRow | n
     return match ? { ...match } : null;
   }
 
-  const res = await query({
+  const res = await query<PriceListDbRow>({
     text: `SELECT id,
                   code,
                   name,
@@ -299,19 +315,7 @@ function mapMockPriceToItemRow(entry: MockPrice): PriceListItemRow {
   } satisfies PriceListItemRow;
 }
 
-function mapDbPriceListItemRow(row: {
-  article_id: number;
-  article_code: string;
-  name: string;
-  unit_label: string;
-  price: number;
-  currency_code: string;
-  is_active: boolean;
-  start_date: Date;
-  end_date: Date | null;
-  created_at: Date;
-  updated_at: Date | null;
-}): PriceListItemRow {
+function mapDbPriceListItemRow(row: PriceListItemDbRow): PriceListItemRow {
   return {
     article_id: Number(row.article_id),
     article_code: row.article_code,
@@ -335,7 +339,7 @@ export async function listPriceListItems(priceListCode: string): Promise<PriceLi
       .map((row) => mapMockPriceToItemRow(row));
   }
 
-  const res = await query({
+  const res = await query<PriceListItemDbRow>({
     text: `SELECT ap.article_id,
                   a.article_code,
                   a.name,

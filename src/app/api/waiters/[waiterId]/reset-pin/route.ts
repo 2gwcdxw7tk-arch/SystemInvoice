@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { resetWaiterPin } from "@/lib/db/auth";
+import { waiterService } from "@/lib/services/WaiterService";
 
 const resetSchema = z.object({
   pin: z
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ wa
   }
 
   try {
-    const waiter = await resetWaiterPin(waiterId, parsed.data.pin);
+    const waiter = await waiterService.resetWaiterPin(waiterId, parsed.data.pin);
     return NextResponse.json({ success: true, waiter });
   } catch (error) {
     console.error(`POST /api/waiters/${waiterId}/reset-pin`, error);

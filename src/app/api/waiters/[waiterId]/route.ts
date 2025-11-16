@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { updateWaiterDirectoryEntry } from "@/lib/db/auth";
+import { waiterService } from "@/lib/services/WaiterService";
 
 const updateSchema = z
   .object({
@@ -51,7 +51,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ w
   }
 
   try {
-    const waiter = await updateWaiterDirectoryEntry(waiterId, {
+    const waiter = await waiterService.updateWaiterDirectoryEntry(waiterId, {
       code: parsed.data.code,
       fullName: parsed.data.full_name,
       phone: parsed.data.phone ?? null,

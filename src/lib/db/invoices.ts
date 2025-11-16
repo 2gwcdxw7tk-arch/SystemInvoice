@@ -1,9 +1,11 @@
 import "server-only";
 
+// test comment
+
 import { env } from "@/lib/env";
 import { registerInvoiceMovements, type InvoiceConsumptionLineInput } from "@/lib/db/inventory";
 import { query, withTransaction } from "@/lib/db/postgres";
-import { registerMockInvoiceForSession } from "@/lib/db/cash-registers";
+import { cashRegisterService } from "@/lib/services/CashRegisterService";
 
 // Tipos para la factura y pagos
 export interface InvoicePaymentInput {
@@ -102,7 +104,7 @@ export async function insertInvoice(data: InvoiceInsertInput): Promise<InvoiceIn
     }
 
     if (data.cash_register_session_id) {
-      registerMockInvoiceForSession({
+      cashRegisterService.registerInvoiceForSession({
         sessionId: data.cash_register_session_id,
         invoiceId: id,
         totalAmount: data.total_amount,

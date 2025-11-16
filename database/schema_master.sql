@@ -214,103 +214,6 @@ CREATE INDEX IF NOT EXISTS ix_order_items_order_id
   ON app.order_items (order_id) INCLUDE (article_code, quantity, unit_price);
 
 -- ========================================================
--- Tabla: app.invoices
--- ========================================================
-CREATE TABLE IF NOT EXISTS app.invoices (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  invoice_number VARCHAR(40) NOT NULL UNIQUE,
-  table_code VARCHAR(40),
-  waiter_code VARCHAR(50),
-  invoice_date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  origin_order_id BIGINT REFERENCES app.orders(id) ON DELETE SET NULL,
-  subtotal NUMERIC(18,2) NOT NULL DEFAULT 0,
-  service_charge NUMERIC(18,2) NOT NULL DEFAULT 0,
-  vat_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
-  vat_rate NUMERIC(9,4) NOT NULL DEFAULT 0,
-  total_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
-  currency_code VARCHAR(3) NOT NULL DEFAULT 'MXN',
-  notes VARCHAR(300),
-  customer_name VARCHAR(150),
-  customer_tax_id VARCHAR(40),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS ix_invoices_origin_order
-  ON app.invoices (origin_order_id);
-
-ALTER TABLE app.invoices
-  ADD COLUMN IF NOT EXISTS issuer_admin_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS cash_register_id INTEGER REFERENCES app.cash_registers(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS cash_register_session_id BIGINT REFERENCES app.cash_register_sessions(id) ON DELETE SET NULL;
-
-CREATE INDEX IF NOT EXISTS ix_invoices_cash_register_session
-  ON app.invoices (cash_register_session_id);
-
--- ========================================================
--- Tabla: app.invoice_payments
--- ========================================================
-CREATE TABLE IF NOT EXISTS app.invoice_payments (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  invoice_id BIGINT NOT NULL REFERENCES app.invoices(id) ON DELETE CASCADE,
-  payment_method VARCHAR(30) NOT NULL,
-  amount NUMERIC(18,2) NOT NULL CHECK (amount >= 0),
-  reference VARCHAR(80),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS ix_invoice_payments_invoice_id
-  ON app.invoice_payments (invoice_id) INCLUDE (payment_method, amount);
-
--- ========================================================
--- Tabla: app.invoice_items
--- ========================================================
-CREATE TABLE IF NOT EXISTS app.invoice_items (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  invoice_id BIGINT NOT NULL REFERENCES app.invoices(id) ON DELETE CASCADE,
-  line_number INTEGER NOT NULL,
-  description VARCHAR(200) NOT NULL,
-  quantity NUMERIC(18,4) NOT NULL CHECK (quantity > 0),
-  unit_price NUMERIC(18,6) NOT NULL CHECK (unit_price >= 0),
-  line_total NUMERIC(18,2) NOT NULL CHECK (line_total >= 0),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS ix_invoice_items_invoice_id
-  ON app.invoice_items (invoice_id) INCLUDE (line_number, line_total);
-
--- ========================================================
--- Tabla: app.article_classifications
--- ========================================================
-CREATE TABLE IF NOT EXISTS app.article_classifications (
-  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  level SMALLINT NOT NULL CHECK (level BETWEEN 1 AND 6),
-  code VARCHAR(8) NOT NULL,
-  full_code VARCHAR(24) NOT NULL,
-  name VARCHAR(120) NOT NULL,
-  parent_full_code VARCHAR(24),
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT uq_article_classifications_full_code UNIQUE (full_code)
-);
-
-DROP TRIGGER IF EXISTS trg_article_classifications_touch_updated_at ON app.article_classifications;
-CREATE TRIGGER trg_article_classifications_touch_updated_at
-BEFORE UPDATE ON app.article_classifications
-FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
-
--- ========================================================
--- Tabla: app.units
--- ========================================================
-CREATE TABLE IF NOT EXISTS app.units (
-  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  code VARCHAR(20) NOT NULL UNIQUE,
-  name VARCHAR(60) NOT NULL,
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- ========================================================
 -- Tabla: app.warehouses
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.warehouses (
@@ -420,9 +323,6 @@ CREATE INDEX IF NOT EXISTS ix_cash_register_session_payments_session
   ON app.cash_register_session_payments (session_id);
 
 -- ========================================================
--- Tabla: app.cash_registers (cajas de facturación)
--- ========================================================
--- ========================================================
 -- Tabla: app.roles y asignación de permisos
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.roles (
@@ -505,6 +405,38 @@ WHERE NOT EXISTS (
   SELECT 1
   FROM app.role_permissions rp
   WHERE rp.role_id = ar.id AND rp.permission_code = perms.permission_code
+);
+
+-- ========================================================
+-- Tabla: app.article_classifications
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.article_classifications (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  level SMALLINT NOT NULL CHECK (level BETWEEN 1 AND 6),
+  code VARCHAR(8) NOT NULL,
+  full_code VARCHAR(24) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  parent_full_code VARCHAR(24),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_article_classifications_full_code UNIQUE (full_code)
+);
+
+DROP TRIGGER IF EXISTS trg_article_classifications_touch_updated_at ON app.article_classifications;
+CREATE TRIGGER trg_article_classifications_touch_updated_at
+BEFORE UPDATE ON app.article_classifications
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+-- ========================================================
+-- Tabla: app.units
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.units (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code VARCHAR(20) NOT NULL UNIQUE,
+  name VARCHAR(60) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ========================================================

@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { upsertArticle, getArticles, getArticleByCode, deleteArticle } from "@/lib/db/articles";
-import { listUnits } from "@/lib/db/units";
 import { requireAdministrator, requireSession } from "@/lib/auth/access";
+import { ArticleService } from "@/lib/services/ArticleService";
+import { ArticleRepository } from "@/lib/repositories/ArticleRepository";
+import { listUnits } from "@/lib/db/units"; // Mantener por ahora para la lógica MOCK
+
+const articleService = new ArticleService(new ArticleRepository());
 
 const articleInputSchema = z.object({
   article_code: z.string().trim().min(1).max(40),
@@ -30,13 +33,13 @@ export async function GET(request: NextRequest) {
   const include_units = searchParams.get("include_units") === "1";
   try {
     if (article_code) {
-      const item = await getArticleByCode(article_code);
+      const item = await articleService.getArticleByCode(article_code);
       if (!item) return NextResponse.json({ success: false, message: "Artículo no encontrado" }, { status: 404 });
       return NextResponse.json({ item });
     }
-    const data = await getArticles({ price_list_code, unit, on_date });
+    const data = await articleService.getArticles({ price_list_code, unit, on_date });
     if (include_units) {
-      const units = await listUnits();
+      const units = await listUnits(); // Mantener por ahora para la lógica MOCK
       return NextResponse.json({ items: data, units });
     }
     return NextResponse.json({ items: data });
@@ -56,7 +59,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
   }
   try {
-    const result = await upsertArticle(parsed.data);
+    const result = await articleService.upsertArticle(parsed.data);
     return NextResponse.json({ id: result.id }, { status: 201 });
   } catch (error) {
     console.error("POST /api/articulos error", error);
@@ -72,7 +75,7 @@ export async function DELETE(request: NextRequest) {
   const article_code = searchParams.get("article_code");
   if (!article_code) return NextResponse.json({ success: false, message: "Falta article_code" }, { status: 400 });
   try {
-    const res = await deleteArticle(article_code);
+    const res = await articleService.deleteArticle(article_code);
     if (!res.deleted) return NextResponse.json({ success: false, message: "Artículo no encontrado" }, { status: 404 });
     return NextResponse.json({ success: true });
   } catch (error) {

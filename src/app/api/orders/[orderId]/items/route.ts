@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { addOrderItem } from "@/lib/db/orders";
+import { OrderService } from "@/lib/services/orders/OrderService";
+import { OrderRepository } from "@/lib/repositories/orders/OrderRepository";
+
+const orderService = new OrderService(new OrderRepository());
 
 const bodySchema = z.object({
   article_code: z.string().trim().min(1).max(40),
@@ -12,8 +15,8 @@ const bodySchema = z.object({
   notes: z.string().trim().max(200).nullable().optional(),
 });
 
-export async function POST(request: NextRequest, context: { params: Promise<{ orderId: string }> }) {
-  const { orderId: rawOrderId } = await context.params;
+export async function POST(request: NextRequest, context: { params: { orderId: string } }) {
+  const { orderId: rawOrderId } = context.params;
   const orderId = Number(rawOrderId);
   if (!Number.isFinite(orderId) || orderId <= 0) {
     return NextResponse.json({ success: false, message: "Identificador de pedido inválido" }, { status: 400 });
@@ -30,7 +33,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
 
   try {
     const payload = parsed.data;
-    await addOrderItem(orderId, {
+    await orderService.addOrderItem(orderId, {
       articleCode: payload.article_code,
       name: payload.description,
       quantity: payload.quantity,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { resetAdminUserPassword } from "@/lib/db/auth";
+import { adminUserService } from "@/lib/services/AdminUserService";
 
 const resetPasswordSchema = z.object({
   password: z
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ad
   }
 
   try {
-    const user = await resetAdminUserPassword(adminUserId, parsed.data.password);
+    const user = await adminUserService.resetAdminUserPassword(adminUserId, parsed.data.password);
     return NextResponse.json({ success: true, user });
   } catch (error) {
     console.error(`POST /api/admin-users/${adminUserId}/reset-password`, error);

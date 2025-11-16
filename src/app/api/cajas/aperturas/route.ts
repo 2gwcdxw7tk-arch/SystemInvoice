@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
-import { openCashRegisterSession } from "@/lib/db/cash-registers";
+import { cashRegisterService } from "@/lib/services/CashRegisterService";
 
 const payloadSchema = z.object({
   cash_register_code: z.string().trim().min(1, "Selecciona una caja"),
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await openCashRegisterSession({
+    const result = await cashRegisterService.openCashRegisterSession({
       adminUserId: Number(session.sub),
       cashRegisterCode: parsed.data.cash_register_code,
       openingAmount: parsed.data.opening_amount,

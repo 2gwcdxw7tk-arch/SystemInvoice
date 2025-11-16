@@ -1,0 +1,570 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["app"]
+}
+
+model admin_user_roles {
+  id            BigInt      @id @default(autoincrement())
+  admin_user_id Int
+  role_id       Int
+  is_primary    Boolean     @default(false)
+  assigned_at   DateTime    @default(now()) @db.Timestamptz(6)
+  admin_users   admin_users @relation(fields: [admin_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  roles         roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([admin_user_id, role_id])
+  @@index([admin_user_id, is_primary(sort: Desc)], map: "ix_admin_user_roles_admin")
+  @@schema("app")
+}
+
+model admin_users {
+  id                                                                         Int                      @id @default(autoincrement())
+  username                                                                   String                   @unique @db.VarChar(120)
+  password_hash                                                              String                   @db.VarChar(100)
+  display_name                                                               String?                  @db.VarChar(150)
+  is_active                                                                  Boolean                  @default(true)
+  last_login_at                                                              DateTime?                @db.Timestamptz(6)
+  created_at                                                                 DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at                                                                 DateTime?                @default(now()) @db.Timestamptz(6)
+  admin_user_roles                                                           admin_user_roles[]
+  cash_register_sessions_cash_register_sessions_admin_user_idToadmin_users   cash_register_sessions[] @relation("cash_register_sessions_admin_user_idToadmin_users")
+  cash_register_sessions_cash_register_sessions_closing_user_idToadmin_users cash_register_sessions[] @relation("cash_register_sessions_closing_user_idToadmin_users")
+  cash_register_users                                                        cash_register_users[]
+
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model article_classifications {
+  id                                                                  Int        @id @default(autoincrement())
+  level                                                               Int        @db.SmallInt
+  code                                                                String     @db.VarChar(8)
+  full_code                                                           String     @unique(map: "uq_article_classifications_full_code") @db.VarChar(24)
+  name                                                                String     @db.VarChar(120)
+  parent_full_code                                                    String?    @db.VarChar(24)
+  is_active                                                           Boolean    @default(true)
+  created_at                                                          DateTime   @default(now()) @db.Timestamptz(6)
+  updated_at                                                          DateTime?  @default(now()) @db.Timestamptz(6)
+  articles_articles_classification_level1_idToarticle_classifications articles[] @relation("articles_classification_level1_idToarticle_classifications")
+  articles_articles_classification_level2_idToarticle_classifications articles[] @relation("articles_classification_level2_idToarticle_classifications")
+  articles_articles_classification_level3_idToarticle_classifications articles[] @relation("articles_classification_level3_idToarticle_classifications")
+
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model article_kits {
+  id                                                   BigInt   @id @default(autoincrement())
+  kit_article_id                                       BigInt
+  component_article_id                                 BigInt
+  component_qty_retail                                 Decimal  @db.Decimal(18, 6)
+  created_at                                           DateTime @default(now()) @db.Timestamptz(6)
+  articles_article_kits_component_article_idToarticles articles @relation("article_kits_component_article_idToarticles", fields: [component_article_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  articles_article_kits_kit_article_idToarticles       articles @relation("article_kits_kit_article_idToarticles", fields: [kit_article_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([kit_article_id, component_article_id], map: "uq_article_kits")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model article_price_rules {
+  id               BigInt      @id @default(autoincrement())
+  article_id       BigInt?
+  price_list_id    Int
+  rule_type        String      @db.VarChar(12)
+  min_qty          Decimal     @db.Decimal(18, 4)
+  max_qty          Decimal?    @db.Decimal(18, 4)
+  discount_percent Decimal?    @db.Decimal(9, 4)
+  bonus_qty        Decimal?    @db.Decimal(18, 4)
+  start_date       DateTime    @db.Date
+  end_date         DateTime?   @db.Date
+  is_active        Boolean     @default(true)
+  created_at       DateTime    @default(now()) @db.Timestamptz(6)
+  articles         articles?   @relation(fields: [article_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  price_lists      price_lists @relation(fields: [price_list_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([price_list_id, article_id, rule_type, start_date(sort: Desc), min_qty, max_qty, discount_percent, bonus_qty], map: "ix_article_price_rules_keys")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model article_prices {
+  id            BigInt      @id @default(autoincrement())
+  article_id    BigInt
+  price_list_id Int
+  price         Decimal     @db.Decimal(18, 6)
+  start_date    DateTime    @db.Date
+  end_date      DateTime?   @db.Date
+  is_active     Boolean     @default(true)
+  created_at    DateTime    @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime?   @default(now()) @db.Timestamptz(6)
+  articles      articles    @relation(fields: [article_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  price_lists   price_lists @relation(fields: [price_list_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([article_id, price_list_id], map: "uq_article_prices_article_list")
+  @@index([article_id, price_list_id, start_date(sort: Desc), price], map: "ix_article_prices_keys")
+  @@schema("app")
+}
+
+model article_warehouses {
+  id           BigInt     @id @default(autoincrement())
+  article_id   BigInt
+  warehouse_id Int
+  is_primary   Boolean    @default(false)
+  created_at   DateTime   @default(now()) @db.Timestamptz(6)
+  articles     articles   @relation(fields: [article_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  warehouses   warehouses @relation(fields: [warehouse_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([article_id, warehouse_id])
+  @@index([warehouse_id, article_id], map: "ix_article_warehouses_lookup")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model articles {
+  id                                                                                 BigInt                          @id @default(autoincrement())
+  article_code                                                                       String                          @unique @db.VarChar(40)
+  name                                                                               String                          @db.VarChar(200)
+  classification_full_code                                                           String?                         @db.VarChar(24)
+  classification_level1_id                                                           Int?
+  classification_level2_id                                                           Int?
+  classification_level3_id                                                           Int?
+  storage_unit                                                                       String                          @db.VarChar(20)
+  retail_unit                                                                        String                          @db.VarChar(20)
+  storage_unit_id                                                                    Int?
+  retail_unit_id                                                                     Int?
+  default_warehouse_id                                                               Int?
+  article_type                                                                       String                          @default("TERMINADO") @db.VarChar(12)
+  conversion_factor                                                                  Decimal                         @db.Decimal(18, 6)
+  is_active                                                                          Boolean                         @default(true)
+  created_at                                                                         DateTime                        @default(now()) @db.Timestamptz(6)
+  updated_at                                                                         DateTime?                       @default(now()) @db.Timestamptz(6)
+  article_kits_article_kits_component_article_idToarticles                           article_kits[]                  @relation("article_kits_component_article_idToarticles")
+  article_kits_article_kits_kit_article_idToarticles                                 article_kits[]                  @relation("article_kits_kit_article_idToarticles")
+  article_price_rules                                                                article_price_rules[]
+  article_prices                                                                     article_prices[]
+  article_warehouses                                                                 article_warehouses[]
+  warehouses                                                                         warehouses?                     @relation(fields: [default_warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  units_articles_retail_unit_idTounits                                               units?                          @relation("articles_retail_unit_idTounits", fields: [retail_unit_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  units_articles_storage_unit_idTounits                                              units?                          @relation("articles_storage_unit_idTounits", fields: [storage_unit_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  article_classifications_articles_classification_level1_idToarticle_classifications article_classifications?        @relation("articles_classification_level1_idToarticle_classifications", fields: [classification_level1_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_articles_class_lvl1")
+  article_classifications_articles_classification_level2_idToarticle_classifications article_classifications?        @relation("articles_classification_level2_idToarticle_classifications", fields: [classification_level2_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_articles_class_lvl2")
+  article_classifications_articles_classification_level3_idToarticle_classifications article_classifications?        @relation("articles_classification_level3_idToarticle_classifications", fields: [classification_level3_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_articles_class_lvl3")
+  inventory_movements_inventory_movements_article_idToarticles                       inventory_movements[]           @relation("inventory_movements_article_idToarticles")
+  inventory_movements_inventory_movements_source_kit_article_idToarticles            inventory_movements[]           @relation("inventory_movements_source_kit_article_idToarticles")
+  inventory_transaction_entries                                                      inventory_transaction_entries[]
+  warehouse_stock                                                                    warehouse_stock[]
+
+  @@index([classification_full_code, name], map: "ix_articles_classification")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model cash_register_session_payments {
+  id                     BigInt                 @id @default(autoincrement())
+  session_id             BigInt
+  payment_method         String                 @db.VarChar(40)
+  expected_amount        Decimal                @default(0) @db.Decimal(18, 2)
+  reported_amount        Decimal                @default(0) @db.Decimal(18, 2)
+  difference_amount      Decimal                @default(0) @db.Decimal(18, 2)
+  transaction_count      Int                    @default(0)
+  updated_at             DateTime               @default(now()) @db.Timestamptz(6)
+  cash_register_sessions cash_register_sessions @relation(fields: [session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([session_id, payment_method])
+  @@index([session_id], map: "ix_cash_register_session_payments_session")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model cash_register_sessions {
+  id                                                              BigInt                           @id @default(autoincrement())
+  cash_register_id                                                Int
+  admin_user_id                                                   Int
+  opening_amount                                                  Decimal                          @default(0) @db.Decimal(18, 2)
+  opening_at                                                      DateTime                         @default(now()) @db.Timestamptz(6)
+  opening_notes                                                   String?                          @db.VarChar(400)
+  closing_amount                                                  Decimal?                         @db.Decimal(18, 2)
+  closing_at                                                      DateTime?                        @db.Timestamptz(6)
+  closing_notes                                                   String?                          @db.VarChar(400)
+  status                                                          String                           @default("OPEN") @db.VarChar(12)
+  closing_user_id                                                 Int?
+  totals_snapshot                                                 Json?
+  created_at                                                      DateTime                         @default(now()) @db.Timestamptz(6)
+  updated_at                                                      DateTime?                        @default(now()) @db.Timestamptz(6)
+  cash_register_session_payments                                  cash_register_session_payments[]
+  admin_users_cash_register_sessions_admin_user_idToadmin_users   admin_users                      @relation("cash_register_sessions_admin_user_idToadmin_users", fields: [admin_user_id], references: [id], onUpdate: NoAction)
+  cash_registers                                                  cash_registers                   @relation(fields: [cash_register_id], references: [id], onUpdate: NoAction)
+  admin_users_cash_register_sessions_closing_user_idToadmin_users admin_users?                     @relation("cash_register_sessions_closing_user_idToadmin_users", fields: [closing_user_id], references: [id], onUpdate: NoAction)
+
+  @@index([cash_register_id, status], map: "ix_cash_register_sessions_register")
+  @@schema("app")
+}
+
+model cash_register_users {
+  id               BigInt         @id @default(autoincrement())
+  cash_register_id Int
+  admin_user_id    Int
+  is_default       Boolean        @default(false)
+  assigned_at      DateTime       @default(now()) @db.Timestamptz(6)
+  admin_users      admin_users    @relation(fields: [admin_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  cash_registers   cash_registers @relation(fields: [cash_register_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([cash_register_id, admin_user_id])
+  @@index([admin_user_id, is_default(sort: Desc)], map: "ix_cash_register_users_admin")
+  @@schema("app")
+}
+
+model cash_registers {
+  id                              Int                      @id @default(autoincrement())
+  code                            String                   @unique @db.VarChar(30)
+  name                            String                   @db.VarChar(120)
+  warehouse_id                    Int
+  allow_manual_warehouse_override Boolean                  @default(false)
+  is_active                       Boolean                  @default(true)
+  notes                           String?                  @db.VarChar(250)
+  created_at                      DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at                      DateTime?                @default(now()) @db.Timestamptz(6)
+  cash_register_sessions          cash_register_sessions[]
+  cash_register_users             cash_register_users[]
+  warehouses                      warehouses               @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([is_active, code, warehouse_id], map: "ix_cash_registers_active")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model exchange_rates {
+  id                  Int       @id @default(autoincrement())
+  rate_date           DateTime  @db.Date
+  rate_value          Decimal   @db.Decimal(18, 6)
+  base_currency_code  String    @db.VarChar(3)
+  quote_currency_code String    @db.VarChar(3)
+  source_name         String?   @db.VarChar(120)
+  created_at          DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@unique([rate_date, base_currency_code, quote_currency_code], map: "uq_exchange_rates")
+  @@index([rate_date(sort: Desc), rate_value, base_currency_code, quote_currency_code], map: "ix_exchange_rates_rate_date")
+  @@schema("app")
+}
+
+model inventory_alerts {
+  id             Int      @id @default(autoincrement())
+  name           String   @db.VarChar(80)
+  description    String?  @db.VarChar(200)
+  threshold      Decimal  @db.Decimal(18, 2)
+  unit_code      String?  @db.VarChar(20)
+  notify_channel String?  @db.VarChar(200)
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([is_active, name], map: "ix_inventory_alerts_active")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model inventory_movements {
+  id                                                           BigInt                        @id @default(autoincrement())
+  transaction_id                                               BigInt
+  entry_id                                                     BigInt
+  article_id                                                   BigInt
+  direction                                                    String                        @db.VarChar(3)
+  quantity_retail                                              Decimal                       @db.Decimal(18, 6)
+  warehouse_id                                                 Int
+  source_kit_article_id                                        BigInt?
+  created_at                                                   DateTime                      @default(now()) @db.Timestamptz(6)
+  articles_inventory_movements_article_idToarticles            articles                      @relation("inventory_movements_article_idToarticles", fields: [article_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  inventory_transaction_entries                                inventory_transaction_entries @relation(fields: [entry_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  articles_inventory_movements_source_kit_article_idToarticles articles?                     @relation("inventory_movements_source_kit_article_idToarticles", fields: [source_kit_article_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  inventory_transactions                                       inventory_transactions        @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  warehouses                                                   warehouses                    @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([article_id, warehouse_id, created_at(sort: Desc)], map: "ix_inventory_movements_article")
+  @@index([transaction_id], map: "ix_inventory_movements_transaction")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model inventory_transaction_entries {
+  id                     BigInt                 @id @default(autoincrement())
+  transaction_id         BigInt
+  article_id             BigInt
+  quantity_entered       Decimal                @db.Decimal(18, 6)
+  entered_unit           String                 @db.VarChar(12)
+  direction              String                 @db.VarChar(3)
+  unit_conversion_factor Decimal?               @db.Decimal(18, 6)
+  kit_multiplier         Decimal?               @db.Decimal(18, 6)
+  cost_per_unit          Decimal?               @db.Decimal(18, 6)
+  subtotal               Decimal?               @db.Decimal(18, 2)
+  notes                  String?                @db.VarChar(300)
+  inventory_movements    inventory_movements[]
+  articles               articles               @relation(fields: [article_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  inventory_transactions inventory_transactions @relation(fields: [transaction_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model inventory_transactions {
+  id                            BigInt                          @id @default(autoincrement())
+  transaction_code              String                          @unique @db.VarChar(60)
+  transaction_type              String                          @db.VarChar(20)
+  warehouse_id                  Int
+  reference                     String?                         @db.VarChar(120)
+  counterparty_name             String?                         @db.VarChar(160)
+  status                        String                          @default("PENDIENTE") @db.VarChar(12)
+  notes                         String?                         @db.VarChar(400)
+  occurred_at                   DateTime                        @default(now()) @db.Timestamptz(6)
+  authorized_by                 String?                         @db.VarChar(80)
+  created_at                    DateTime                        @default(now()) @db.Timestamptz(6)
+  created_by                    String?                         @db.VarChar(80)
+  total_amount                  Decimal?                        @db.Decimal(18, 2)
+  inventory_movements           inventory_movements[]
+  inventory_transaction_entries inventory_transaction_entries[]
+  warehouses                    warehouses                      @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([transaction_type, occurred_at(sort: Desc)], map: "ix_inventory_transactions_type")
+  @@schema("app")
+}
+
+model login_audit {
+  id         BigInt   @id @default(autoincrement())
+  login_type String   @db.VarChar(20)
+  identifier String   @db.VarChar(150)
+  success    Boolean
+  ip_address String?  @db.VarChar(45)
+  user_agent String?  @db.VarChar(300)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  notes      String?  @db.VarChar(300)
+
+  @@index([created_at(sort: Desc)], map: "ix_login_audit_created_at")
+  @@schema("app")
+}
+
+model notification_channels {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(80)
+  channel_type String   @db.VarChar(40)
+  target       String   @db.VarChar(200)
+  preferences  String?  @db.VarChar(500)
+  is_active    Boolean  @default(true)
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([is_active, channel_type], map: "ix_notification_channels_active")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model order_items {
+  id           BigInt   @id @default(autoincrement())
+  order_id     BigInt
+  article_code String   @db.VarChar(40)
+  description  String   @db.VarChar(200)
+  quantity     Decimal  @db.Decimal(18, 4)
+  unit_price   Decimal  @db.Decimal(18, 6)
+  modifiers    Json?
+  notes        String?  @db.VarChar(200)
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime @default(now()) @db.Timestamptz(6)
+  orders       orders   @relation(fields: [order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([order_id, article_code, quantity, unit_price], map: "ix_order_items_order_id")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model orders {
+  id          BigInt        @id @default(autoincrement())
+  order_code  String        @unique @db.VarChar(60)
+  table_id    String?       @db.VarChar(40)
+  waiter_code String?       @db.VarChar(50)
+  waiter_name String?       @db.VarChar(150)
+  guests      Int?
+  status      String        @default("OPEN") @db.VarChar(20)
+  opened_at   DateTime      @default(now()) @db.Timestamptz(6)
+  closed_at   DateTime?     @db.Timestamptz(6)
+  notes       String?
+  created_at  DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime      @default(now()) @db.Timestamptz(6)
+  order_items order_items[]
+  tables      tables?       @relation(fields: [table_id], references: [id], onUpdate: NoAction)
+
+  @@index([status, opened_at(sort: Desc)], map: "ix_orders_status_opened_at")
+  @@schema("app")
+}
+
+model price_lists {
+  id                  Int                   @id @default(autoincrement())
+  code                String                @unique @db.VarChar(30)
+  name                String                @db.VarChar(120)
+  start_date          DateTime              @db.Date
+  end_date            DateTime?             @db.Date
+  is_active           Boolean               @default(true)
+  description         String?               @db.VarChar(200)
+  currency_code       String                @default("NIO") @db.VarChar(3)
+  is_default          Boolean               @default(false)
+  created_at          DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime?             @default(now()) @db.Timestamptz(6)
+  article_price_rules article_price_rules[]
+  article_prices      article_prices[]
+
+  @@schema("app")
+}
+
+model role_permissions {
+  role_id         Int
+  permission_code String   @db.VarChar(80)
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+  roles           roles    @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([role_id, permission_code])
+  @@index([permission_code], map: "ix_role_permissions_permission")
+  @@schema("app")
+}
+
+model roles {
+  id               Int                @id @default(autoincrement())
+  code             String             @unique @db.VarChar(40)
+  name             String             @db.VarChar(120)
+  description      String?            @db.VarChar(250)
+  is_active        Boolean            @default(true)
+  created_at       DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  admin_user_roles admin_user_roles[]
+  role_permissions role_permissions[]
+
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model table_reservations {
+  table_id      String   @id @db.VarChar(40)
+  status        String   @db.VarChar(20)
+  reserved_by   String   @db.VarChar(150)
+  contact_name  String?  @db.VarChar(150)
+  contact_phone String?  @db.VarChar(50)
+  party_size    Int?
+  notes         String?
+  scheduled_for String?  @db.VarChar(50)
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime @default(now()) @db.Timestamptz(6)
+  tables        tables   @relation(fields: [table_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([status, scheduled_for], map: "ix_table_reservations_status")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model table_state {
+  table_id             String   @id @db.VarChar(40)
+  assigned_waiter_id   Int?
+  assigned_waiter_name String?  @db.VarChar(150)
+  status               String   @db.VarChar(20)
+  pending_items        String   @default("[]")
+  sent_items           String   @default("[]")
+  updated_at           DateTime @default(now()) @db.Timestamptz(6)
+  tables               tables   @relation(fields: [table_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@schema("app")
+}
+
+model table_zones {
+  id         String    @id @db.VarChar(40)
+  name       String    @db.VarChar(120)
+  is_active  Boolean   @default(true)
+  sort_order Int
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
+  tables     tables[]
+
+  @@index([sort_order], map: "ix_table_zones_sort_order")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model tables {
+  id                 String              @id @db.VarChar(40)
+  label              String              @db.VarChar(120)
+  zone_id            String?             @db.VarChar(40)
+  capacity           Int?
+  is_active          Boolean             @default(true)
+  sort_order         Int
+  created_at         DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime?           @default(now()) @db.Timestamptz(6)
+  orders             orders[]
+  table_reservations table_reservations?
+  table_state        table_state?
+  table_zones        table_zones?        @relation(fields: [zone_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([is_active, sort_order, label], map: "ix_tables_active_order")
+  @@schema("app")
+}
+
+model units {
+  id                                       Int        @id @default(autoincrement())
+  code                                     String     @unique @db.VarChar(20)
+  name                                     String     @db.VarChar(60)
+  is_active                                Boolean    @default(true)
+  created_at                               DateTime   @default(now()) @db.Timestamptz(6)
+  articles_articles_retail_unit_idTounits  articles[] @relation("articles_retail_unit_idTounits")
+  articles_articles_storage_unit_idTounits articles[] @relation("articles_storage_unit_idTounits")
+
+  @@schema("app")
+}
+
+model waiters {
+  id            Int       @id @default(autoincrement())
+  code          String    @unique @db.VarChar(50)
+  full_name     String    @db.VarChar(150)
+  pin_hash      String    @db.VarChar(100)
+  pin_signature String    @db.Char(64)
+  phone         String?   @db.VarChar(30)
+  email         String?   @db.VarChar(150)
+  is_active     Boolean   @default(true)
+  last_login_at DateTime? @db.Timestamptz(6)
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@index([is_active, code, full_name], map: "ix_waiters_is_active")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model warehouse_stock {
+  id               BigInt     @id @default(autoincrement())
+  article_id       BigInt
+  warehouse_id     Int
+  quantity_retail  Decimal    @default(0) @db.Decimal(30, 6)
+  quantity_storage Decimal    @default(0) @db.Decimal(30, 6)
+  updated_at       DateTime   @default(now()) @db.Timestamptz(6)
+  articles         articles   @relation(fields: [article_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  warehouses       warehouses @relation(fields: [warehouse_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([article_id, warehouse_id])
+  @@index([warehouse_id, article_id], map: "ix_warehouse_stock_wh")
+  @@schema("app")
+}
+
+model warehouses {
+  id                     Int                      @id @default(autoincrement())
+  code                   String                   @unique @db.VarChar(20)
+  name                   String                   @db.VarChar(100)
+  is_active              Boolean                  @default(true)
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  article_warehouses     article_warehouses[]
+  articles               articles[]
+  cash_registers         cash_registers[]
+  inventory_movements    inventory_movements[]
+  inventory_transactions inventory_transactions[]
+  warehouse_stock        warehouse_stock[]
+
+  @@schema("app")
+}

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { listAdminRoleDefinitions } from "@/lib/db/auth";
+import { adminUserService } from "@/lib/services/AdminUserService";
 
 export async function GET(request: NextRequest) {
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const includeInactive = request.nextUrl.searchParams.get("include_inactive") === "true";
-    const roles = await listAdminRoleDefinitions({ includeInactive });
+    const roles = await adminUserService.listAdminRoleDefinitions({ includeInactive });
     return NextResponse.json({ success: true, roles });
   } catch (error) {
     console.error("GET /api/admin-users/roles", error);

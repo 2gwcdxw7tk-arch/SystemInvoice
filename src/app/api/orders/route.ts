@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
+import { OrderService } from "@/lib/services/orders/OrderService";
+import { OrderRepository } from "@/lib/repositories/orders/OrderRepository";
 
-import { listOpenOrders } from "@/lib/db/orders";
+const orderService = new OrderService(new OrderRepository());
 
 export async function GET() {
   try {
-    const orders = await listOpenOrders();
+    const orders = await orderService.listOpenOrders();
     return NextResponse.json({ orders });
   } catch (error) {
     console.error("GET /api/orders error", error);

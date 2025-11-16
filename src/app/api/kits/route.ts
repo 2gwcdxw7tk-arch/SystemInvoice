@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getKitComponents, upsertKitComponents } from "@/lib/db/articleKits";
 import { requireAdministrator } from "@/lib/auth/access";
+import { ArticleKitService } from "@/lib/services/ArticleKitService";
+import { ArticleKitRepository } from "@/lib/repositories/ArticleKitRepository";
+
+const articleKitService = new ArticleKitService(new ArticleKitRepository());
 
 const upsertSchema = z.object({
   kit_article_code: z.string().trim().min(1).max(40),
@@ -19,7 +22,7 @@ export async function GET(request: NextRequest) {
   const kit_article_code = searchParams.get("kit_article_code");
   if (!kit_article_code) return NextResponse.json({ success: false, message: "Falta kit_article_code" }, { status: 400 });
   try {
-    const items = await getKitComponents(kit_article_code);
+    const items = await articleKitService.getKitComponents(kit_article_code);
     return NextResponse.json({ items });
   } catch (error) {
     console.error("GET /api/kits error", error);
@@ -37,7 +40,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
   }
   try {
-    const res = await upsertKitComponents(parsed.data.kit_article_code, parsed.data.components);
+    const res = await articleKitService.upsertKitComponents(parsed.data.kit_article_code, parsed.data.components);
     return NextResponse.json({ updated: res.count }, { status: 200 });
   } catch (error) {
     console.error("POST /api/kits error", error);

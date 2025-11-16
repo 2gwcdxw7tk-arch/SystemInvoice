@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button } from "@/components/ui/button";
@@ -55,6 +55,29 @@ import { useSession } from "@/components/providers/session-provider";
  }
  type PaymentMethod = "CASH" | "CARD" | "TRANSFER" | "OTHER";
  interface Payment { method: PaymentMethod; amount: string; reference?: string }
+
+type ServerPriceList = {
+  code?: string | null;
+  name?: string | null;
+  currency_code?: string | null;
+  description?: string | null;
+  is_active?: boolean | null;
+  is_default?: boolean | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type ServerPriceListItem = {
+  article_id?: number | string | null;
+  article_code?: string | null;
+  name?: string | null;
+  unit?: string | null;
+  price?: number | string | null;
+  currency_code?: string | null;
+  is_active?: boolean | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
 
 const tableStatusLabels: Record<KitchenOrderStatus, string> = {
   OPEN: "Ocupada",
@@ -1281,7 +1304,7 @@ export default function FacturacionPage() {
   const [defaultPriceListCode, setDefaultPriceListCode] = useState(envDefaultPriceListCode);
   const loadedPriceListItemsRef = useRef<Set<string>>(new Set());
 
-  const mapServerPriceList = useCallback((entry: any): PriceList => {
+  const mapServerPriceList = useCallback((entry: ServerPriceList): PriceList => {
     const updatedAtRaw = entry?.updated_at ?? entry?.created_at ?? null;
     const updatedAt = updatedAtRaw ? new Date(updatedAtRaw) : new Date();
     const code = String(entry?.code ?? "").toUpperCase();
@@ -1297,7 +1320,7 @@ export default function FacturacionPage() {
     } satisfies PriceList;
   }, [defaultCurrency]);
 
-  const mapServerPriceListItem = useCallback((entry: any): PriceListItem => {
+  const mapServerPriceListItem = useCallback((entry: ServerPriceListItem): PriceListItem => {
     const updatedAtRaw = entry?.updated_at ?? entry?.created_at ?? null;
     const updatedAt = updatedAtRaw ? new Date(updatedAtRaw) : new Date();
     return {

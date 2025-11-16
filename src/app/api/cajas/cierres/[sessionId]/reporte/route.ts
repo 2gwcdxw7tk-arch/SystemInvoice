@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
-import { getCashRegisterClosureReport } from "@/lib/db/cash-registers";
+import { cashRegisterService } from "@/lib/services/CashRegisterService";
 
-function buildCsv(report: Awaited<ReturnType<typeof getCashRegisterClosureReport>>): string {
+function buildCsv(
+  report: Awaited<ReturnType<typeof cashRegisterService.getCashRegisterClosureReport>>
+): string {
   if (!report) {
     return "";
   }
@@ -52,7 +54,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     return NextResponse.json({ success: false, message: "Identificador de sesión inválido" }, { status: 400 });
   }
 
-  const report = await getCashRegisterClosureReport(sessionId);
+  const report = await cashRegisterService.getCashRegisterClosureReport(sessionId);
   if (!report) {
     return NextResponse.json({ success: false, message: "No se encontró la sesión solicitada" }, { status: 404 });
   }

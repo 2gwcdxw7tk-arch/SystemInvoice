@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { getWaiterById } from "@/lib/db/auth";
+import { waiterService } from "@/lib/services/WaiterService";
 
 export async function GET(request: NextRequest) {
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const waiter = await getWaiterById(waiterId);
+    const waiter = await waiterService.getWaiterById(waiterId);
     if (!waiter) {
       return NextResponse.json({ success: false, message: "Mesero no encontrado" }, { status: 404 });
     }

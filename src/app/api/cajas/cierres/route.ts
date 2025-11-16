@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
-import { closeCashRegisterSession } from "@/lib/db/cash-registers";
+import { cashRegisterService } from "@/lib/services/CashRegisterService";
 
 const paymentSchema = z.object({
   method: z.string().trim().min(1),
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const summary = await closeCashRegisterSession({
+    const summary = await cashRegisterService.closeCashRegisterSession({
       adminUserId: Number(session.sub),
       sessionId: parsed.data.session_id,
       closingAmount: parsed.data.closing_amount,

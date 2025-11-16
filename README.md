@@ -12,6 +12,27 @@ Plataforma de facturación electrónica construida con Next.js 15 (App Router) y
 - Zod para validación de variables de entorno.
 - Dockerfile multietapa (`node:20-alpine`) y `.dockerignore` optimizado.
 
+## Arquitectura de datos y servicios
+
+Toda la persistencia vive ahora sobre Prisma y se organiza en tres capas:
+
+- **Prisma client** (`src/lib/db/prisma.ts`): instancia única que encapsula la conexión al schema `app`. La factoría admite transacciones (`prisma.$transaction`) y se reutiliza en tests o tareas en segundo plano.
+- **Repositorios** (`src/lib/repositories/**`): cada módulo expone una interfaz (`I*.ts`) y una implementación concreta que traduce entre modelos Prisma y DTOs usados por la aplicación. Ejemplos recientes: `AdminUserRepository` y `WaiterRepository`.
+- **Servicios** (`src/lib/services/**`): coordinan reglas de negocio, mock mode y dependencias cruzadas (cajas, pedidos, roles). Se consumen desde los handlers de API y componentes server. `adminUserService` y `waiterService` son los puntos de entrada para autenticación y mantenimiento de usuarios.
+
+El modo demo se conserva gracias a los servicios: cada servicio dispone de un contexto in-memory que emula la base sin tocar PostgreSQL cuando `MOCK_DATA=true`. Esto evita duplicar lógica y mantiene la paridad entre pruebas y producción.
+
+### Estado del plan de migración
+
+La migración de módulos legacy (`src/lib/db/*.ts`) a repositorios Prisma ya concluyó para:
+
+- Artículos, kits y catálogo de precios.
+- Alertas de inventario y notificaciones.
+- Facturación, órdenes y cajas.
+- Autenticación y directorio de administradores y meseros (nueva capa `WaiterService`).
+
+Los handlers de API dejaron de importar helpers de `src/lib/db/auth.ts` (archivo eliminado) y ahora dependen de los servicios registrados. Cualquier nuevo módulo debe seguir este patrón repositorio + servicio para garantizar consistencia y claridad en el manejo de transacciones y mock mode.
+
 ## Requisitos previos
 
 - Node.js >= 18.18 (recomendado 20 LTS).
@@ -301,14 +322,12 @@ GET /api/articulos?price_list_code=BASE&unit=RETAIL
 
 Retorna `items[]` con `price.base_price` convertida a la unidad solicitada.
 
-Próximos pasos sugeridos (pendientes):
+Próximos pasos sugeridos (backlog funcional):
 - Endpoint para cálculo de precio efectivo aplicando reglas de `app.article_price_rules`.
 - Selector integrado en `/facturacion` para añadir artículos del catálogo.
 - Interfaz para mantenimiento de clasificaciones jerárquicas (árbol navegable completo niveles 1–6).
 - Gestión de reglas de descuento/bonificación desde UI.
-- Módulo de inventario base (stock por bodega y movimientos/kardex).
-- Integración inventario-facturación (descarga de stock y expansión de kits en ventas/compras).
- - Integración de armado de kits con movimientos de inventario (expansión en ventas y compras).
+- Módulo de inventario base (stock por bodega y movimientos/kardex) con expansión automática de kits en ventas/compras.
 - Módulo de listas de precio y asignación de precios (`/precios`).
 
 Para añadir nuevos componentes shadcn:
@@ -339,7 +358,7 @@ src/
 	config/           # Configuración global (site)
 	lib/              # Utilidades, env y capa de datos
 database/          # Script maestro schema_master.sql (fuente única de verdad de la BD)
-src/lib/db/invoices.ts # Capa de acceso a datos para facturas y pagos múltiples
+src/lib/services/InvoiceService.ts # Capa de negocio para facturas y pagos múltiples
 ```
 
 ## Calidad y próximos pasos

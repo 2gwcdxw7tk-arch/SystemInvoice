@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { updateAdminDirectoryEntry } from "@/lib/db/auth";
+import { adminUserService } from "@/lib/services/AdminUserService";
 
 const updateAdminUserSchema = z.object({
   display_name: z
@@ -45,7 +45,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ a
   }
 
   try {
-    const user = await updateAdminDirectoryEntry(adminUserId, {
+    const user = await adminUserService.updateAdminDirectoryEntry(adminUserId, {
       displayName: parsed.data.display_name ?? undefined,
       isActive: parsed.data.is_active,
       roleCodes: parsed.data.roles,

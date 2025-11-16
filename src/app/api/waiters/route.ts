@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { createWaiterDirectoryEntry, listWaiterDirectory } from "@/lib/db/auth";
+import { waiterService } from "@/lib/services/WaiterService";
 
 const createWaiterSchema = z.object({
   code: z
@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const includeInactive = request.nextUrl.searchParams.get("include_inactive") === "true";
-    const waiters = await listWaiterDirectory({ includeInactive });
+    const waiters = await waiterService.listWaiterDirectory({ includeInactive });
     return NextResponse.json({ success: true, waiters });
   } catch (error) {
     console.error("GET /api/waiters", error);
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const waiter = await createWaiterDirectoryEntry({
+    const waiter = await waiterService.createWaiterDirectoryEntry({
       code: parsed.data.code,
       fullName: parsed.data.full_name,
       phone: parsed.data.phone ?? null,

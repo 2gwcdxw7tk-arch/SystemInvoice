@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
-import { getActiveCashRegisterSessionByAdmin, listCashRegistersForAdmin } from "@/lib/db/cash-registers";
+import { cashRegisterService } from "@/lib/services/CashRegisterService";
 
 const responseSchema = z.object({
   success: z.literal(true),
@@ -59,8 +59,8 @@ export async function GET(request: NextRequest) {
 
   const adminId = Number(session.sub);
   const [assignments, currentSession] = await Promise.all([
-    listCashRegistersForAdmin(adminId),
-    getActiveCashRegisterSessionByAdmin(adminId),
+    cashRegisterService.listCashRegistersForAdmin(adminId),
+    cashRegisterService.getActiveCashRegisterSessionByAdmin(adminId),
   ]);
 
   const payload = {

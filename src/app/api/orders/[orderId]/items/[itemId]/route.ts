@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { removeOrderItem, updateOrderItem } from "@/lib/db/orders";
+import { OrderService } from "@/lib/services/orders/OrderService";
+import { OrderRepository } from "@/lib/repositories/orders/OrderRepository";
+
+const orderService = new OrderService(new OrderRepository());
 
 const patchSchema = z
   .object({
@@ -28,8 +31,8 @@ function parseIds(params: { orderId: string; itemId: string }) {
   return { orderId, itemId };
 }
 
-export async function PATCH(request: NextRequest, context: { params: Promise<{ orderId: string; itemId: string }> }) {
-  const params = await context.params;
+export async function PATCH(request: NextRequest, context: { params: { orderId: string; itemId: string } }) {
+  const params = context.params;
   const ids = parseIds(params);
   if (!ids) {
     return NextResponse.json({ success: false, message: "Identificadores inválidos" }, { status: 400 });
@@ -46,7 +49,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ o
 
   try {
     const payload = parsed.data;
-    await updateOrderItem(ids.orderId, ids.itemId, {
+    await orderService.updateOrderItem(ids.orderId, ids.itemId, {
       quantity: payload.quantity,
       unitPrice: payload.unit_price,
       modifiers: payload.modifiers,
@@ -59,15 +62,15 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ o
   }
 }
 
-export async function DELETE(_request: NextRequest, context: { params: Promise<{ orderId: string; itemId: string }> }) {
-  const params = await context.params;
+export async function DELETE(_request: NextRequest, context: { params: { orderId: string; itemId: string } }) {
+  const params = context.params;
   const ids = parseIds(params);
   if (!ids) {
     return NextResponse.json({ success: false, message: "Identificadores inválidos" }, { status: 400 });
   }
 
   try {
-    await removeOrderItem(ids.orderId, ids.itemId);
+    await orderService.removeOrderItem(ids.orderId, ids.itemId);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error(`DELETE /api/orders/${ids.orderId}/items/${ids.itemId} error`, error);

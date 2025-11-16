@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { verifyAdminCredentials, verifyWaiterPin } from "@/lib/db/auth";
 import { createEmptySessionCookie, createSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { env } from "@/lib/env";
+import { adminUserService } from "@/lib/services/AdminUserService";
+import { waiterService } from "@/lib/services/WaiterService";
 
 const loginSchema = z
   .object({
@@ -59,7 +60,7 @@ export async function POST(request: NextRequest) {
   };
 
   if (payload.role === "admin") {
-    const result = await verifyAdminCredentials(payload.username!, payload.password!, meta);
+    const result = await adminUserService.verifyAdminCredentials(payload.username!, payload.password!, meta);
     const defaultCashRegisterAssignment = result.context?.defaultCashRegister ?? null;
     const defaultCashRegister = defaultCashRegisterAssignment
       ? {
@@ -122,7 +123,7 @@ export async function POST(request: NextRequest) {
     return response;
   }
 
-  const result = await verifyWaiterPin(payload.pin!, meta);
+  const result = await waiterService.verifyWaiterPin(payload.pin!, meta);
   const response = NextResponse.json(
     {
       success: result.success,
