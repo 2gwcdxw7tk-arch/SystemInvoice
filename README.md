@@ -199,6 +199,24 @@ Ejemplo de carga:
 }
 ```
 
+### Catálogo de bodegas (`/api/inventario/warehouses`)
+
+- `GET /api/inventario/warehouses?include_inactive=1`: lista las bodegas activas y opcionalmente las inactivas. Responde con `items[]` (`{ id, code, name, is_active }`). Requiere sesión válida con rol `FACTURADOR`, `ADMINISTRADOR` o permisos `inventory.view` / `inventory.report.view`.
+- `POST /api/inventario/warehouses`: crea una nueva bodega. Acepta `code`, `name` y `is_active` (por defecto `true`). Restringido a administradores.
+- `PATCH /api/inventario/warehouses/{code}`: actualiza `name` y/o `is_active` de una bodega existente. Devuelve el registro normalizado. Restringido a administradores.
+
+Ejemplo de creación:
+
+```bash
+curl -X POST http://localhost:3000/api/inventario/warehouses \
+	-H "Content-Type: application/json" \
+	-d '{
+		"code": "SECUNDARIA",
+		"name": "Bodega secundaria",
+		"is_active": true
+	}'
+```
+
 La respuesta exitosa incluye `transaction_id` y `transaction_code`. Las validaciones garantizan almacenes distintos, autorizador obligatorio y cantidades positivas.
 
 ## Autenticación y sesiones

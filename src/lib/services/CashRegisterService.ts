@@ -16,6 +16,7 @@ import {
 import { buildClosureSummary } from "@/lib/services/cash-registers/summary";
 import type { ICashRegisterRepository } from "@/lib/repositories/cash-registers/ICashRegisterRepository";
 import { CashRegisterRepository } from "@/lib/repositories/cash-registers/CashRegisterRepository";
+import { warehouseService } from "@/lib/services/WarehouseService";
 
 const normalizeCode = (value: string) => value.trim().toUpperCase();
 
@@ -175,14 +176,9 @@ export class CashRegisterService {
     }
 
     const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
-    const warehouseCatalog = [
-      { id: 1, code: "PRINCIPAL", name: "Almacén principal" },
-      { id: 2, code: "COCINA", name: "Cocina" },
-      { id: 3, code: "BAR", name: "Barra principal" },
-    ];
-    const warehouse = warehouseCatalog.find((item) => item.code === normalizedWarehouseCode);
-    if (!warehouse) {
-      throw new Error(`El almacén ${normalizedWarehouseCode} no existe (mock)`);
+    const warehouse = await warehouseService.getWarehouseByCode(normalizedWarehouseCode);
+    if (!warehouse || !warehouse.isActive) {
+      throw new Error(`El almacén ${normalizedWarehouseCode} no existe o está inactivo (mock)`);
     }
 
     const nowIso = new Date().toISOString();
@@ -232,14 +228,9 @@ export class CashRegisterService {
 
     if (typeof input.warehouseCode === "string" && input.warehouseCode.trim().length > 0) {
       const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
-      const warehouseCatalog = [
-        { id: 1, code: "PRINCIPAL", name: "Almacén principal" },
-        { id: 2, code: "COCINA", name: "Cocina" },
-        { id: 3, code: "BAR", name: "Barra principal" },
-      ];
-      const warehouse = warehouseCatalog.find((item) => item.code === normalizedWarehouseCode);
-      if (!warehouse) {
-        throw new Error(`El almacén ${normalizedWarehouseCode} no existe (mock)`);
+      const warehouse = await warehouseService.getWarehouseByCode(normalizedWarehouseCode);
+      if (!warehouse || !warehouse.isActive) {
+        throw new Error(`El almacén ${normalizedWarehouseCode} no existe o está inactivo (mock)`);
       }
       target.warehouseId = warehouse.id;
       target.warehouseCode = warehouse.code;

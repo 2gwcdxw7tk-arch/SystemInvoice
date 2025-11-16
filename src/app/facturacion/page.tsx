@@ -514,6 +514,7 @@ function PriceListWorkspace({
       const response = await fetch("/api/precios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ action: "toggle-active", payload: { code: list.id, is_active: !list.isActive } }),
       });
       if (!response.ok) {
@@ -536,6 +537,7 @@ function PriceListWorkspace({
       const response = await fetch("/api/precios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ action: "set-default", payload: { code: list.id } }),
       });
       if (!response.ok) {
@@ -565,6 +567,7 @@ function PriceListWorkspace({
       const response = await fetch("/api/precios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           action: "price-list",
           payload: {
@@ -693,6 +696,7 @@ function PriceListWorkspace({
       const response = await fetch("/api/precios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           action: "set-price",
           payload: {
@@ -734,6 +738,7 @@ function PriceListWorkspace({
       const response = await fetch("/api/precios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           action: "toggle-article",
           payload: {
@@ -778,6 +783,7 @@ function PriceListWorkspace({
       const response = await fetch("/api/precios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           action: "delete-article",
           payload: {
@@ -820,6 +826,7 @@ function PriceListWorkspace({
       const response = await fetch("/api/precios", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           action: "set-price",
           payload: {
@@ -1411,7 +1418,7 @@ export default function FacturacionPage() {
   const refreshPriceLists = useCallback(async () => {
     setPriceListsLoading(true);
     try {
-      const response = await fetch("/api/precios", { cache: "no-store" });
+      const response = await fetch("/api/precios", { cache: "no-store", credentials: "include" });
       if (!response.ok) {
         throw new Error(await response.text());
       }

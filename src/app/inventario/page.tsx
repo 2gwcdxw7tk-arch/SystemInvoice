@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { ArrowLeftRight, ClipboardList, Notebook, PackageSearch, ShoppingCart } from "lucide-react";
+import { ArrowLeftRight, Boxes, ClipboardList, Notebook, PackageSearch, ShoppingCart } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +12,8 @@ type InventoryRoute =
   | "/inventario/existencias"
   | "/inventario/registro-compras"
   | "/inventario/registro-consumos"
-  | "/inventario/traspasos";
+  | "/inventario/traspasos"
+  | "/inventario/bodegas";
 
 const MENU_ITEMS: Array<{ href: InventoryRoute; title: string; description: string; icon: typeof ClipboardList }> = [
   { href: "/inventario/kardex", title: "Kardex", description: "Movimiento detallado de entradas y salidas por artículo.", icon: ClipboardList },
@@ -20,6 +21,7 @@ const MENU_ITEMS: Array<{ href: InventoryRoute; title: string; description: stri
   { href: "/inventario/registro-compras", title: "Registro de compras", description: "Historial de compras, facturas y costos asociados.", icon: ShoppingCart },
   { href: "/inventario/registro-consumos", title: "Registro de consumos", description: "Consumos internos, mermas y ajustes autorizados.", icon: Notebook },
   { href: "/inventario/traspasos", title: "Traspasos", description: "Traslada existencias entre almacenes con folio y autorizaciones.", icon: ArrowLeftRight },
+  { href: "/inventario/bodegas", title: "Bodegas", description: "Da de alta y administra los almacenes disponibles en el sistema.", icon: Boxes },
 ];
 
 export default function InventarioPage() {
