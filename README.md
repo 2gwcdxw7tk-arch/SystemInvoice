@@ -74,11 +74,12 @@ El endpoint `GET /api/health` ejecuta un `SELECT 1` para validar la conectividad
 	```bash
 	psql -d facturador -f database/schema_master.sql
 	```
-4. Genera un hash bcrypt para la contraseña del primer usuario administrador (reemplaza `TuPassword$123` por la clave deseada):
+4. El script crea automáticamente un administrador inicial con usuario `admin` y la contraseña temporal `AdminTemporal2024!`. Inicia sesión con esas credenciales y cámbialas inmediatamente desde el módulo **Usuarios**.
+5. (Opcional) Genera un hash bcrypt para la contraseña de un administrador adicional (reemplaza `TuPassword$123` por la clave deseada):
 	```bash
 	node -e "console.log(require('bcryptjs').hashSync('TuPassword$123', 10))"
 	```
-5. Inserta el usuario y asígnale el rol `ADMINISTRADOR` (sustituye `<HASH_BCRYPT>` por el valor impreso y ajusta el correo si lo deseas):
+6. (Opcional) Inserta el usuario y asígnale el rol `ADMINISTRADOR` (sustituye `<HASH_BCRYPT>` por el valor impreso y ajusta el correo si lo deseas):
 	```sql
 	INSERT INTO app.admin_users (username, password_hash, display_name, is_active)
 	VALUES ('admin@tuempresa.com', '<HASH_BCRYPT>', 'Admin Principal', TRUE)
@@ -91,7 +92,7 @@ El endpoint `GET /api/health` ejecuta un `SELECT 1` para validar la conectividad
 	FROM app.roles r
 	WHERE r.code = 'ADMINISTRADOR';
 	```
-6. Inicia sesión en la aplicación usando el correo y la contraseña originales (no el hash). Ese usuario ya contará con todos los permisos administrativos.
+7. (Opcional) Inicia sesión en la aplicación usando el correo y la contraseña originales (no el hash). Ese usuario ya contará con todos los permisos administrativos.
 
 ## Variables de entorno
 

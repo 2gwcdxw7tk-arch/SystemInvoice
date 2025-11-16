@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button } from "@/components/ui/button";
@@ -1098,12 +1099,12 @@ function PriceListWorkspace({
                 type="button"
                 variant="success"
                 size="icon"
-                className="h-6 w-6 rounded-full"
+                className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
                 onClick={handleStartCreateItem}
                 disabled={!selectedPriceList || itemsMutating || currentItemsLoading}
                 aria-label="Agregar producto a la lista"
               >
-                <Plus className="h-3 w-3" />
+                <Plus className="h-[10px] w-[10px]" />
               </Button>
             </div>
           </div>
@@ -1311,12 +1312,12 @@ function PriceListWorkspace({
                 type="button"
                 variant="success"
                 size="icon"
-                className="h-6 w-6 rounded-full"
+                className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
                 onClick={handleSubmitItemForm}
                 disabled={itemsSaving || !canSubmitItemForm}
                 aria-label="Agregar producto a la lista"
               >
-                {itemsSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                {itemsSaving ? <Loader2 className="h-[10px] w-[10px] animate-spin" /> : <Plus className="h-[10px] w-[10px]" />}
               </Button>
             )}
           </div>
@@ -1588,22 +1589,22 @@ export default function FacturacionPage() {
                 type="button"
                 variant="destructive"
                 size="icon"
-                className="h-5 w-5 rounded-full"
+                className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
                 onClick={() => removePayment(idx)}
                 aria-label="Quitar forma de pago"
               >
-                <Minus className="h-2.5 w-2.5" />
+                <Minus className="h-[10px] w-[10px]" />
               </Button>
               {idx === payments.length - 1 ? (
                 <Button
                   type="button"
                   variant="success"
                   size="icon"
-                  className="h-5 w-5 rounded-full"
+                  className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
                   onClick={addPayment}
                   aria-label="Agregar forma de pago"
                 >
-                  <Plus className="h-2.5 w-2.5" />
+                  <Plus className="h-[10px] w-[10px]" />
                 </Button>
               ) : null}
             </div>
@@ -1785,16 +1786,27 @@ function FacturacionWorkspace({
   const [customerTaxId, setCustomerTaxId] = useState("");
   // Eliminado agregado manual libre (se quitan estados newItemName/newItemPrice/newItemQty)
   // Búsqueda de artículos del catálogo
-  const [catalog, setCatalog] = useState<Array<{ id:number; article_code:string; name:string; price?: { base_price:number | null } }>>([]);
+  type CatalogEntry = {
+    id: number;
+    article_code?: string | null;
+    name?: string | null;
+    price?: { base_price?: number | string | null } | null;
+    unit?: string | null;
+  };
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const catalogRequestedRef = useRef(false);
   const catalogMetaRef = useRef<{ hasItems: boolean }>({ hasItems: false });
   const catalogPriceListRef = useRef<string | null>(null);
+  const catalogStateRef = useRef<CatalogEntry[]>([]);
   const [addItemModalOpen, setAddItemModalOpen] = useState(false);
   const [catalogSearch, setCatalogSearch] = useState("");
   const [selectedCatalogId, setSelectedCatalogId] = useState<number | "">("");
   const [selectedCatalogQty, setSelectedCatalogQty] = useState("1");
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [quickCodeInput, setQuickCodeInput] = useState("");
+  const [quickDescriptionInput, setQuickDescriptionInput] = useState("");
+  const quickCodeInputRef = useRef<HTMLInputElement | null>(null);
 
   const orderSelectionKey = useCallback((order: TableOrder) => order.tableId ?? `__order_${order.orderId}`, []);
 
@@ -1928,37 +1940,48 @@ function FacturacionWorkspace({
 
   const refreshOrders = useCallback(() => loadOrders({ silent: true }), [loadOrders]);
 
-  const loadCatalog = useCallback(async (force = false) => {
-    const isManualFlow = mode === "sin-pedido" && selectedTableId === NEW_INVOICE_ID;
-    const activePriceListCode = isManualFlow ? manualPriceListCode : defaultPriceListCode;
-    if (catalogRequestedRef.current) return;
-    const canReuse = catalogMetaRef.current.hasItems && catalogPriceListRef.current === activePriceListCode;
-    if (!force && canReuse) return;
-    catalogRequestedRef.current = true;
-    setCatalogLoading(true);
-    try {
-      const res = await fetch(`/api/articulos?price_list_code=${encodeURIComponent(activePriceListCode)}&unit=RETAIL`);
-      if (!res.ok) {
-        throw new Error(await res.text());
+  const loadCatalog = useCallback(
+    async (force = false): Promise<CatalogEntry[]> => {
+      const isManualFlow = mode === "sin-pedido" && selectedTableId === NEW_INVOICE_ID;
+      const activePriceListCode = isManualFlow ? manualPriceListCode : defaultPriceListCode;
+      if (catalogRequestedRef.current) {
+        return catalogStateRef.current;
       }
-      const data = await res.json();
-      setCatalog(data.items || []);
-      catalogPriceListRef.current = activePriceListCode;
-      catalogMetaRef.current.hasItems = Array.isArray(data.items) && data.items.length > 0;
-    } catch (error) {
-      console.error("Error cargando catálogo", error);
-      toast({ variant: "error", title: "Catálogo", description: "No fue posible cargar el catálogo de artículos." });
-      catalogPriceListRef.current = null;
-      catalogMetaRef.current.hasItems = false;
-    } finally {
-      setCatalogLoading(false);
-      catalogRequestedRef.current = false;
-    }
-  }, [defaultPriceListCode, manualPriceListCode, mode, selectedTableId, toast]);
+      const canReuse = catalogMetaRef.current.hasItems && catalogPriceListRef.current === activePriceListCode;
+      if (!force && canReuse) {
+        return catalogStateRef.current;
+      }
+      catalogRequestedRef.current = true;
+      setCatalogLoading(true);
+      try {
+        const res = await fetch(`/api/articulos?price_list_code=${encodeURIComponent(activePriceListCode)}&unit=RETAIL`);
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
+        const data = await res.json();
+        const items = Array.isArray(data.items) ? (data.items as CatalogEntry[]) : [];
+        setCatalog(items);
+        catalogPriceListRef.current = activePriceListCode;
+        catalogMetaRef.current.hasItems = items.length > 0;
+        return items;
+      } catch (error) {
+        console.error("Error cargando catálogo", error);
+        toast({ variant: "error", title: "Catálogo", description: "No fue posible cargar el catálogo de artículos." });
+        catalogPriceListRef.current = null;
+        catalogMetaRef.current.hasItems = false;
+        return [];
+      } finally {
+        setCatalogLoading(false);
+        catalogRequestedRef.current = false;
+      }
+    },
+    [defaultPriceListCode, manualPriceListCode, mode, selectedTableId, toast]
+  );
 
   useEffect(() => {
     catalogMetaRef.current.hasItems = catalog.length > 0;
-  }, [catalog.length]);
+    catalogStateRef.current = catalog;
+  }, [catalog]);
 
   useEffect(() => {
     if (mode === "con-pedido") {
@@ -1985,6 +2008,21 @@ function FacturacionWorkspace({
     setCatalog([]);
   }, [defaultPriceListCode, mode, selectedTableId]);
 
+  const ensureCatalogForActiveList = useCallback(async (): Promise<CatalogEntry[]> => {
+    const isManualFlow = mode === "sin-pedido" && selectedTableId === NEW_INVOICE_ID;
+    const activePriceListCode = isManualFlow ? manualPriceListCode : defaultPriceListCode;
+    const needsReload = catalogPriceListRef.current !== activePriceListCode || !catalogMetaRef.current.hasItems;
+    if (needsReload) {
+      const items = await loadCatalog(true);
+      return items.length > 0 ? items : catalogStateRef.current;
+    }
+    if (!catalogMetaRef.current.hasItems) {
+      const items = await loadCatalog(true);
+      return items.length > 0 ? items : catalogStateRef.current;
+    }
+    return catalogStateRef.current;
+  }, [defaultPriceListCode, loadCatalog, manualPriceListCode, mode, selectedTableId]);
+
   useEffect(() => {
     if (addItemModalOpen) {
       loadCatalog();
@@ -2001,6 +2039,18 @@ function FacturacionWorkspace({
     if (selectedTableId !== NEW_INVOICE_ID) return;
     loadCatalog(true);
   }, [addItemModalOpen, loadCatalog, manualPriceListCode, mode, selectedTableId]);
+
+  const openCatalogModalWithQuery = useCallback(
+    (query: string) => {
+      const normalized = query.trim();
+      setCatalogSearch(normalized);
+      setSelectedCatalogId("");
+      setSelectedCatalogQty("1");
+      setAddItemModalOpen(true);
+      void loadCatalog(true);
+    },
+    [loadCatalog]
+  );
 
   const filteredCatalog = useMemo(() => {
     const query = catalogSearch.trim().toLowerCase();
@@ -2188,9 +2238,88 @@ function FacturacionWorkspace({
     return () => document.removeEventListener("click", handleAnchorNavigation, true);
   }, [shouldWarnOnManualExit]);
 
-  const handleConfirmCatalogItem = async () => {
-    if (typeof selectedCatalogId !== "number") return;
-    const art = catalog.find(c => c.id === selectedCatalogId);
+  const addItemToInvoice = useCallback(
+    async ({ articleCode, description, unitPrice, quantity }: { articleCode: string; description: string; unitPrice: number; quantity: number }) => {
+      const normalizedCode = articleCode.trim().toUpperCase();
+      if (!normalizedCode) {
+        toast({ variant: "warning", title: "Producto", description: "Ingresa un código válido." });
+        return false;
+      }
+      const cleanedDescription = description.trim() || normalizedCode;
+      const parsedQuantity = Number(quantity);
+      const qtyNumber = Number.isFinite(parsedQuantity) && parsedQuantity > 0 ? parsedQuantity : 1;
+      const resolvedUnitPrice = Number(unitPrice) || 0;
+
+      if (isDraft) {
+        setDraftInvoice((prev) => {
+          const nextItems = [...prev.items];
+          const targetIndex = nextItems.findIndex((item) => {
+            const itemCode = String(item.articleCode ?? "").trim().toUpperCase();
+            const sameCode = itemCode.length > 0 && itemCode === normalizedCode;
+            const sameName = itemCode.length === 0 && item.name.trim().toUpperCase() === cleanedDescription.toUpperCase();
+            const priceMatches = Math.abs((item.unitPrice ?? 0) - resolvedUnitPrice) < 0.000001;
+            const modifiersEmpty = (item.modifiers?.length ?? 0) === 0;
+            return priceMatches && modifiersEmpty && (sameCode || sameName);
+          });
+
+          if (targetIndex >= 0) {
+            nextItems[targetIndex] = {
+              ...nextItems[targetIndex],
+              qty: nextItems[targetIndex].qty + qtyNumber,
+            };
+            return { ...prev, items: nextItems };
+          }
+
+          nextItems.push({
+            id: `manual-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+            articleCode: normalizedCode,
+            name: cleanedDescription,
+            qty: qtyNumber,
+            unitPrice: resolvedUnitPrice,
+            unit: "RETAIL",
+          });
+
+          return { ...prev, items: nextItems };
+        });
+        return true;
+      }
+
+      if (selectedOrder) {
+        try {
+          const response = await fetch(`/api/orders/${selectedOrder.orderId}/items`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              article_code: normalizedCode,
+              description: cleanedDescription,
+              quantity: qtyNumber,
+              unit_price: resolvedUnitPrice,
+            }),
+          });
+          if (!response.ok) {
+            throw new Error(await response.text());
+          }
+          await refreshOrders().catch((refreshError) => {
+            console.error("No se pudo refrescar los pedidos", refreshError);
+          });
+          return true;
+        } catch (error) {
+          console.error("Error agregando artículo al pedido", error);
+          toast({ variant: "error", title: "Pedidos", description: "No se pudo agregar el artículo al pedido." });
+          return false;
+        }
+      }
+
+      toast({ variant: "warning", title: "Pedidos", description: "Selecciona una mesa antes de agregar artículos." });
+      return false;
+    },
+    [isDraft, refreshOrders, selectedOrder, setDraftInvoice, toast]
+  );
+
+  const handleConfirmCatalogItem = useCallback(async (forcedId?: number) => {
+    const targetId = typeof forcedId === "number" ? forcedId : selectedCatalogId;
+    if (typeof targetId !== "number") return;
+    const art = catalog.find(c => c.id === targetId);
     const qtyNumber = Math.max(1, selectedCatalogQtyNumber || 1);
     if (!art || !art.price || art.price.base_price == null) {
       toast({ variant: "warning", title: "Catálogo", description: "Artículo sin precio disponible" });
@@ -2202,49 +2331,101 @@ function FacturacionWorkspace({
       return;
     }
 
-    if (isDraft) {
-      setDraftInvoice((prev) => ({
-        ...prev,
-        items: [
-          ...prev.items,
-          {
-            id: `manual-${Date.now()}`,
-            articleCode,
-            name: art.name ?? art.article_code ?? "Artículo",
-            qty: qtyNumber,
-            unitPrice: Number(art.price!.base_price) || 0,
-            unit: "RETAIL",
-          },
-        ],
-      }));
-    } else if (selectedOrder) {
-      try {
-        const response = await fetch(`/api/orders/${selectedOrder.orderId}/items`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            article_code: articleCode,
-            description: art.name ?? articleCode,
-            quantity: qtyNumber,
-            unit_price: Number(art.price!.base_price) || 0,
-          }),
-        });
-        if (!response.ok) {
-          throw new Error(await response.text());
-        }
-        await refreshOrders().catch((refreshError) => {
-          console.error("No se pudo refrescar los pedidos", refreshError);
-        });
-      } catch (error) {
-        console.error("Error agregando artículo al pedido", error);
-        toast({ variant: "error", title: "Pedidos", description: "No se pudo agregar el artículo al pedido." });
-        return;
-      }
+    const success = await addItemToInvoice({
+      articleCode,
+      description: art.name ?? art.article_code ?? "Artículo",
+      unitPrice: Number(art.price!.base_price) || 0,
+      quantity: qtyNumber,
+    });
+    if (!success) {
+      return;
     }
 
     toast({ variant: "success", title: "Producto agregado", description: `${art.article_code} • ${art.name} x${qtyNumber} → ${activeLabel}` });
     setAddItemModalOpen(false);
-  };
+  }, [activeLabel, addItemToInvoice, catalog, selectedCatalogId, selectedCatalogQtyNumber, toast]);
+
+  const handleQuickCodeApply = useCallback(async () => {
+    const rawValue = quickCodeInput.trim();
+    if (!rawValue) {
+      return;
+    }
+    const [codeSegment, qtySegment] = rawValue.split("*");
+    const normalizedCode = codeSegment.trim().toUpperCase();
+    if (!normalizedCode) {
+      toast({ variant: "warning", title: "Producto", description: "Ingresa un código válido." });
+      return;
+    }
+
+    let quantity = 1;
+    if (qtySegment) {
+      const parsedQty = Number(qtySegment.replace(/,/g, ".").trim());
+      if (Number.isFinite(parsedQty) && parsedQty > 0) {
+        quantity = parsedQty;
+      }
+    }
+
+    setQuickCodeInput("");
+
+    const catalogSnapshot = await ensureCatalogForActiveList();
+    const match = catalogSnapshot.find((entry) => String(entry.article_code ?? "").toUpperCase() === normalizedCode);
+    if (!match || !match.price || match.price.base_price == null) {
+      toast({ variant: "warning", title: "Catálogo", description: "No encontramos un artículo con ese código en la lista activa." });
+      openCatalogModalWithQuery(normalizedCode);
+      quickCodeInputRef.current?.focus();
+      return;
+    }
+
+    const unitPrice = Number(match.price.base_price ?? 0) || 0;
+    const description = match.name ?? normalizedCode;
+    const success = await addItemToInvoice({
+      articleCode: normalizedCode,
+      description,
+      unitPrice,
+      quantity,
+    });
+    if (success) {
+      toast({ variant: "success", title: "Producto agregado", description: `${normalizedCode} • ${description} x${quantity} → ${activeLabel}` });
+    }
+    quickCodeInputRef.current?.focus();
+  }, [
+    activeLabel,
+    addItemToInvoice,
+    ensureCatalogForActiveList,
+    openCatalogModalWithQuery,
+    quickCodeInput,
+    toast,
+  ]);
+
+  const handleQuickCodeKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void handleQuickCodeApply();
+      }
+    },
+    [handleQuickCodeApply]
+  );
+
+  const handleQuickCodeDoubleClick = useCallback(() => {
+    openCatalogModalWithQuery(quickCodeInput.trim().toUpperCase());
+  }, [openCatalogModalWithQuery, quickCodeInput]);
+
+  const handleQuickDescriptionDoubleClick = useCallback(() => {
+    openCatalogModalWithQuery(quickDescriptionInput.trim());
+  }, [openCatalogModalWithQuery, quickDescriptionInput]);
+
+  const handleCatalogRowSelect = useCallback((itemId: number) => {
+    setSelectedCatalogId(itemId);
+  }, []);
+
+  const handleCatalogRowActivate = useCallback(
+    (itemId: number) => {
+      setSelectedCatalogId(itemId);
+      void handleConfirmCatalogItem(itemId);
+    },
+    [handleConfirmCatalogItem]
+  );
 
   const handleCancelOrder = useCallback(async (): Promise<boolean> => {
     if (mode !== "con-pedido") {
@@ -2604,17 +2785,6 @@ function FacturacionWorkspace({
                     ) : null}
                   </div>
                 )}
-                <Button
-                  type="button"
-                  variant="success"
-                  size="icon"
-                  className="h-6 w-6 rounded-full"
-                  aria-label="Agregar producto"
-                  onClick={() => setAddItemModalOpen(true)}
-                  disabled={mode === "con-pedido" && !selectedOrder}
-                >
-                  <Plus className="h-3 w-3" />
-                </Button>
               </div>
              </div>
              {/* Controles de sala removidos en módulo de facturación */}
@@ -2626,148 +2796,186 @@ function FacturacionWorkspace({
                   {ordersError}
                 </div>
               ) : null}
-              <div className="flex-1 min-h-0">
+              <div className="flex-1 min-h-0 flex flex-col gap-3">
                 {(isDraft || selectedOrder) ? (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full table-auto text-left text-sm text-foreground">
-                      <thead className="border-b text-[11px] uppercase text-muted-foreground">
-                        <tr>
-                          <th className="px-3 py-2 font-medium">Producto</th>
-                          <th className="px-3 py-2 font-medium">Cant.</th>
-                          <th className="px-3 py-2 font-medium">P. unitario</th>
-                          <th className="px-3 py-2 font-medium">Subtotal</th>
-                          <th className="px-3 py-2 text-center font-medium">Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {itemsForSummary.length > 0 ? (
-                          itemsForSummary.map((item, i) => (
-                            <tr key={`${item.name}-${i}`} className="align-top hover:bg-muted/30">
-                              <td className="px-3 py-2 font-medium text-foreground">
-                                <span className="block leading-tight text-sm">{item.name}</span>
-                                {item.modifiers && item.modifiers.length > 0 ? (
-                                  <span className="mt-1 block text-[11px] text-muted-foreground">{item.modifiers.map((m) => `• ${m}`).join("  ")}</span>
-                                ) : null}
-                              </td>
-                              <td className="px-3 py-2 text-muted-foreground">
-                                <Input
-                                  type="number"
-                                  min={1}
-                                  value={String(item.qty)}
-                                  onChange={(e) => {
-                                    const qty = Math.max(1, Number(e.target.value) || 1);
-                                    if (isDraft) {
-                                      setDraftInvoice((prev) => ({
-                                        ...prev,
-                                        items: prev.items.map((it, idx) => (idx === i ? { ...it, qty } : it)),
-                                      }));
-                                    } else if (selectedOrder && item.id != null) {
-                                      const selectedKey = orderSelectionKey(selectedOrder);
-                                      setOrders((prev) =>
-                                        prev.map((o) =>
-                                          orderSelectionKey(o) === selectedKey
-                                            ? {
-                                                ...o,
-                                                items: o.items.map((it) =>
-                                                  it.id === item.id ? { ...it, qty } : it
-                                                ),
-                                              }
-                                            : o
-                                        )
-                                      );
-                                    }
-                                  }}
-                                  onBlur={(e) => {
-                                    if (isDraft || !selectedOrder || item.id == null) {
-                                      return;
-                                    }
-                                    const qty = Math.max(1, Number(e.currentTarget.value) || 1);
-                                    void (async () => {
-                                      try {
-                                        const response = await fetch(`/api/orders/${selectedOrder.orderId}/items/${item.id}`, {
-                                          method: "PATCH",
-                                          headers: { "Content-Type": "application/json" },
-                                          body: JSON.stringify({ quantity: qty }),
-                                        });
-                                        if (!response.ok) {
-                                          throw new Error(await response.text());
-                                        }
-                                        await refreshOrders();
-                                      } catch (error) {
-                                        console.error("Error actualizando cantidad", error);
-                                        toast({ variant: "error", title: "Pedidos", description: "No se pudo actualizar la cantidad." });
-                                        await refreshOrders().catch((refreshError) => {
-                                          console.error("No se pudo refrescar los pedidos", refreshError);
-                                        });
-                                      }
-                                    })();
-                                  }}
-                                  className="h-7 w-16 rounded-lg bg-background/90 text-center text-[11px]"
-                                />
-                              </td>
-                              <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{formatCurrency(item.unitPrice, { currency: "local" })}</td>
-                              <td className="px-3 py-2 font-semibold text-foreground">{formatCurrency(item.qty * item.unitPrice, { currency: "local" })}</td>
-                              <td className="px-3 py-2 text-center">
-                                <Button
-                                  type="button"
-                                  variant="destructive"
-                                  size="icon"
-                                  className="h-6 w-6 rounded-full"
-                                  onClick={() => {
-                                    if (isDraft) {
-                                      setDraftInvoice((prev) => ({
-                                        ...prev,
-                                        items: prev.items.filter((_, idx) => idx !== i),
-                                      }));
-                                      return;
-                                    }
-                                    if (selectedOrder && item.id != null) {
-                                      const snapshot = orders;
-                                      const selectedKey = orderSelectionKey(selectedOrder);
-                                      setOrders((prev) =>
-                                        prev.map((o) =>
-                                          orderSelectionKey(o) === selectedKey
-                                            ? { ...o, items: o.items.filter((it) => it.id !== item.id) }
-                                            : o
-                                        )
-                                      );
-                                      void (async () => {
-                                        try {
-                                          const response = await fetch(`/api/orders/${selectedOrder.orderId}/items/${item.id}`, {
-                                            method: "DELETE",
-                                          });
-                                          if (!response.ok) {
-                                            throw new Error(await response.text());
-                                          }
-                                          await refreshOrders();
-                                        } catch (error) {
-                                          console.error("Error eliminando artículo del pedido", error);
-                                          setOrders(snapshot);
-                                          toast({ variant: "error", title: "Pedidos", description: "No se pudo eliminar el artículo." });
-                                          await refreshOrders().catch((refreshError) => {
-                                            console.error("No se pudo refrescar los pedidos", refreshError);
-                                          });
-                                        }
-                                      })();
-                                    }
-                                  }}
-                                  aria-label="Quitar producto"
-                                >
-                                  <Minus className="h-3 w-3" />
-                                </Button>
-                              </td>
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-[minmax(190px,0.9fr),minmax(220px,1fr)] lg:grid-cols-[minmax(220px,0.8fr),minmax(260px,1fr)]">
+                      <div className="space-y-1">
+                        <Label className="text-xs uppercase text-muted-foreground">Código rápido</Label>
+                        <Input
+                          ref={quickCodeInputRef}
+                          value={quickCodeInput}
+                          onChange={(event) => setQuickCodeInput(event.target.value.toUpperCase())}
+                          onKeyDown={handleQuickCodeKeyDown}
+                          onDoubleClick={handleQuickCodeDoubleClick}
+                          placeholder="COD-001 o COD-001*2"
+                          autoComplete="off"
+                          className="rounded-2xl bg-background/95"
+                        />
+                        <p className="text-[11px] text-muted-foreground">Escanea o escribe y presiona Enter; usa * para cantidades.</p>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs uppercase text-muted-foreground">Buscar descripción</Label>
+                        <Input
+                          value={quickDescriptionInput}
+                          onChange={(event) => setQuickDescriptionInput(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              handleQuickDescriptionDoubleClick();
+                            }
+                          }}
+                          onDoubleClick={handleQuickDescriptionDoubleClick}
+                          placeholder="Escribe y haz doble clic para buscar"
+                          autoComplete="off"
+                          className="rounded-2xl bg-background/95"
+                        />
+                        <p className="text-[11px] text-muted-foreground">Doble clic abre el catálogo filtrado.</p>
+                      </div>
+                    </div>
+                    <div className="flex-1 min-h-0">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full table-auto text-left text-sm text-foreground">
+                          <thead className="border-b text-[11px] uppercase text-muted-foreground">
+                            <tr>
+                              <th className="px-3 py-2 font-medium">Producto</th>
+                              <th className="px-3 py-2 font-medium">Cant.</th>
+                              <th className="px-3 py-2 font-medium">P. unitario</th>
+                              <th className="px-3 py-2 font-medium">Subtotal</th>
+                              <th className="px-2 py-2 text-center font-medium">Acciones</th>
                             </tr>
-                          ))
-                        ) : (
-                          <tr>
-                            <td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">
-                              Sin productos registrados.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                          </thead>
+                          <tbody className="divide-y">
+                            {itemsForSummary.length > 0 ? (
+                              itemsForSummary.map((item, i) => (
+                                <tr key={`${item.name}-${i}`} className="align-top hover:bg-muted/30">
+                                  <td className="px-3 py-2 font-medium text-foreground">
+                                    <span className="block leading-tight text-sm">{item.name}</span>
+                                    {item.modifiers && item.modifiers.length > 0 ? (
+                                      <span className="mt-1 block text-[11px] text-muted-foreground">{item.modifiers.map((m) => `• ${m}`).join("  ")}</span>
+                                    ) : null}
+                                  </td>
+                                  <td className="px-3 py-2 text-muted-foreground">
+                                    <Input
+                                      type="number"
+                                      min={1}
+                                      value={String(item.qty)}
+                                      onChange={(e) => {
+                                        const qty = Math.max(1, Number(e.target.value) || 1);
+                                        if (isDraft) {
+                                          setDraftInvoice((prev) => ({
+                                            ...prev,
+                                            items: prev.items.map((it, idx) => (idx === i ? { ...it, qty } : it)),
+                                          }));
+                                        } else if (selectedOrder && item.id != null) {
+                                          const selectedKey = orderSelectionKey(selectedOrder);
+                                          setOrders((prev) =>
+                                            prev.map((o) =>
+                                              orderSelectionKey(o) === selectedKey
+                                                ? {
+                                                    ...o,
+                                                    items: o.items.map((it) =>
+                                                      it.id === item.id ? { ...it, qty } : it
+                                                    ),
+                                                  }
+                                                : o
+                                            )
+                                          );
+                                        }
+                                      }}
+                                      onBlur={(e) => {
+                                        if (isDraft || !selectedOrder || item.id == null) {
+                                          return;
+                                        }
+                                        const qty = Math.max(1, Number(e.currentTarget.value) || 1);
+                                        void (async () => {
+                                          try {
+                                            const response = await fetch(`/api/orders/${selectedOrder.orderId}/items/${item.id}`, {
+                                              method: "PATCH",
+                                              headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ quantity: qty }),
+                                            });
+                                            if (!response.ok) {
+                                              throw new Error(await response.text());
+                                            }
+                                            await refreshOrders();
+                                          } catch (error) {
+                                            console.error("Error actualizando cantidad", error);
+                                            toast({ variant: "error", title: "Pedidos", description: "No se pudo actualizar la cantidad." });
+                                            await refreshOrders().catch((refreshError) => {
+                                              console.error("No se pudo refrescar los pedidos", refreshError);
+                                            });
+                                          }
+                                        })();
+                                      }}
+                                      className="h-7 w-16 rounded-lg bg-background/90 text-center text-[11px]"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{formatCurrency(item.unitPrice, { currency: "local" })}</td>
+                                  <td className="px-3 py-2 font-semibold text-foreground">{formatCurrency(item.qty * item.unitPrice, { currency: "local" })}</td>
+                                  <td className="px-2 py-2 text-center">
+                                    <Button
+                                      type="button"
+                                      variant="destructive"
+                                      size="icon"
+                                      className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
+                                      onClick={() => {
+                                        if (isDraft) {
+                                          setDraftInvoice((prev) => ({
+                                            ...prev,
+                                            items: prev.items.filter((_, idx) => idx !== i),
+                                          }));
+                                          return;
+                                        }
+                                        if (selectedOrder && item.id != null) {
+                                          const snapshot = orders;
+                                          const selectedKey = orderSelectionKey(selectedOrder);
+                                          setOrders((prev) =>
+                                            prev.map((o) =>
+                                              orderSelectionKey(o) === selectedKey
+                                                ? { ...o, items: o.items.filter((it) => it.id !== item.id) }
+                                                : o
+                                            )
+                                          );
+                                          void (async () => {
+                                            try {
+                                              const response = await fetch(`/api/orders/${selectedOrder.orderId}/items/${item.id}`, {
+                                                method: "DELETE",
+                                              });
+                                              if (!response.ok) {
+                                                throw new Error(await response.text());
+                                              }
+                                              await refreshOrders();
+                                            } catch (error) {
+                                              console.error("Error eliminando artículo del pedido", error);
+                                              setOrders(snapshot);
+                                              toast({ variant: "error", title: "Pedidos", description: "No se pudo eliminar el artículo." });
+                                              await refreshOrders().catch((refreshError) => {
+                                                console.error("No se pudo refrescar los pedidos", refreshError);
+                                              });
+                                            }
+                                          })();
+                                        }
+                                      }}
+                                      aria-label="Quitar producto"
+                                    >
+                                      <Minus className="h-[10px] w-[10px]" />
+                                    </Button>
+                                  </td>
+                                </tr>
+                              ))
+                            ) : (
+                              <tr>
+                                <td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">
+                                  Sin productos registrados.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
                 ) : ordersLoading ? (
                   <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-muted bg-muted/10 p-5 text-xs text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -2975,50 +3183,49 @@ function FacturacionWorkspace({
                   <th className="px-4 py-2 font-medium">Código</th>
                   <th className="px-4 py-2 font-medium">Nombre</th>
                   <th className="px-4 py-2 font-medium">Precio base</th>
-                  <th className="px-4 py-2 font-medium text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {catalogLoading ? (
                   <tr>
-                    <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-muted-foreground">
                       Cargando catálogo...
                     </td>
                   </tr>
                 ) : filteredCatalog.length > 0 ? (
-                  filteredCatalog.map((item) => (
-                    <tr
-                      key={item.id}
-                      className={cn(
-                        "cursor-pointer align-top transition hover:bg-muted/40",
-                        selectedCatalogId === item.id ? "bg-primary/10 ring-1 ring-primary/40" : ""
-                      )}
-                      onClick={() => setSelectedCatalogId(item.id)}
-                    >
-                      <td className="px-4 py-2 font-mono text-xs text-muted-foreground">{item.article_code}</td>
-                      <td className="px-4 py-2">
-                        <span className="block text-sm font-medium text-foreground">{item.name}</span>
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">{formatCurrency(item.price?.base_price ?? 0, { currency: "local" })}</td>
-                      <td className="px-4 py-2 text-right">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="h-8 rounded-xl px-3 text-xs"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedCatalogId(item.id);
-                          }}
-                        >
-                          Seleccionar
-                        </Button>
-                      </td>
-                    </tr>
-                  ))
+                  filteredCatalog.map((item) => {
+                    const isSelected = selectedCatalogId === item.id;
+                    return (
+                      <tr
+                        key={item.id}
+                        tabIndex={0}
+                        role="button"
+                        aria-selected={isSelected}
+                        className={cn(
+                          "cursor-pointer align-top border-l-2 border-transparent transition hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+                          isSelected ? "border-primary bg-primary/10" : ""
+                        )}
+                        onClick={() => handleCatalogRowSelect(item.id)}
+                        onFocus={() => handleCatalogRowSelect(item.id)}
+                        onDoubleClick={() => handleCatalogRowActivate(item.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            handleCatalogRowActivate(item.id);
+                          }
+                        }}
+                      >
+                        <td className="px-4 py-2 font-mono text-xs text-muted-foreground">{item.article_code}</td>
+                        <td className="px-4 py-2">
+                          <span className="block text-sm font-medium text-foreground">{item.name}</span>
+                        </td>
+                        <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">{formatCurrency(Number(item.price?.base_price ?? 0), { currency: "local" })}</td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
-                    <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-muted-foreground">
                       No se encontraron artículos con los filtros aplicados.
                     </td>
                   </tr>
@@ -3031,24 +3238,15 @@ function FacturacionWorkspace({
         <div className="flex flex-col gap-3 border-t border-muted pt-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs text-muted-foreground">
             {selectedCatalogItem ? (
-              <span>Seleccionado: <strong>{selectedCatalogItem.article_code}</strong> • {selectedCatalogItem.name}</span>
+              <span>
+                Seleccionado: <strong>{selectedCatalogItem.article_code}</strong> • {selectedCatalogItem.name}. Presiona Enter o haz doble clic para agregar.
+              </span>
             ) : (
-              <span>Selecciona un artículo de la tabla para continuar.</span>
+              <span>Selecciona un artículo de la tabla y presiona Enter o doble clic para agregarlo.</span>
             )}
           </div>
           <div className="flex gap-2">
             <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setAddItemModalOpen(false)}>Cancelar</Button>
-            <Button
-              type="button"
-              variant="success"
-              size="icon"
-              className="h-6 w-6 rounded-full"
-              disabled={!selectedCatalogItem || selectedCatalogQtyNumber <= 0}
-              onClick={() => { void handleConfirmCatalogItem(); }}
-              aria-label="Agregar producto al consumo"
-            >
-              <Plus className="h-3 w-3" />
-            </Button>
           </div>
         </div>
       </div>
