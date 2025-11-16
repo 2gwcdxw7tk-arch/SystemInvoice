@@ -5,7 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SessionPayload } from "@/lib/auth/session";
-import { isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
+import { isSessionFacturadorOnly } from "@/lib/auth/session-roles";
 
 /**
  * Componente: BackToDashboard

@@ -214,8 +214,6 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       }
 
       let targetWarehouseId = current.warehouse_id;
-      let targetWarehouseCode = current.warehouse_code;
-      let targetWarehouseName = current.warehouse_name;
 
       if (typeof input.warehouseCode === "string" && input.warehouseCode.trim().length > 0) {
         const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
@@ -231,8 +229,6 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           throw new Error(`El almacén ${normalizedWarehouseCode} no existe o está inactivo`);
         }
         targetWarehouseId = warehouseRow.id;
-        targetWarehouseCode = warehouseRow.code;
-        targetWarehouseName = warehouseRow.name;
       }
 
       const updates: string[] = [];

@@ -17,7 +17,7 @@ import { SERVICE_RATE, VAT_RATE } from "@/config/taxes";
 import { Printer, Plus, Minus, Loader2, Ban, ArrowLeft, ArrowRight, Receipt, UtensilsCrossed, Tags, AlertCircle, History, FileText, Download } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
-import { isSessionAdministrator, isSessionFacturador, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
+import { isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
 
 /**
  * Página dedicada de Facturación.
@@ -1324,7 +1324,6 @@ export default function FacturacionPage() {
   const modeParam = (searchParams?.get("mode") as FacturacionMode | null) ?? null;
   const session = useSession();
   const isAdmin = isSessionAdministrator(session);
-  const isFacturador = isSessionFacturador(session);
   const isFacturadorOnly = isSessionFacturadorOnly(session);
   const canManagePriceLists = isAdmin;
   const canManageCashRegisters = session?.role === "admin";

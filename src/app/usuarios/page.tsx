@@ -151,26 +151,6 @@ export default function UsuariosPage() {
     void loadRoles();
   }, [loadUsers, loadRoles]);
 
-  if (!isAdmin) {
-    return (
-      <section className="space-y-8 pb-16">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-semibold tracking-tight text-foreground">Usuarios</h1>
-          <p className="max-w-2xl text-sm text-muted-foreground">
-            Esta sección está disponible únicamente para administradores.
-          </p>
-        </header>
-        <Card className="rounded-3xl border bg-background/95 shadow-sm">
-          <CardContent className="py-12 text-center">
-            <p className="text-sm text-muted-foreground">
-              Solicita acceso a un administrador si necesitas realizar cambios en usuarios y roles.
-            </p>
-          </CardContent>
-        </Card>
-      </section>
-    );
-  }
-
   const stats = useMemo(() => {
     const total = users.length;
     const active = users.filter((user) => user.isActive).length;
@@ -190,6 +170,26 @@ export default function UsuariosPage() {
       })
       .sort((a, b) => a.username.localeCompare(b.username));
   }, [users, searchTerm, showInactive]);
+
+  if (!isAdmin) {
+    return (
+      <section className="space-y-8 pb-16">
+        <header className="space-y-2">
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">Usuarios</h1>
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            Esta sección está disponible únicamente para administradores.
+          </p>
+        </header>
+        <Card className="rounded-3xl border bg-background/95 shadow-sm">
+          <CardContent className="py-12 text-center">
+            <p className="text-sm text-muted-foreground">
+              Solicita acceso a un administrador si necesitas realizar cambios en usuarios y roles.
+            </p>
+          </CardContent>
+        </Card>
+      </section>
+    );
+  }
 
   const openCreateModal = () => {
     setEditingUserId(null);

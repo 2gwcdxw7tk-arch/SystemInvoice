@@ -8,8 +8,9 @@ import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-provider";
 import { Combobox } from "@/components/ui/combobox";
+import type { CashRegisterAssignmentGroup, CashRegisterRecord } from "@/lib/services/cash-registers/types";
 
-const ALLOWED_TABS = ["unidades", "zonas", "clasificaciones", "alertas", "notificaciones"] as const;
+const ALLOWED_TABS = ["unidades", "zonas", "clasificaciones", "alertas", "notificaciones", "cajas"] as const;
 type TabKey = (typeof ALLOWED_TABS)[number];
 
 interface UnitRow {
@@ -95,6 +96,38 @@ interface ClassificationFormState {
   isActive: boolean;
 }
 
+interface WarehouseOption {
+  id: number;
+  code: string;
+  name: string;
+  isActive: boolean;
+}
+
+interface CashRegisterFormState {
+  code: string;
+  name: string;
+  warehouseCode: string;
+  allowManualWarehouseOverride: boolean;
+  notes: string;
+  isActive: boolean;
+}
+
+interface FacturadorUserRow {
+  id: number;
+  username: string;
+  displayName: string | null;
+  isActive: boolean;
+}
+
+const EMPTY_CASH_REGISTER_FORM: CashRegisterFormState = {
+  code: "",
+  name: "",
+  warehouseCode: "",
+  allowManualWarehouseOverride: false,
+  notes: "",
+  isActive: true,
+};
+
 const CHANNEL_TYPE_OPTIONS = [
   { value: "EMAIL", label: "Correo electrónico" },
   { value: "WHATSAPP", label: "WhatsApp" },
@@ -157,11 +190,33 @@ export default function PreferenciasPage() {
   const [classificationForm, setClassificationForm] = useState<ClassificationFormState>(EMPTY_CLASSIFICATION_FORM);
   const [editingClassificationId, setEditingClassificationId] = useState<number | null>(null);
 
+  const [cashRegisters, setCashRegisters] = useState<CashRegisterRecord[]>([]);
+  const [cashRegistersLoading, setCashRegistersLoading] = useState(false);
+  const [cashRegisterModalOpen, setCashRegisterModalOpen] = useState(false);
+  const [cashRegisterSaving, setCashRegisterSaving] = useState(false);
+  const [cashRegisterForm, setCashRegisterForm] = useState<CashRegisterFormState>(EMPTY_CASH_REGISTER_FORM);
+  const [editingCashRegisterCode, setEditingCashRegisterCode] = useState<string | null>(null);
+
+  const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
+  const [warehousesLoading, setWarehousesLoading] = useState(false);
+
+  const [cashAssignments, setCashAssignments] = useState<CashRegisterAssignmentGroup[]>([]);
+  const [cashAssignmentsLoading, setCashAssignmentsLoading] = useState(false);
+
+  const [facturadores, setFacturadores] = useState<FacturadorUserRow[]>([]);
+  const [facturadoresLoading, setFacturadoresLoading] = useState(false);
+
+  const [assignmentSelections, setAssignmentSelections] = useState<Record<number, string>>({});
+
   const unitsRequestedRef = useRef(false);
   const alertsRequestedRef = useRef(false);
   const channelsRequestedRef = useRef(false);
   const zonesRequestedRef = useRef(false);
   const classificationsRequestedRef = useRef(false);
+  const cashRegistersRequestedRef = useRef(false);
+  const warehousesRequestedRef = useRef(false);
+  const cashAssignmentsRequestedRef = useRef(false);
+  const facturadoresRequestedRef = useRef(false);
 
   useEffect(() => {
     const applyHash = () => {
@@ -281,6 +336,106 @@ export default function PreferenciasPage() {
     }
   }, [toast]);
 
+  const loadWarehouses = useCallback(async (force = false) => {
+    if (warehousesRequestedRef.current && !force) return;
+    warehousesRequestedRef.current = true;
+    setWarehousesLoading(true);
+    try {
+      const res = await fetch("/api/inventario/warehouses");
+      if (!res.ok) throw new Error("No se pudieron cargar los almacenes");
+      const data = (await res.json()) as { items?: Array<{ id: number; code: string; name: string; is_active: boolean }> };
+      setWarehouses(Array.isArray(data.items) ? data.items.map((item) => ({
+        id: Number(item.id),
+        code: item.code,
+        name: item.name,
+        isActive: Boolean(item.is_active),
+      })) : []);
+    } catch (error: unknown) {
+      warehousesRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron cargar los almacenes";
+      toast({ variant: "error", title: "Cajas", description: message });
+      setWarehouses([]);
+    } finally {
+      setWarehousesLoading(false);
+    }
+  }, [toast]);
+
+  const loadCashRegisters = useCallback(async (force = false) => {
+    if (cashRegistersRequestedRef.current && !force) return;
+    cashRegistersRequestedRef.current = true;
+    setCashRegistersLoading(true);
+    try {
+      const res = await fetch("/api/cajas?include_inactive=true", { cache: "no-store" });
+      if (!res.ok) throw new Error("No se pudieron cargar las cajas");
+      const data = (await res.json()) as { items?: CashRegisterRecord[] };
+      setCashRegisters(Array.isArray(data.items) ? data.items : []);
+    } catch (error: unknown) {
+      cashRegistersRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron cargar las cajas";
+      toast({ variant: "error", title: "Cajas", description: message });
+      setCashRegisters([]);
+    } finally {
+      setCashRegistersLoading(false);
+    }
+  }, [toast]);
+
+  const loadFacturadores = useCallback(async (force = false) => {
+    if (facturadoresRequestedRef.current && !force) return;
+    facturadoresRequestedRef.current = true;
+    setFacturadoresLoading(true);
+    try {
+      const res = await fetch("/api/admin-users?include_inactive=true", { cache: "no-store" });
+      if (!res.ok) throw new Error("No se pudieron cargar los usuarios");
+      const data = (await res.json()) as {
+        success?: boolean;
+        users?: Array<{
+          id: number;
+          username: string;
+          displayName: string | null;
+          isActive: boolean;
+          roles: string[];
+        }>;
+      };
+      const filtered = Array.isArray(data.users)
+        ? data.users.filter((user) => Array.isArray(user.roles) && user.roles.map((role) => role.toUpperCase()).includes("FACTURADOR"))
+        : [];
+      setFacturadores(
+        filtered.map((user) => ({
+          id: Number(user.id),
+          username: user.username,
+          displayName: user.displayName,
+          isActive: Boolean(user.isActive),
+        }))
+      );
+    } catch (error: unknown) {
+      facturadoresRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron cargar los usuarios";
+      toast({ variant: "error", title: "Cajas", description: message });
+      setFacturadores([]);
+    } finally {
+      setFacturadoresLoading(false);
+    }
+  }, [toast]);
+
+  const loadCashAssignments = useCallback(async (force = false) => {
+    if (cashAssignmentsRequestedRef.current && !force) return;
+    cashAssignmentsRequestedRef.current = true;
+    setCashAssignmentsLoading(true);
+    try {
+      const res = await fetch("/api/cajas/asignaciones", { cache: "no-store" });
+      if (!res.ok) throw new Error("No se pudieron cargar las asignaciones");
+      const data = (await res.json()) as { items?: CashRegisterAssignmentGroup[] };
+      setCashAssignments(Array.isArray(data.items) ? data.items : []);
+    } catch (error: unknown) {
+      cashAssignmentsRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron cargar las asignaciones";
+      toast({ variant: "error", title: "Cajas", description: message });
+      setCashAssignments([]);
+    } finally {
+      setCashAssignmentsLoading(false);
+    }
+  }, [toast]);
+
   useEffect(() => {
     void loadUnits(true);
   }, [loadUnits]);
@@ -300,6 +455,14 @@ export default function PreferenciasPage() {
       void loadClassifications();
     }
   }, [activeTab, loadAlerts, loadChannels, loadZones, loadClassifications]);
+
+  useEffect(() => {
+    if (activeTab !== "cajas") return;
+    void loadWarehouses();
+    void loadCashRegisters();
+    void loadFacturadores();
+    void loadCashAssignments();
+  }, [activeTab, loadWarehouses, loadCashRegisters, loadFacturadores, loadCashAssignments]);
 
   const unitOptions = useMemo(
     () => units.map((unit) => ({ value: unit.code, label: `${unit.code} · ${unit.name}` })),
@@ -331,10 +494,42 @@ export default function PreferenciasPage() {
     return map;
   }, [classifications]);
 
+  const warehouseSelectOptions = useMemo(
+    () =>
+      warehouses.map((warehouse) => ({
+        value: warehouse.code,
+        label: `${warehouse.code} · ${warehouse.name}`,
+        description: warehouse.isActive ? undefined : "Inactivo",
+      })),
+    [warehouses]
+  );
+
+  const assignableCashRegisterOptions = useMemo(
+    () =>
+      cashRegisters
+        .filter((register) => register.isActive)
+        .map((register) => ({
+          value: register.code,
+          label: `${register.code} · ${register.name}`,
+          description: register.warehouseName
+            ? `Almacén ${register.warehouseCode} · ${register.warehouseName}`
+            : `Almacén ${register.warehouseCode}`,
+        })),
+    [cashRegisters]
+  );
+
+  const cashAssignmentMap = useMemo(() => {
+    const map = new Map<number, CashRegisterAssignmentGroup>();
+    for (const group of cashAssignments) {
+      map.set(group.adminUserId, group);
+    }
+    return map;
+  }, [cashAssignments]);
+
   const formatStatus = (isActive: boolean) => (isActive ? "Activo" : "Inactivo");
 
   async function handleSaveUnit() {
-  const code = unitForm.code.trim().toUpperCase();
+    const code = unitForm.code.trim().toUpperCase();
     const name = unitForm.name.trim();
     if (!code || !name) {
       toast({ variant: "error", title: "Unidades", description: "Captura código y nombre." });
@@ -418,6 +613,197 @@ export default function PreferenciasPage() {
       setAlertSaving(false);
     }
   }
+
+  const handleOpenCreateCashRegisterModal = () => {
+    setCashRegisterForm(EMPTY_CASH_REGISTER_FORM);
+    setEditingCashRegisterCode(null);
+    setCashRegisterModalOpen(true);
+  };
+
+  const handleOpenEditCashRegisterModal = (register: CashRegisterRecord) => {
+    setEditingCashRegisterCode(register.code);
+    setCashRegisterForm({
+      code: register.code,
+      name: register.name,
+      warehouseCode: register.warehouseCode,
+      allowManualWarehouseOverride: register.allowManualWarehouseOverride,
+      notes: register.notes ?? "",
+      isActive: register.isActive,
+    });
+    setCashRegisterModalOpen(true);
+  };
+
+  const handleSaveCashRegister = async () => {
+    const code = cashRegisterForm.code.trim().toUpperCase();
+    const name = cashRegisterForm.name.trim();
+    const warehouseCode = cashRegisterForm.warehouseCode.trim().toUpperCase();
+
+    if (!editingCashRegisterCode && code.length < 2) {
+      toast({ variant: "error", title: "Cajas", description: "Ingresa un código válido" });
+      return;
+    }
+    if (!name) {
+      toast({ variant: "error", title: "Cajas", description: "Ingresa un nombre" });
+      return;
+    }
+    if (!warehouseCode) {
+      toast({ variant: "error", title: "Cajas", description: "Selecciona un almacén" });
+      return;
+    }
+
+    setCashRegisterSaving(true);
+    try {
+      if (editingCashRegisterCode) {
+        const res = await fetch(`/api/cajas/${encodeURIComponent(editingCashRegisterCode)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            warehouse_code: warehouseCode,
+            allow_manual_warehouse_override: cashRegisterForm.allowManualWarehouseOverride,
+            is_active: cashRegisterForm.isActive,
+            notes: cashRegisterForm.notes.trim().length > 0 ? cashRegisterForm.notes.trim() : null,
+          }),
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null);
+          throw new Error(payload?.message ?? "No se pudo actualizar la caja");
+        }
+        toast({ variant: "success", title: "Cajas", description: "Caja actualizada" });
+      } else {
+        const res = await fetch("/api/cajas", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            code,
+            name,
+            warehouse_code: warehouseCode,
+            allow_manual_warehouse_override: cashRegisterForm.allowManualWarehouseOverride,
+            notes: cashRegisterForm.notes.trim().length > 0 ? cashRegisterForm.notes.trim() : null,
+          }),
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null);
+          throw new Error(payload?.message ?? "No se pudo registrar la caja");
+        }
+        toast({ variant: "success", title: "Cajas", description: "Caja registrada" });
+      }
+      cashRegistersRequestedRef.current = false;
+      await loadCashRegisters(true);
+      setCashRegisterModalOpen(false);
+      setCashRegisterForm(EMPTY_CASH_REGISTER_FORM);
+      setEditingCashRegisterCode(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo guardar la caja";
+      toast({ variant: "error", title: "Cajas", description: message });
+    } finally {
+      setCashRegisterSaving(false);
+    }
+  };
+
+  const handleToggleCashRegister = async (register: CashRegisterRecord) => {
+    try {
+      const res = await fetch(`/api/cajas/${encodeURIComponent(register.code)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: !register.isActive }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.message ?? "No se pudo actualizar la caja");
+      }
+      toast({
+        variant: "success",
+        title: "Cajas",
+        description: register.isActive ? "Caja desactivada" : "Caja activada",
+      });
+      cashRegistersRequestedRef.current = false;
+      await loadCashRegisters(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo actualizar la caja";
+      toast({ variant: "error", title: "Cajas", description: message });
+    }
+  };
+
+  const handleAssignCashRegister = async (adminUserId: number) => {
+    const selection = assignmentSelections[adminUserId]?.trim();
+    if (!selection) {
+      toast({ variant: "warning", title: "Asignaciones", description: "Selecciona una caja para asignar" });
+      return;
+    }
+    try {
+      const res = await fetch("/api/cajas/asignaciones", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          admin_user_id: adminUserId,
+          cash_register_code: selection,
+          action: "assign",
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.message ?? "No se pudo asignar la caja");
+      }
+      toast({ variant: "success", title: "Asignaciones", description: "Caja asignada" });
+      setAssignmentSelections((prev) => ({ ...prev, [adminUserId]: "" }));
+      cashAssignmentsRequestedRef.current = false;
+      await loadCashAssignments(true);
+      cashRegistersRequestedRef.current = false;
+      await loadCashRegisters(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo asignar la caja";
+      toast({ variant: "error", title: "Asignaciones", description: message });
+    }
+  };
+
+  const handleSetDefaultCashRegister = async (adminUserId: number, cashRegisterCode: string) => {
+    try {
+      const res = await fetch("/api/cajas/asignaciones", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          admin_user_id: adminUserId,
+          cash_register_code: cashRegisterCode,
+          action: "set_default",
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.message ?? "No se pudo actualizar la asignación");
+      }
+      toast({ variant: "success", title: "Asignaciones", description: "Caja predeterminada actualizada" });
+      cashAssignmentsRequestedRef.current = false;
+      await loadCashAssignments(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo actualizar la asignación";
+      toast({ variant: "error", title: "Asignaciones", description: message });
+    }
+  };
+
+  const handleUnassignCashRegister = async (adminUserId: number, cashRegisterCode: string) => {
+    try {
+      const res = await fetch("/api/cajas/asignaciones", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          admin_user_id: adminUserId,
+          cash_register_code: cashRegisterCode,
+          action: "unassign",
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.message ?? "No se pudo remover la asignación");
+      }
+      toast({ variant: "success", title: "Asignaciones", description: "Asignación eliminada" });
+      cashAssignmentsRequestedRef.current = false;
+      await loadCashAssignments(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo remover la asignación";
+      toast({ variant: "error", title: "Asignaciones", description: message });
+    }
+  };
 
   async function handleToggleAlert(alert: AlertRow) {
     try {
@@ -1167,6 +1553,283 @@ export default function PreferenciasPage() {
     </Card>
   );
 
+    const renderCashRegisterCatalog = () => (
+      <Card className="rounded-3xl border bg-background/95 shadow-sm">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="text-xl font-semibold">Cajas registradoras</CardTitle>
+              <CardDescription>Administra las cajas disponibles y su relación con almacenes.</CardDescription>
+            </div>
+            <Button type="button" className="rounded-2xl" onClick={handleOpenCreateCashRegisterModal}>
+              Nueva caja
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="overflow-x-auto">
+            <table className="min-w-full table-auto text-left text-sm">
+              <thead className="border-b text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Código</th>
+                  <th className="px-3 py-2">Nombre</th>
+                  <th className="px-3 py-2">Almacén</th>
+                  <th className="px-3 py-2">Notas</th>
+                  <th className="px-3 py-2">Override almacén</th>
+                  <th className="px-3 py-2">Estado</th>
+                  <th className="px-3 py-2">Actualizada</th>
+                  <th className="px-3 py-2 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {cashRegistersLoading ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      Cargando cajas...
+                    </td>
+                  </tr>
+                ) : cashRegisters.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      No hay cajas registradas.
+                    </td>
+                  </tr>
+                ) : (
+                  cashRegisters.map((register) => {
+                    const updatedLabel = register.updatedAt ? new Date(register.updatedAt).toLocaleString() : "—";
+                    return (
+                      <tr key={register.code} className="hover:bg-muted/40">
+                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{register.code}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-foreground">{register.name}</span>
+                            <span className="text-xs text-muted-foreground">Creada {new Date(register.createdAt).toLocaleDateString()}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-col">
+                            <span className="font-mono text-xs text-muted-foreground">{register.warehouseCode}</span>
+                            <span className="text-xs text-muted-foreground">{register.warehouseName}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          {register.notes ? register.notes : "—"}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+                              register.allowManualWarehouseOverride
+                                ? "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+                                : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {register.allowManualWarehouseOverride ? "Permitido" : "Fijo"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+                              register.isActive
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                                : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {formatStatus(register.isActive)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{updatedLabel}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-8 rounded-xl px-3 text-xs"
+                              onClick={() => handleOpenEditCashRegisterModal(register)}
+                            >
+                              Editar
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={register.isActive ? "destructive" : "secondary"}
+                              className="h-8 rounded-xl px-3 text-xs"
+                              onClick={() => void handleToggleCashRegister(register)}
+                            >
+                              {register.isActive ? "Desactivar" : "Activar"}
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => void loadCashRegisters(true)}>
+              Refrescar
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+
+    const renderCashAssignments = () => (
+      <Card className="rounded-3xl border bg-background/95 shadow-sm">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="text-xl font-semibold">Asignaciones a facturadores</CardTitle>
+              <CardDescription>Define qué cajas puede operar cada usuario con rol FACTURADOR.</CardDescription>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-2xl"
+              onClick={() => {
+                cashAssignmentsRequestedRef.current = false;
+                void loadCashAssignments(true);
+                facturadoresRequestedRef.current = false;
+                void loadFacturadores(true);
+              }}
+            >
+              Actualizar asignaciones
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="overflow-x-auto">
+            <table className="min-w-full table-auto text-left text-sm">
+              <thead className="border-b text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Usuario</th>
+                  <th className="px-3 py-2">Asignaciones</th>
+                  <th className="px-3 py-2">Seleccionar caja</th>
+                  <th className="px-3 py-2">Estado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {facturadoresLoading || cashAssignmentsLoading ? (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      Cargando usuarios y asignaciones...
+                    </td>
+                  </tr>
+                ) : facturadores.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      No hay usuarios con rol FACTURADOR.
+                    </td>
+                  </tr>
+                ) : (
+                  facturadores.map((user) => {
+                    const group = cashAssignmentMap.get(user.id) ?? null;
+                    const assignments = group?.assignments ?? [];
+                    const selection = assignmentSelections[user.id] ?? "";
+                    const disableActions = assignableCashRegisterOptions.length === 0 || cashRegistersLoading;
+                    return (
+                      <tr key={user.id} className="hover:bg-muted/40">
+                        <td className="px-3 py-2">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-foreground">{user.displayName ?? user.username}</span>
+                            <span className="text-xs text-muted-foreground">@{user.username}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          {assignments.length === 0 ? (
+                            <span className="text-xs text-muted-foreground">Sin asignaciones</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              {assignments.map((assignment) => (
+                                <div key={`${user.id}-${assignment.cashRegisterCode}`} className="flex items-center gap-2 rounded-2xl border border-muted px-3 py-1 text-xs">
+                                  <div className="flex flex-col">
+                                    <span className="font-medium text-foreground">{assignment.cashRegisterCode}</span>
+                                    <span className="text-[11px] text-muted-foreground">{assignment.cashRegisterName}</span>
+                                  </div>
+                                  {assignment.isDefault ? (
+                                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-primary">Predeterminada</span>
+                                  ) : (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 rounded-xl px-2 text-[11px]"
+                                      onClick={() => void handleSetDefaultCashRegister(user.id, assignment.cashRegisterCode)}
+                                    >
+                                      Predeterminar
+                                    </Button>
+                                  )}
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 rounded-xl px-2 text-[11px]"
+                                    onClick={() => void handleUnassignCashRegister(user.id, assignment.cashRegisterCode)}
+                                  >
+                                    Quitar
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-col gap-2">
+                            <Combobox
+                              value={selection || null}
+                              onChange={(value) =>
+                                setAssignmentSelections((prev) => ({
+                                  ...prev,
+                                  [user.id]: value ?? "",
+                                }))
+                              }
+                              options={assignableCashRegisterOptions}
+                              placeholder={disableActions ? "Sin cajas activas" : "Selecciona una caja"}
+                              emptyText="Sin coincidencias"
+                              disabled={disableActions}
+                              ariaLabel={`Asignar caja a ${user.displayName ?? user.username}`}
+                            />
+                            <Button
+                              type="button"
+                              className="rounded-2xl"
+                              disabled={disableActions || !selection}
+                              onClick={() => void handleAssignCashRegister(user.id)}
+                            >
+                              Asignar
+                            </Button>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+                              user.isActive
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                                : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {formatStatus(user.isActive)}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    );
+
+    const renderCashManagement = () => (
+      <div className="space-y-6">
+        {renderCashRegisterCatalog()}
+        {renderCashAssignments()}
+      </div>
+    );
+
   return (
     <section className="space-y-8 pb-16">
       <header className="space-y-2">
@@ -1195,6 +1858,9 @@ export default function PreferenciasPage() {
         <Button type="button" variant={activeTab === "notificaciones" ? "default" : "outline"} className="rounded-2xl" onClick={() => handleTabChange("notificaciones")}>
           Notificaciones
         </Button>
+        <Button type="button" variant={activeTab === "cajas" ? "default" : "outline"} className="rounded-2xl" onClick={() => handleTabChange("cajas")}>
+          Cajas
+        </Button>
       </div>
 
       {activeTab === "unidades" ? renderUnits() : null}
@@ -1202,6 +1868,7 @@ export default function PreferenciasPage() {
       {activeTab === "clasificaciones" ? renderClassifications() : null}
       {activeTab === "alertas" ? renderAlerts() : null}
       {activeTab === "notificaciones" ? renderChannels() : null}
+      {activeTab === "cajas" ? renderCashManagement() : null}
 
       <Modal
         open={unitModalOpen}
@@ -1570,6 +2237,124 @@ export default function PreferenciasPage() {
                 setChannelModalOpen(false);
                 setChannelForm(EMPTY_CHANNEL_FORM);
                 setEditingChannelId(null);
+              }}
+            >
+              Cerrar
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={cashRegisterModalOpen}
+        onClose={() => {
+          setCashRegisterModalOpen(false);
+          setCashRegisterForm(EMPTY_CASH_REGISTER_FORM);
+          setEditingCashRegisterCode(null);
+        }}
+        title={editingCashRegisterCode ? `Editar caja (${editingCashRegisterCode})` : "Nueva caja"}
+        description="Cada caja debe estar asociada a un almacén para controlar existencias."
+        contentClassName="max-w-xl"
+      >
+        <div className="grid gap-4">
+          <div className="grid gap-1">
+            <Label className="text-xs uppercase text-muted-foreground">Código</Label>
+            <Input
+              value={cashRegisterForm.code}
+              onChange={(event) =>
+                setCashRegisterForm((prev) => ({
+                  ...prev,
+                  code: event.target.value.replace(/[^A-Za-z0-9_-]/g, "").toUpperCase(),
+                }))
+              }
+              placeholder="CAJA-01"
+              maxLength={20}
+              disabled={!!editingCashRegisterCode}
+              className="rounded-2xl"
+            />
+          </div>
+          <div className="grid gap-1">
+            <Label className="text-xs uppercase text-muted-foreground">Nombre descriptivo</Label>
+            <Input
+              value={cashRegisterForm.name}
+              onChange={(event) => setCashRegisterForm((prev) => ({ ...prev, name: event.target.value }))}
+              placeholder="Caja mostrador"
+              maxLength={80}
+              className="rounded-2xl"
+            />
+          </div>
+          <div className="grid gap-1">
+            <Label className="text-xs uppercase text-muted-foreground">Almacén</Label>
+            <Combobox
+              value={cashRegisterForm.warehouseCode || null}
+              onChange={(value) =>
+                setCashRegisterForm((prev) => ({
+                  ...prev,
+                  warehouseCode: value ?? "",
+                }))
+              }
+              options={warehouseSelectOptions}
+              placeholder={warehousesLoading ? "Cargando almacenes..." : "Selecciona un almacén"}
+              emptyText={warehousesLoading ? "Cargando..." : "Sin coincidencias"}
+              disabled={warehousesLoading || warehouseSelectOptions.length === 0}
+              ariaLabel="Almacén para la caja"
+            />
+            {warehouseSelectOptions.length === 0 && !warehousesLoading ? (
+              <span className="text-xs text-muted-foreground">Registra al menos un almacén activo para continuar.</span>
+            ) : null}
+          </div>
+          <label className="flex items-center gap-2 rounded-2xl border border-muted px-3 py-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-muted bg-background"
+              checked={cashRegisterForm.allowManualWarehouseOverride}
+              onChange={(event) =>
+                setCashRegisterForm((prev) => ({
+                  ...prev,
+                  allowManualWarehouseOverride: event.target.checked,
+                }))
+              }
+            />
+            Permitir seleccionar otro almacén al facturar
+          </label>
+          <div className="grid gap-1">
+            <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
+            <textarea
+              value={cashRegisterForm.notes}
+              onChange={(event) => setCashRegisterForm((prev) => ({ ...prev, notes: event.target.value }))}
+              placeholder="Detalles operativos, responsables, turnos..."
+              maxLength={300}
+              className="min-h-[90px] w-full rounded-2xl border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+            />
+          </div>
+          {editingCashRegisterCode ? (
+            <label className="flex items-center gap-2 rounded-2xl border border-muted px-3 py-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-muted bg-background"
+                checked={cashRegisterForm.isActive}
+                onChange={(event) =>
+                  setCashRegisterForm((prev) => ({
+                    ...prev,
+                    isActive: event.target.checked,
+                  }))
+                }
+              />
+              Caja activa
+            </label>
+          ) : null}
+          <div className="flex gap-3">
+            <Button type="button" className="rounded-2xl" disabled={cashRegisterSaving} onClick={() => void handleSaveCashRegister()}>
+              {cashRegisterSaving ? "Guardando..." : editingCashRegisterCode ? "Actualizar" : "Guardar"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-2xl"
+              onClick={() => {
+                setCashRegisterModalOpen(false);
+                setCashRegisterForm(EMPTY_CASH_REGISTER_FORM);
+                setEditingCashRegisterCode(null);
               }}
             >
               Cerrar

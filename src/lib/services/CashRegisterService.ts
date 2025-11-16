@@ -1,17 +1,23 @@
 import { env } from "@/lib/env";
 import {
   CashRegisterAssignment,
+  CashRegisterAssignmentGroup,
   CashRegisterClosureSummary,
   CashRegisterReport,
+  CashRegisterRecord,
   CashRegisterSessionRecord,
   CloseCashRegisterSessionInput,
+  CreateCashRegisterInput,
   ExpectedPayment,
   OpenCashRegisterSessionInput,
   ReportedPayment,
+  UpdateCashRegisterInput,
 } from "@/lib/services/cash-registers/types";
 import { buildClosureSummary } from "@/lib/services/cash-registers/summary";
 import type { ICashRegisterRepository } from "@/lib/repositories/cash-registers/ICashRegisterRepository";
 import { CashRegisterRepository } from "@/lib/repositories/cash-registers/CashRegisterRepository";
+
+const normalizeCode = (value: string) => value.trim().toUpperCase();
 
 function cloneAssignment(assignment: CashRegisterAssignment): CashRegisterAssignment {
   return { ...assignment };
@@ -32,7 +38,36 @@ type MockCashRegister = {
   warehouseId: number;
   warehouseCode: string;
   warehouseName: string;
+  isActive: boolean;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string | null;
 };
+
+function cloneRegister(register: MockCashRegister): MockCashRegister {
+  return {
+    ...register,
+    createdAt: register.createdAt,
+    updatedAt: register.updatedAt,
+    notes: register.notes,
+  };
+}
+
+function mapRegisterToRecord(register: MockCashRegister): CashRegisterRecord {
+  return {
+    id: register.id,
+    code: register.code,
+    name: register.name,
+    warehouseId: register.warehouseId,
+    warehouseCode: register.warehouseCode,
+    warehouseName: register.warehouseName,
+    allowManualWarehouseOverride: register.allowManualWarehouseOverride,
+    isActive: register.isActive,
+    notes: register.notes,
+    createdAt: register.createdAt,
+    updatedAt: register.updatedAt,
+  } satisfies CashRegisterRecord;
+}
 
 type MockSessionInvoice = {
   sessionId: number;
@@ -48,6 +83,7 @@ export class CashRegisterService {
   private readonly mockSessions: Map<number, CashRegisterSessionRecord> | null;
   private readonly mockSessionInvoices: MockSessionInvoice[] | null;
   private mockSessionSeq: number;
+  private mockRegisterSeq: number;
 
   constructor(repository: ICashRegisterRepository = new CashRegisterRepository()) {
     this.repository = repository;
@@ -62,18 +98,24 @@ export class CashRegisterService {
           warehouseId: 1,
           warehouseCode: "PRINCIPAL",
           warehouseName: "Almacen principal",
+          isActive: true,
+          notes: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: null,
         },
       ];
       this.mockAssignments = new Map();
       this.mockSessions = new Map();
       this.mockSessionInvoices = [];
       this.mockSessionSeq = 1;
+      this.mockRegisterSeq = this.mockCashRegisters.reduce((max, item) => Math.max(max, item.id), 0) + 1;
     } else {
       this.mockCashRegisters = [];
       this.mockAssignments = null;
       this.mockSessions = null;
       this.mockSessionInvoices = null;
       this.mockSessionSeq = 0;
+      this.mockRegisterSeq = 0;
     }
   }
 
@@ -109,6 +151,212 @@ export class CashRegisterService {
       }
     }
     return null;
+  }
+
+  async listCashRegisters(options: { includeInactive?: boolean } = {}): Promise<CashRegisterRecord[]> {
+    if (env.useMockData) {
+      const includeInactive = options.includeInactive ?? false;
+      return this.mockCashRegisters
+        .filter((register) => includeInactive || register.isActive)
+        .map((register) => mapRegisterToRecord(cloneRegister(register)))
+        .sort((a, b) => a.code.localeCompare(b.code));
+    }
+    return this.repository.listCashRegisters(options);
+  }
+
+  async createCashRegister(input: CreateCashRegisterInput): Promise<CashRegisterRecord> {
+    if (!env.useMockData) {
+      return this.repository.createCashRegister(input);
+    }
+
+    const normalizedCode = normalizeCode(input.code);
+    if (this.mockCashRegisters.some((register) => register.code === normalizedCode)) {
+      throw new Error("Ya existe una caja con ese código");
+    }
+
+    const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
+    const warehouseCatalog = [
+      { id: 1, code: "PRINCIPAL", name: "Almacén principal" },
+      { id: 2, code: "COCINA", name: "Cocina" },
+      { id: 3, code: "BAR", name: "Barra principal" },
+    ];
+    const warehouse = warehouseCatalog.find((item) => item.code === normalizedWarehouseCode);
+    if (!warehouse) {
+      throw new Error(`El almacén ${normalizedWarehouseCode} no existe (mock)`);
+    }
+
+    const nowIso = new Date().toISOString();
+    const newRegister: MockCashRegister = {
+      id: this.mockRegisterSeq++,
+      code: normalizedCode,
+      name: input.name.trim(),
+      warehouseId: warehouse.id,
+      warehouseCode: warehouse.code,
+      warehouseName: warehouse.name,
+      allowManualWarehouseOverride: Boolean(input.allowManualWarehouseOverride),
+      isActive: true,
+      notes: input.notes?.trim() ? input.notes.trim().slice(0, 250) : null,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    this.mockCashRegisters.push(newRegister);
+    return mapRegisterToRecord(cloneRegister(newRegister));
+  }
+
+  async updateCashRegister(code: string, input: UpdateCashRegisterInput): Promise<CashRegisterRecord> {
+    if (!env.useMockData) {
+      return this.repository.updateCashRegister(code, input);
+    }
+
+    const normalizedCode = normalizeCode(code);
+    const target = this.mockCashRegisters.find((register) => register.code === normalizedCode);
+    if (!target) {
+      throw new Error("Caja no encontrada (mock)");
+    }
+
+    if (typeof input.name === "string") {
+      target.name = input.name.trim();
+    }
+
+    if (typeof input.allowManualWarehouseOverride === "boolean") {
+      target.allowManualWarehouseOverride = input.allowManualWarehouseOverride;
+    }
+
+    if (typeof input.isActive === "boolean") {
+      target.isActive = input.isActive;
+    }
+
+    if (typeof input.notes !== "undefined") {
+      target.notes = input.notes?.trim() ? input.notes.trim().slice(0, 250) : null;
+    }
+
+    if (typeof input.warehouseCode === "string" && input.warehouseCode.trim().length > 0) {
+      const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
+      const warehouseCatalog = [
+        { id: 1, code: "PRINCIPAL", name: "Almacén principal" },
+        { id: 2, code: "COCINA", name: "Cocina" },
+        { id: 3, code: "BAR", name: "Barra principal" },
+      ];
+      const warehouse = warehouseCatalog.find((item) => item.code === normalizedWarehouseCode);
+      if (!warehouse) {
+        throw new Error(`El almacén ${normalizedWarehouseCode} no existe (mock)`);
+      }
+      target.warehouseId = warehouse.id;
+      target.warehouseCode = warehouse.code;
+      target.warehouseName = warehouse.name;
+    }
+
+    target.updatedAt = new Date().toISOString();
+    return mapRegisterToRecord(cloneRegister(target));
+  }
+
+  async listCashRegisterAssignments(options: { adminUserIds?: number[] } = {}): Promise<CashRegisterAssignmentGroup[]> {
+    if (!env.useMockData || !this.mockAssignments) {
+      return this.repository.listCashRegisterAssignments(options);
+    }
+    const { adminUserIds } = options;
+    const allowList = adminUserIds && adminUserIds.length > 0 ? new Set(adminUserIds.map((id) => Number(id))) : null;
+    const result: CashRegisterAssignmentGroup[] = [];
+    for (const [adminId, assignments] of this.mockAssignments.entries()) {
+      if (allowList && !allowList.has(adminId)) {
+        continue;
+      }
+      const cloned = assignments.map(cloneAssignment);
+      const defaultAssignment = cloned.find((assignment) => assignment.isDefault) ?? null;
+      result.push({
+        adminUserId: adminId,
+        assignments: cloned,
+        defaultCashRegisterId: defaultAssignment ? defaultAssignment.cashRegisterId : null,
+      });
+    }
+    result.sort((a, b) => a.adminUserId - b.adminUserId);
+    return result;
+  }
+
+  async assignCashRegisterToAdmin(params: {
+    adminUserId: number;
+    cashRegisterCode: string;
+    makeDefault?: boolean;
+  }): Promise<void> {
+    if (!env.useMockData || !this.mockAssignments) {
+      await this.repository.assignCashRegisterToAdmin(params);
+      return;
+    }
+
+    const normalizedCode = normalizeCode(params.cashRegisterCode);
+    const register = this.mockCashRegisters.find((item) => item.code === normalizedCode && item.isActive);
+    if (!register) {
+      throw new Error(`La caja ${normalizedCode} no existe o está inactiva (mock)`);
+    }
+
+    const assignments = this.mockAssignments.get(params.adminUserId) ?? [];
+    if (params.makeDefault) {
+      for (const existing of assignments) {
+        existing.isDefault = false;
+      }
+    }
+
+    const existing = assignments.find((item) => item.cashRegisterId === register.id);
+    if (existing) {
+      existing.isDefault = Boolean(params.makeDefault);
+    } else {
+      assignments.push({
+        cashRegisterId: register.id,
+        cashRegisterCode: register.code,
+        cashRegisterName: register.name,
+        allowManualWarehouseOverride: register.allowManualWarehouseOverride,
+        warehouseId: register.warehouseId,
+        warehouseCode: register.warehouseCode,
+        warehouseName: register.warehouseName,
+        isDefault: Boolean(params.makeDefault),
+      });
+    }
+
+    this.mockAssignments.set(params.adminUserId, assignments);
+  }
+
+  async unassignCashRegisterFromAdmin(params: { adminUserId: number; cashRegisterCode: string }): Promise<void> {
+    if (!env.useMockData || !this.mockAssignments) {
+      await this.repository.unassignCashRegisterFromAdmin(params);
+      return;
+    }
+
+    const normalizedCode = normalizeCode(params.cashRegisterCode);
+    const assignments = this.mockAssignments.get(params.adminUserId);
+    if (!assignments) {
+      return;
+    }
+    const filtered = assignments.filter((assignment) => assignment.cashRegisterCode !== normalizedCode);
+    this.mockAssignments.set(params.adminUserId, filtered);
+  }
+
+  async setDefaultCashRegisterForAdmin(params: { adminUserId: number; cashRegisterCode: string }): Promise<void> {
+    if (!env.useMockData || !this.mockAssignments) {
+      await this.repository.setDefaultCashRegisterForAdmin(params);
+      return;
+    }
+
+    const normalizedCode = normalizeCode(params.cashRegisterCode);
+    const assignments = this.mockAssignments.get(params.adminUserId);
+    if (!assignments || assignments.length === 0) {
+      throw new Error("El usuario no tiene cajas asignadas (mock)");
+    }
+
+    let found = false;
+    for (const assignment of assignments) {
+      if (assignment.cashRegisterCode === normalizedCode) {
+        assignment.isDefault = true;
+        found = true;
+      } else {
+        assignment.isDefault = false;
+      }
+    }
+
+    if (!found) {
+      throw new Error("La caja no está asignada al usuario (mock)");
+    }
+
+    this.mockAssignments.set(params.adminUserId, assignments);
   }
 
   async listCashRegistersForAdmin(adminUserId: number): Promise<CashRegisterAssignment[]> {
