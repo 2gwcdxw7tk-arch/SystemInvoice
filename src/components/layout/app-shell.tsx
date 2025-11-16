@@ -1,7 +1,7 @@
 "use client";
 
-import { usePathname } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { SiteHeader } from "@/components/layout/site-header";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -9,14 +9,41 @@ import { BackToDashboard } from "@/components/layout/back-to-dashboard";
 import { cn } from "@/lib/utils";
 import type { SessionPayload } from "@/lib/auth/session";
 import { SessionProvider } from "@/components/providers/session-provider";
+import { useToast } from "@/components/ui/toast-provider";
+import { isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
 
 const HIDE_CHROME_PATHS = new Set<string>(["/", "/meseros/comandas"]);
+const FACTURADOR_ALLOWED_PATHS = ["/dashboard", "/facturacion", "/reportes"] as const;
+
+function canFacturadorVisit(pathname: string): boolean {
+  return FACTURADOR_ALLOWED_PATHS.some((allowed) => pathname === allowed || pathname.startsWith(`${allowed}/`));
+}
 
 export function AppShell({ children, session }: { children: ReactNode; session: SessionPayload | null }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { toast } = useToast();
   const [collapsed, setCollapsed] = useState(false);
 
   const hideNavigation = !pathname || HIDE_CHROME_PATHS.has(pathname);
+
+  const navigationRestricted = useMemo(() => {
+    if (!session) return false;
+    if (isSessionAdministrator(session)) return false;
+    if (!pathname) return false;
+    if (!isSessionFacturadorOnly(session)) return false;
+    return !canFacturadorVisit(pathname);
+  }, [pathname, session]);
+
+  useEffect(() => {
+    if (!navigationRestricted || !pathname) return;
+    toast({
+      variant: "warning",
+      title: "Acceso restringido",
+      description: "Solo puedes acceder a Dashboard, Facturación y Reportes.",
+    });
+    router.replace("/facturacion");
+  }, [navigationRestricted, pathname, router, toast]);
 
   return (
     <SessionProvider value={session}>

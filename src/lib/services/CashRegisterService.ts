@@ -127,6 +127,21 @@ export class CashRegisterService {
     return this.repository.getActiveCashRegisterSessionByAdmin(adminUserId);
   }
 
+  async listRecentCashRegisterSessions(adminUserId: number, options: { limit?: number } = {}): Promise<CashRegisterSessionRecord[]> {
+    if (env.useMockData && this.mockSessions) {
+      const limit = Number.isFinite(options.limit) && options.limit && options.limit > 0 ? Math.min(Math.trunc(options.limit), 50) : 10;
+      const sessions = Array.from(this.mockSessions.values()).filter((session) => session.adminUserId === adminUserId);
+      sessions.sort((a, b) => {
+        const timeA = new Date(a.openingAt).getTime();
+        const timeB = new Date(b.openingAt).getTime();
+        return timeB - timeA;
+      });
+      return sessions.slice(0, limit).map((session) => cloneSession(session));
+    }
+
+    return this.repository.listCashRegisterSessionsForAdmin(adminUserId, options);
+  }
+
   async getCashRegisterSessionById(sessionId: number): Promise<CashRegisterSessionRecord | null> {
     if (env.useMockData && this.mockSessions) {
       const session = this.mockSessions.get(sessionId);

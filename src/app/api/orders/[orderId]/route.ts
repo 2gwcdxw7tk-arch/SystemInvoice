@@ -16,8 +16,10 @@ const patchSchema = z
     message: "Debe enviar al menos un campo para actualizar",
   });
 
-export async function PATCH(request: NextRequest, context: { params: { orderId: string } }) {
-  const { orderId: rawOrderId } = context.params;
+type OrderRouteParams = { orderId: string };
+
+export async function PATCH(request: NextRequest, context: { params: Promise<OrderRouteParams> }) {
+  const { orderId: rawOrderId } = await context.params;
   const orderId = Number(rawOrderId);
   if (!Number.isFinite(orderId) || orderId <= 0) {
     return NextResponse.json({ success: false, message: "Identificador de pedido inválido" }, { status: 400 });

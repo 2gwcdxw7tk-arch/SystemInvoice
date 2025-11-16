@@ -22,7 +22,9 @@ const patchSchema = z
     message: "Debe especificar al menos un campo para actualizar",
   });
 
-function parseIds(params: { orderId: string; itemId: string }) {
+type OrderItemParams = { orderId: string; itemId: string };
+
+function parseIds(params: OrderItemParams) {
   const orderId = Number(params.orderId);
   const itemId = Number(params.itemId);
   if (!Number.isFinite(orderId) || orderId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {
@@ -31,8 +33,8 @@ function parseIds(params: { orderId: string; itemId: string }) {
   return { orderId, itemId };
 }
 
-export async function PATCH(request: NextRequest, context: { params: { orderId: string; itemId: string } }) {
-  const params = context.params;
+export async function PATCH(request: NextRequest, context: { params: Promise<OrderItemParams> }) {
+  const params = await context.params;
   const ids = parseIds(params);
   if (!ids) {
     return NextResponse.json({ success: false, message: "Identificadores inválidos" }, { status: 400 });
@@ -62,8 +64,8 @@ export async function PATCH(request: NextRequest, context: { params: { orderId: 
   }
 }
 
-export async function DELETE(_request: NextRequest, context: { params: { orderId: string; itemId: string } }) {
-  const params = context.params;
+export async function DELETE(_request: NextRequest, context: { params: Promise<OrderItemParams> }) {
+  const params = await context.params;
   const ids = parseIds(params);
   if (!ids) {
     return NextResponse.json({ success: false, message: "Identificadores inválidos" }, { status: 400 });

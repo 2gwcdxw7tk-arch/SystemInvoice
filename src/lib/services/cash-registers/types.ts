@@ -9,6 +9,20 @@ export type CashRegisterAssignment = {
   isDefault: boolean;
 };
 
+export type CashRegisterRecord = {
+  id: number;
+  code: string;
+  name: string;
+  warehouseId: number;
+  warehouseCode: string;
+  warehouseName: string;
+  allowManualWarehouseOverride: boolean;
+  isActive: boolean;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+};
+
 export type CashRegisterSessionRecord = {
   id: number;
   status: "OPEN" | "CLOSED" | "CANCELLED";
@@ -52,6 +66,28 @@ export type CashRegisterClosureSummary = {
 export type CashRegisterReport = CashRegisterClosureSummary & {
   issuerName?: string | null;
 };
+
+export type CashRegisterAssignmentGroup = {
+  adminUserId: number;
+  assignments: CashRegisterAssignment[];
+  defaultCashRegisterId: number | null;
+};
+
+export interface CreateCashRegisterInput {
+  code: string;
+  name: string;
+  warehouseCode: string;
+  allowManualWarehouseOverride?: boolean;
+  notes?: string | null;
+}
+
+export interface UpdateCashRegisterInput {
+  name?: string;
+  warehouseCode?: string;
+  allowManualWarehouseOverride?: boolean;
+  isActive?: boolean;
+  notes?: string | null;
+}
 
 export interface OpenCashRegisterSessionInput {
   adminUserId: number;

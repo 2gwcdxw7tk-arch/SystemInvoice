@@ -2,44 +2,29 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 import { SESSION_COOKIE_NAME, parseSessionCookie, type SessionPayload } from "@/lib/auth/session";
+import {
+  hasSessionPermission,
+  isSessionAdministrator,
+  isSessionFacturador,
+  isSessionFacturadorOnly,
+} from "@/lib/auth/session-roles";
 
 export type SessionOrResponse = { session: SessionPayload } | { response: NextResponse };
 
-function normalizeRoles(session: SessionPayload | null | undefined): string[] {
-  if (!session?.roles) {
-    return [];
-  }
-  return session.roles.map((role) => role.trim().toUpperCase()).filter(Boolean);
-}
-
-function normalizePermissions(session: SessionPayload | null | undefined): string[] {
-  if (!session?.permissions) {
-    return [];
-  }
-  return session.permissions.map((permission) => permission.trim()).filter(Boolean);
-}
-
 export function hasPermission(session: SessionPayload | null | undefined, permissionCode: string): boolean {
-  const permissions = normalizePermissions(session);
-  return permissions.some((permission) => permission === permissionCode);
+  return hasSessionPermission(session, permissionCode);
 }
 
 export function isAdministrator(session: SessionPayload | null | undefined): boolean {
-  if (!session) return false;
-  if (session.role === "admin") {
-    return true;
-  }
-  const roles = normalizeRoles(session);
-  return roles.includes("ADMINISTRADOR");
+  return isSessionAdministrator(session);
 }
 
 export function isFacturador(session: SessionPayload | null | undefined): boolean {
-  const roles = normalizeRoles(session);
-  return roles.includes("FACTURADOR");
+  return isSessionFacturador(session);
 }
 
 export function isFacturadorOnly(session: SessionPayload | null | undefined): boolean {
-  return isFacturador(session) && !isAdministrator(session);
+  return isSessionFacturadorOnly(session);
 }
 
 export function canAccessFacturacion(session: SessionPayload | null | undefined): boolean {

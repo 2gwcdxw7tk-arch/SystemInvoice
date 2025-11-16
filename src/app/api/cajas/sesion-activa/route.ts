@@ -35,6 +35,22 @@ const responseSchema = z.object({
     })
   ),
   defaultCashRegisterId: z.number().nullable(),
+  recentSessions: z.array(
+    z.object({
+      id: z.number(),
+      status: z.enum(["OPEN", "CLOSED", "CANCELLED"]),
+      openingAmount: z.number(),
+      openingAt: z.string(),
+      closingAmount: z.number().nullable(),
+      closingAt: z.string().nullable(),
+      cashRegister: z.object({
+        code: z.string(),
+        name: z.string(),
+        warehouseCode: z.string(),
+        warehouseName: z.string(),
+      }),
+    })
+  ),
 });
 
 export async function GET(request: NextRequest) {
@@ -58,9 +74,10 @@ export async function GET(request: NextRequest) {
   }
 
   const adminId = Number(session.sub);
-  const [assignments, currentSession] = await Promise.all([
+  const [assignments, currentSession, recentSessions] = await Promise.all([
     cashRegisterService.listCashRegistersForAdmin(adminId),
     cashRegisterService.getActiveCashRegisterSessionByAdmin(adminId),
+    cashRegisterService.listRecentCashRegisterSessions(adminId, { limit: 20 }),
   ]);
 
   const payload = {
@@ -83,6 +100,20 @@ export async function GET(request: NextRequest) {
       : null,
     cashRegisters: assignments,
     defaultCashRegisterId: assignments.find((register) => register.isDefault)?.cashRegisterId ?? null,
+      recentSessions: recentSessions.map((session) => ({
+        id: session.id,
+        status: session.status,
+        openingAmount: session.openingAmount,
+        openingAt: session.openingAt,
+        closingAmount: session.closingAmount,
+        closingAt: session.closingAt,
+        cashRegister: {
+          code: session.cashRegister.cashRegisterCode,
+          name: session.cashRegister.cashRegisterName,
+          warehouseCode: session.cashRegister.warehouseCode,
+          warehouseName: session.cashRegister.warehouseName,
+        },
+      })),
   };
 
   const parsed = responseSchema.safeParse(payload);

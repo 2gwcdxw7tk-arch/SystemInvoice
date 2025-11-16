@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-provider";
+import { useSession } from "@/components/providers/session-provider";
+import { isSessionAdministrator } from "@/lib/auth/session-roles";
 
 const DATETIME_FORMATTER = new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" });
 const DATE_FORMATTER = new Intl.DateTimeFormat("es-MX", { dateStyle: "medium" });
@@ -84,6 +86,8 @@ function toggleArrayValue(values: string[], value: string): string[] {
 
 export default function UsuariosPage() {
   const { toast } = useToast();
+  const session = useSession();
+  const isAdmin = isSessionAdministrator(session);
 
   const [users, setUsers] = useState<AdminUserEntry[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -105,6 +109,7 @@ export default function UsuariosPage() {
   const [togglingUserId, setTogglingUserId] = useState<number | null>(null);
 
   const loadUsers = useCallback(async () => {
+    if (!isAdmin) return;
     setLoadingUsers(true);
     try {
       const res = await fetch("/api/admin-users?include_inactive=true", { cache: "no-store" });
@@ -120,9 +125,10 @@ export default function UsuariosPage() {
     } finally {
       setLoadingUsers(false);
     }
-  }, [toast]);
+  }, [isAdmin, toast]);
 
   const loadRoles = useCallback(async () => {
+    if (!isAdmin) return;
     setLoadingRoles(true);
     try {
       const res = await fetch("/api/admin-users/roles?include_inactive=false", { cache: "no-store" });
@@ -138,12 +144,32 @@ export default function UsuariosPage() {
     } finally {
       setLoadingRoles(false);
     }
-  }, [toast]);
+  }, [isAdmin, toast]);
 
   useEffect(() => {
     void loadUsers();
     void loadRoles();
   }, [loadUsers, loadRoles]);
+
+  if (!isAdmin) {
+    return (
+      <section className="space-y-8 pb-16">
+        <header className="space-y-2">
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">Usuarios</h1>
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            Esta sección está disponible únicamente para administradores.
+          </p>
+        </header>
+        <Card className="rounded-3xl border bg-background/95 shadow-sm">
+          <CardContent className="py-12 text-center">
+            <p className="text-sm text-muted-foreground">
+              Solicita acceso a un administrador si necesitas realizar cambios en usuarios y roles.
+            </p>
+          </CardContent>
+        </Card>
+      </section>
+    );
+  }
 
   const stats = useMemo(() => {
     const total = users.length;

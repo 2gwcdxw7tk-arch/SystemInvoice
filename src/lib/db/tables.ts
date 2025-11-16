@@ -3,6 +3,8 @@ import "server-only";
 import { env } from "@/lib/env";
 import type { PoolClient } from "@/lib/db/postgres";
 import { query, withTransaction } from "@/lib/db/postgres";
+import { TableZoneRepository } from "@/lib/repositories/TableZoneRepository";
+import type { TableZoneRow } from "@/lib/repositories/ITableZoneRepository";
 import type { OrderLine, OrderStatus } from "@/lib/orders/types";
 
 export type TableReservationSnapshot = {
@@ -148,6 +150,8 @@ type DbSnapshot = {
 const mockZoneCatalog = new Map<string, TableZoneRecord>();
 const mockTableCatalog = new Map<string, TableDefinitionRecord>();
 const mockTableStore = new Map<string, TableOrderState>();
+
+const tableZoneRepository = new TableZoneRepository();
 
 function toIsoString(value: Date | string | null | undefined): string | null {
   if (!value) {
@@ -407,6 +411,17 @@ function toZoneSnapshot(record: TableZoneRecord): TableZone {
     sort_order: record.sortOrder,
     created_at: record.createdAt,
     updated_at: record.updatedAt,
+  };
+}
+
+function toZoneSnapshotFromRow(row: TableZoneRow): TableZone {
+  return {
+    id: row.id,
+    name: row.name,
+    is_active: row.isActive,
+    sort_order: row.sortOrder,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt ?? null,
   };
 }
 
@@ -1323,8 +1338,13 @@ async function releaseTableReservationDb(tableId: string): Promise<TableAdminSna
 }
 
 export async function listTableZones(options?: { includeInactive?: boolean }): Promise<TableZone[]> {
-  ensureZoneCatalogSeed();
   const includeInactive = options?.includeInactive ?? true;
+  if (!env.useMockData) {
+    const rows = await tableZoneRepository.listZones(includeInactive);
+    return rows.map(toZoneSnapshotFromRow);
+  }
+
+  ensureZoneCatalogSeed();
   return Array.from(mockZoneCatalog.values())
     .filter((record) => includeInactive || record.isActive)
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
@@ -1332,6 +1352,11 @@ export async function listTableZones(options?: { includeInactive?: boolean }): P
 }
 
 export async function createTableZone(input: { name: string; isActive?: boolean }): Promise<TableZone> {
+  if (!env.useMockData) {
+    const created = await tableZoneRepository.createZone({ name: input.name, isActive: input.isActive });
+    return toZoneSnapshotFromRow(created);
+  }
+
   assertMockMode();
   ensureZoneCatalogSeed();
   const name = input.name.trim();
@@ -1360,6 +1385,14 @@ export async function createTableZone(input: { name: string; isActive?: boolean 
 }
 
 export async function updateTableZone(zoneId: string, patch: { name?: string; isActive?: boolean }): Promise<TableZone> {
+  if (!env.useMockData) {
+    const updated = await tableZoneRepository.updateZone(zoneId, {
+      name: patch.name,
+      isActive: patch.isActive,
+    });
+    return toZoneSnapshotFromRow(updated);
+  }
+
   assertMockMode();
   ensureZoneCatalogSeed();
   const id = normalizeZoneId(zoneId);

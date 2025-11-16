@@ -1,11 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { listWarehouses } from "@/lib/db/warehouses";
-import { requireAdministrator } from "@/lib/auth/access";
+import {
+  forbiddenResponse,
+  requireSession,
+  isAdministrator,
+  isFacturador,
+  hasPermission,
+} from "@/lib/auth/access";
 
 export async function GET(request: NextRequest) {
-  const access = await requireAdministrator(request, "Solo un administrador puede consultar almacenes");
+  const access = await requireSession(request);
   if ("response" in access) return access.response;
+
+  const { session } = access;
+  const canReadWarehouses =
+    isAdministrator(session) ||
+    isFacturador(session) ||
+    hasPermission(session, "inventory.report.view") ||
+    hasPermission(session, "inventory.view");
+
+  if (!canReadWarehouses) {
+    return forbiddenResponse("No tienes permisos para consultar bodegas");
+  }
 
   try {
     const items = await listWarehouses();

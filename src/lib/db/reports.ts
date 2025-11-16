@@ -140,6 +140,14 @@ function buildMockNumber(seed: number, multiplier: number, precision = 2) {
   return Math.round(value * factor) / factor;
 }
 
+function roundNumber(value: unknown, precision = 2): number {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return Number(numeric.toFixed(precision));
+}
+
 export async function getSalesSummaryReport(filters: SalesSummaryFilters): Promise<SalesSummaryResult> {
   if (env.useMockData) {
     const base = buildMockNumber(new Date(filters.from).getTime(), 4200);
@@ -230,6 +238,9 @@ export async function getSalesSummaryReport(filters: SalesSummaryFilters): Promi
 
   const totalsRow = totalsQuery.rows[0] ?? { invoices: 0, subtotal: 0, service_charge: 0, vat_amount: 0, total_amount: 0 };
   const invoicesCount = Number(totalsRow.invoices ?? 0);
+  const subtotalAmount = roundNumber(totalsRow.subtotal);
+  const serviceChargeAmount = roundNumber(totalsRow.service_charge);
+  const vatAmount = roundNumber(totalsRow.vat_amount);
   const totalAmount = Number(totalsRow.total_amount ?? 0);
 
   const { whereClause: paymentsWhereClause, params: paymentParams } = buildWhere({ includePaymentMethod: true });
@@ -261,20 +272,20 @@ export async function getSalesSummaryReport(filters: SalesSummaryFilters): Promi
   return {
     totals: {
       invoices: invoicesCount,
-      subtotal: Number((totalsRow.subtotal ?? 0).toFixed(2)),
-      serviceCharge: Number((totalsRow.service_charge ?? 0).toFixed(2)),
-      vat: Number((totalsRow.vat_amount ?? 0).toFixed(2)),
-      total: Number(totalAmount.toFixed(2)),
-      averageTicket: invoicesCount > 0 ? Number((totalAmount / invoicesCount).toFixed(2)) : 0,
+      subtotal: subtotalAmount,
+      serviceCharge: serviceChargeAmount,
+      vat: vatAmount,
+      total: roundNumber(totalAmount),
+      averageTicket: invoicesCount > 0 ? roundNumber(totalAmount / invoicesCount) : 0,
     },
     payments: paymentsResult.rows.map((row) => ({
       method: row.method,
-      amount: Number((row.amount ?? 0).toFixed(2)),
+      amount: roundNumber(row.amount),
     })),
     byDay: byDay.rows.map((row) => ({
       date: row.date instanceof Date ? row.date.toISOString() : new Date(row.date).toISOString(),
       invoices: Number(row.invoices ?? 0),
-      total: Number((row.total ?? 0).toFixed(2)),
+      total: roundNumber(row.total),
     })),
   } satisfies SalesSummaryResult;
 }
@@ -332,9 +343,9 @@ export async function getWaiterPerformanceReport(filters: WaiterPerformanceFilte
       waiterCode: row.waiter_code,
       waiterName: row.waiter_name ?? "Sin asignar",
       invoices,
-      totalSales: Number(totalSales.toFixed(2)),
-      averageTicket: invoices > 0 ? Number((totalSales / invoices).toFixed(2)) : 0,
-      serviceCharge: Number((row.service_charge ?? 0).toFixed(2)),
+      totalSales: roundNumber(totalSales),
+      averageTicket: invoices > 0 ? roundNumber(totalSales / invoices) : 0,
+      serviceCharge: roundNumber(row.service_charge),
       lastSaleAt: row.last_sale_at ? (row.last_sale_at instanceof Date ? row.last_sale_at.toISOString() : new Date(row.last_sale_at).toISOString()) : null,
     } satisfies WaiterPerformanceRow;
   });
@@ -398,9 +409,9 @@ export async function getTopItemsReport(filters: TopItemsFilters): Promise<TopIt
 
   return result.rows.map((row) => ({
     description: row.description,
-    quantity: Number((row.quantity ?? 0).toFixed(2)),
-    total: Number((row.total ?? 0).toFixed(2)),
-    averagePrice: Number((row.average_price ?? 0).toFixed(2)),
+    quantity: roundNumber(row.quantity),
+    total: roundNumber(row.total),
+    averagePrice: roundNumber(row.average_price),
     firstSaleAt: row.first_sale_at ? (row.first_sale_at instanceof Date ? row.first_sale_at.toISOString() : new Date(row.first_sale_at).toISOString()) : null,
     lastSaleAt: row.last_sale_at ? (row.last_sale_at instanceof Date ? row.last_sale_at.toISOString() : new Date(row.last_sale_at).toISOString()) : null,
   } satisfies TopItemRow));
@@ -485,19 +496,19 @@ export async function getInventoryMovementsReport(filters: InventoryMovementsFil
     const exitsStorage = Number(row.exits_storage ?? 0);
     return {
       transactionType: row.transaction_type,
-      entriesRetail: Number(entriesRetail.toFixed(4)),
-      exitsRetail: Number(exitsRetail.toFixed(4)),
-      netRetail: Number((entriesRetail - exitsRetail).toFixed(4)),
-      entriesStorage: Number(entriesStorage.toFixed(4)),
-      exitsStorage: Number(exitsStorage.toFixed(4)),
-      netStorage: Number((entriesStorage - exitsStorage).toFixed(4)),
+      entriesRetail: roundNumber(entriesRetail, 4),
+      exitsRetail: roundNumber(exitsRetail, 4),
+      netRetail: roundNumber(entriesRetail - exitsRetail, 4),
+      entriesStorage: roundNumber(entriesStorage, 4),
+      exitsStorage: roundNumber(exitsStorage, 4),
+      netStorage: roundNumber(entriesStorage - exitsStorage, 4),
     } satisfies InventoryMovementsSummaryRow;
   });
 
   const totals = summary.reduce(
     (acc, row) => ({
-      netRetail: Number((acc.netRetail + row.netRetail).toFixed(4)),
-      netStorage: Number((acc.netStorage + row.netStorage).toFixed(4)),
+      netRetail: roundNumber(acc.netRetail + row.netRetail, 4),
+      netStorage: roundNumber(acc.netStorage + row.netStorage, 4),
     }),
     { netRetail: 0, netStorage: 0 }
   );
@@ -569,11 +580,11 @@ export async function getPurchasesReport(filters: PurchasesReportFilters): Promi
     return {
       supplierName: row.supplier_name || "Sin proveedor",
       purchases,
-      totalAmount: Number(totalAmount.toFixed(2)),
-      pendingAmount: Number((row.pending_amount ?? 0).toFixed(2)),
-      partialAmount: Number((row.partial_amount ?? 0).toFixed(2)),
-      paidAmount: Number((row.paid_amount ?? 0).toFixed(2)),
-      averageTicket: purchases > 0 ? Number((totalAmount / purchases).toFixed(2)) : 0,
+      totalAmount: roundNumber(totalAmount),
+      pendingAmount: roundNumber(row.pending_amount),
+      partialAmount: roundNumber(row.partial_amount),
+      paidAmount: roundNumber(row.paid_amount),
+      averageTicket: purchases > 0 ? roundNumber(totalAmount / purchases) : 0,
       lastPurchaseAt: row.last_purchase_at ? (row.last_purchase_at instanceof Date ? row.last_purchase_at.toISOString() : new Date(row.last_purchase_at).toISOString()) : null,
     } satisfies PurchasesReportRow;
   });
@@ -714,18 +725,18 @@ export async function getInvoiceStatusReport(filters: InvoiceStatusFilters): Pro
     summary: summaryResult.rows.map((row) => ({
       status: row.status,
       invoices: Number(row.invoices ?? 0),
-      totalAmount: Number((row.total_amount ?? 0).toFixed(2)),
-      paidAmount: Number((row.paid_amount ?? 0).toFixed(2)),
-      balance: Number((row.balance ?? 0).toFixed(2)),
+      totalAmount: roundNumber(row.total_amount),
+      paidAmount: roundNumber(row.paid_amount),
+      balance: roundNumber(row.balance),
     })),
     topPending: topResult.rows.map((row) => ({
       invoiceNumber: row.invoice_number,
       customerName: row.customer_name,
       waiterCode: row.waiter_code,
       createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : new Date(row.created_at).toISOString(),
-      totalAmount: Number((row.total_amount ?? 0).toFixed(2)),
-      paidAmount: Number((row.paid_amount ?? 0).toFixed(2)),
-      balance: Number((row.balance ?? 0).toFixed(2)),
+      totalAmount: roundNumber(row.total_amount),
+      paidAmount: roundNumber(row.paid_amount),
+      balance: roundNumber(row.balance),
       status: row.status,
     })),
   } satisfies InvoiceStatusResult;

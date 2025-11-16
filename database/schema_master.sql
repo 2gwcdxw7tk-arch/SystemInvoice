@@ -323,6 +323,131 @@ CREATE INDEX IF NOT EXISTS ix_cash_register_session_payments_session
   ON app.cash_register_session_payments (session_id);
 
 -- ========================================================
+-- Tabla: app.invoices (cabecera de facturas)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.invoices (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  invoice_number VARCHAR(50) NOT NULL,
+  table_code VARCHAR(40) REFERENCES app.tables(id) ON DELETE SET NULL,
+  waiter_code VARCHAR(50) REFERENCES app.waiters(code) ON DELETE SET NULL,
+  invoice_date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  origin_order_id BIGINT REFERENCES app.orders(id) ON DELETE SET NULL,
+  subtotal NUMERIC(18,2) NOT NULL CHECK (subtotal >= 0),
+  service_charge NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (service_charge >= 0),
+  vat_amount NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (vat_amount >= 0),
+  vat_rate NUMERIC(9,4) NOT NULL DEFAULT 0 CHECK (vat_rate >= 0),
+  total_amount NUMERIC(18,2) NOT NULL CHECK (total_amount >= 0),
+  currency_code VARCHAR(3) NOT NULL DEFAULT 'NIO',
+  notes VARCHAR(400),
+  customer_name VARCHAR(160),
+  customer_tax_id VARCHAR(30),
+  issuer_admin_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
+  cash_register_id INTEGER REFERENCES app.cash_registers(id) ON DELETE SET NULL,
+  cash_register_session_id BIGINT REFERENCES app.cash_register_sessions(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (invoice_number)
+);
+
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS cash_register_session_id BIGINT REFERENCES app.cash_register_sessions(id) ON DELETE SET NULL;
+
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS cash_register_id INTEGER REFERENCES app.cash_registers(id) ON DELETE SET NULL;
+
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS issuer_admin_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL;
+
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS waiter_code VARCHAR(50) REFERENCES app.waiters(code) ON DELETE SET NULL;
+
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS table_code VARCHAR(40) REFERENCES app.tables(id) ON DELETE SET NULL;
+
+DROP TRIGGER IF EXISTS trg_invoices_touch_updated_at ON app.invoices;
+CREATE TRIGGER trg_invoices_touch_updated_at
+BEFORE UPDATE ON app.invoices
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_invoices_created_at
+  ON app.invoices (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ix_invoices_waiter_code
+  ON app.invoices (waiter_code) WHERE waiter_code IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS ix_invoices_cash_session
+  ON app.invoices (cash_register_session_id);
+
+-- ========================================================
+-- Tabla: app.invoice_payments (pagos asociados a facturas)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.invoice_payments (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  invoice_id BIGINT NOT NULL REFERENCES app.invoices(id) ON DELETE CASCADE,
+  payment_method VARCHAR(40) NOT NULL,
+  amount NUMERIC(18,2) NOT NULL CHECK (amount >= 0),
+  reference VARCHAR(120),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE app.invoice_payments
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+CREATE INDEX IF NOT EXISTS ix_invoice_payments_invoice_id
+  ON app.invoice_payments (invoice_id);
+
+CREATE INDEX IF NOT EXISTS ix_invoice_payments_method
+  ON app.invoice_payments (payment_method);
+
+-- ========================================================
+-- Tabla: app.invoice_items (detalle de facturas)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.invoice_items (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  invoice_id BIGINT NOT NULL REFERENCES app.invoices(id) ON DELETE CASCADE,
+  line_number INTEGER NOT NULL,
+  article_code VARCHAR(40),
+  description VARCHAR(200) NOT NULL,
+  quantity NUMERIC(18,4) NOT NULL CHECK (quantity > 0),
+  unit_price NUMERIC(18,6) NOT NULL CHECK (unit_price >= 0),
+  line_total NUMERIC(18,2) NOT NULL CHECK (line_total >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (invoice_id, line_number)
+);
+
+ALTER TABLE app.invoice_items
+  ADD COLUMN IF NOT EXISTS article_code VARCHAR(40);
+
+ALTER TABLE app.invoice_items
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+CREATE INDEX IF NOT EXISTS ix_invoice_items_invoice
+  ON app.invoice_items (invoice_id);
+
+CREATE INDEX IF NOT EXISTS ix_invoice_items_article
+  ON app.invoice_items (article_code)
+  WHERE article_code IS NOT NULL;
+
+-- ========================================================
+-- Vista: app.invoice_items_movements (ventas por item)
+-- ========================================================
+DROP VIEW IF EXISTS app.invoice_items_movements;
+CREATE VIEW app.invoice_items_movements AS
+SELECT
+  ii.id AS item_id,
+  COALESCE(ii.quantity, 0) AS quantity,
+  COALESCE(ii.line_total, 0) AS total_amount,
+  COALESCE(i.invoice_date, i.created_at) AS created_at
+FROM app.invoice_items ii
+INNER JOIN app.invoices i ON i.id = ii.invoice_id;
+
+-- ========================================================
 -- Tabla: app.roles y asignación de permisos
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.roles (

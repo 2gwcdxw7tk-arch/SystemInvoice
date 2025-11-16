@@ -8,6 +8,7 @@ import { ChevronLeft, ChevronRight, LayoutDashboard, ListChecks, PackageSearch, 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { SessionPayload } from "@/lib/auth/session";
+import { isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
 
 export type NavItem = {
   label: string;
@@ -41,17 +42,16 @@ export function Sidebar({ collapsed = false, onToggleCollapse, variant = "deskto
   const pathname = usePathname();
   const [currentHash, setCurrentHash] = useState<string>("#resumen");
 
-  const normalizedRoles = (session?.roles ?? []).map((role) => role.trim().toUpperCase());
-  const isAdministrator = session?.role === "admin" || normalizedRoles.includes("ADMINISTRADOR");
-  const isFacturadorOnly = normalizedRoles.includes("FACTURADOR") && !isAdministrator;
+  const sessionIsAdministrator = isSessionAdministrator(session);
+  const sessionIsFacturadorOnly = isSessionFacturadorOnly(session);
 
-  const allowedPathsForFacturador = new Set(["/facturacion"]);
+  const allowedPathsForFacturador = new Set(["/dashboard", "/facturacion", "/reportes"]);
 
   const navItems: SidebarNavItem[] = NAV_ITEMS.map((item) => {
-    const isAllowed = isAdministrator || allowedPathsForFacturador.has(item.href.pathname);
+    const isAllowed = sessionIsAdministrator || allowedPathsForFacturador.has(item.href.pathname);
     return {
       ...item,
-      disabled: isFacturadorOnly && !isAllowed,
+      disabled: sessionIsFacturadorOnly && !isAllowed,
     };
   });
 

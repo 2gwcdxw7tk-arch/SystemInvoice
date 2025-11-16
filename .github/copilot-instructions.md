@@ -1,40 +1,46 @@
 # Copilot Instructions
 
 ## Architecture
-- Next.js 15 App Router project; route segments and API handlers live under `src/app/**` (e.g., `src/app/facturacion/page.tsx`, `src/app/api/invoices/route.ts`).
-- PostgreSQL access goes through `src/lib/db/postgres.ts` and thin data modules (`src/lib/db/*.ts`); when `MOCK_DATA=true` endpoints short-circuit to in-memory stores.
-- Shared UI utilities (shadcn/ui, Tailwind tokens) sit in `src/components/ui` and `src/lib/utils.ts`; respect these instead of reinventing styling helpers.
+- Next.js 15 App Router project; route segments and API handlers viven bajo `src/app/**` (ej. `src/app/facturacion/page.tsx`, `src/app/api/invoices/route.ts`).
+- Acceso a PostgreSQL centralizado en `src/lib/db/prisma.ts`; las operaciones de datos se encapsulan en repositorios (`src/lib/repositories/**`) consumidos por servicios (`src/lib/services/**`). Siempre úsalo en lugar de helpers legacy.
+- Los servicios exponen modo MOCK consistente; cuando `MOCK_DATA=true` delegan a stores en memoria manteniendo la misma interfaz pública.
+- Utilidades UI compartidas (shadcn/ui, tokens Tailwind) residen en `src/components/ui` y `src/lib/utils.ts`; recicla estos componentes y helpers para conservar el diseño.
 
 ## Key Workflows
-- Install deps with `npm install`; run locally via `npm run dev`. Production build uses `npm run build && npm run start` (mirrors Dockerfile release stage).
-- Mandatory quality gates: `npm run lint` and `npm run typecheck`; run both before proposing merges.
-- API smoke tests: ejecuta `GET /api/health` (conectividad PostgreSQL) y `POST /api/invoices` con los payloads de `README.md` cuando modifiques persistencia.
+- Instala dependencias con `npm install`; ejecuta en local mediante `npm run dev`. El build productivo usa `npm run build && npm run start` (igual al Dockerfile).
+- Calidad obligatoria: `npm run lint` y `npm run typecheck` antes de publicar cambios.
+- Cuando toques persistencia, haz smoke test a `GET /api/health` y `POST /api/invoices` con los payloads del README.
+- Si agregas endpoints nuevos, publica la interfaz en el README o en `docs/` junto con ejemplos de curl para mantener la documentación viva.
 
 ## Domain Patterns
-- Facturación UI (`src/app/facturacion/page.tsx`) separates flows by search param `mode`; reuse the existing mode switch instead of new routes.
-- Price list maintenance caches `/api/articulos` responses using `useRef` guards (`catalogRequestedRef`, `articlesRequestedRef`); extend these guards rather than adding duplicated fetch logic.
-- Monetary values always flow through `getCurrencyFormatter` or `formatCurrency` helpers; never format currency manually.
-- Environment-driven behavior (`NEXT_PUBLIC_VAT_RATE`, `NEXT_PUBLIC_SERVICE_RATE`, `DEFAULT_PRICE_LIST_CODE`) must be read via `process.env` at module scope and memoized if reused.
+- Facturación (`src/app/facturacion/page.tsx`) separa flujos por `mode`; reutiliza el switch existente en vez de abrir rutas nuevas.
+- Mantenimiento de listas de precio usa caches `useRef` (`catalogRequestedRef`, `articlesRequestedRef`); extiende esos guards, no dupliques lógica de fetch.
+- Autenticación y directorios consumen `adminUserService` y `waiterService`; si necesitas nuevas operaciones crea métodos en servicios/repositorios antes de tocar handlers.
+- Valores monetarios siempre pasan por `getCurrencyFormatter` o `formatCurrency`; evita `toLocaleString` directo para no romper formatos.
+- Configuración con `process.env` (ej. `NEXT_PUBLIC_VAT_RATE`, `DEFAULT_PRICE_LIST_CODE`) se lee a nivel de módulo y se memoiza cuando se reutiliza.
 
 ## Conventions
-- Forms rely on controlled inputs with `useState` plus lightweight input sanitization (`replace(/[^0-9.,]/g, "")`); preserve that pattern to avoid locale surprises.
-- Toast notifications use `useToast()` from `@/components/ui/use-toast`; surface success/warning/error consistently when mutating state.
-- When adding tables or modals, follow the rounded `Card`/`Modal` composition already in `src/app/facturacion/page.tsx` (rounded-2xl/3xl classes, descriptive subtitles).
-- API handlers expect Zod-validated payloads (see `src/app/api/inventario/traspasos/route.ts`); introduce new handlers with the same schema-first approach.
+- Formularios controlados con `useState` y sanitizado ligero (`replace(/[^0-9.,]/g, "")`); mantén esa pauta para evitar sorpresas de locales.
+- Toasts usan `useToast()` de `@/components/ui/use-toast`; comunica success/warning/error de forma consistente al mutar estado.
+- Nuevas tablas o modales deben seguir las composiciones `Card`/`Modal` existentes (bordes `rounded-2xl/3xl`, subtítulos descriptivos).
+- Handlers API siempre validan con Zod (ver `src/app/api/inventario/traspasos/route.ts`). Crea schemas primero y reutiliza utilidades de error.
+- Todos los handlers deben depender de servicios (`adminUserService`, `waiterService`, etc.) y nunca llamar repositorios directamente desde la capa HTTP.
 
 ## Data & Integration
-- `/api/articulos` accepts `price_list_code` and `unit`; UI assumes `items[].price.base_price` for base pricing—update both response and UI mapping together.
-- SQL migrations live in `database/schema_master.sql`; keep schema changes centralized there before updating code.
-- Docker build uses the Next.js standalone output; ensure new runtime deps are declared in `package.json` or they will be pruned at build time.
+- `/api/articulos` acepta `price_list_code` y `unit`; la UI espera `items[].price.base_price`. Si cambias estructura ajusta respuesta y mapeos juntos.
+- Migraciones SQL residen en `database/schema_master.sql`; mantén ahí cualquier alteración de esquema antes de tocar código.
+- Build Docker usa output standalone; declara dependencias runtime en `package.json` o se purgarán en producción.
+- Cuando agregues repositorios nuevos, registra sus mocks equivalentes en el servicio correspondiente para respetar `MOCK_DATA`.
 
 ## Collaboration Tips
-- Prefer enhancing existing state objects (`priceListItems`, `recentInvoices`) instead of introducing parallel stores; selectors depend on memoized derived state.
-- Document any new environment variable in `.env.example` and the root `README.md` to keep onboarding smooth.
-- If you touch shared helpers or UI primitives, scan usages with `pnpm exec eslint --fix` (or `npm run lint`) afterwards to catch ripple effects.
+- Extiende estados existentes (`priceListItems`, `recentInvoices`) en lugar de abrir stores paralelos; hay selectores que dependen de memoización.
+- Documenta variables de entorno nuevas en `.env.example` y en el README.
+- Si modificas helpers compartidos o componentes UI, ejecuta `npm run lint` y revisa usos con búsqueda global para detectar efectos colaterales.
+- Cuando cierres una migración o cambio transversal, actualiza README o `docs/` con la arquitectura vigente.
 
 
 Siempre constesta y presenta lo que debas en español.## Instrucciones para Copilot
 
-iempre usa los controles que tenemos previamente creados para que todo tenga el mismo diseño homogeneo en todos los controles del sitio
+Siempre usa los controles que tenemos previamente creados para que todo mantenga el mismo diseño homogéneo.
 
-Siempre revisa el codigo antes de terminar para evitar los errores de sintaxis o de logica.
+Siempre revisa el código antes de terminar para evitar errores de sintaxis o de lógica.

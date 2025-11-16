@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, PackageSearch, Ruler } from "lucide-react";
+import { Boxes, PackageSearch } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,12 +12,6 @@ const MENU_ITEMS = [
     title: "Catálogo de artículos",
     description: "Consulta, filtra y administra productos en existencia.",
     icon: PackageSearch,
-  },
-  {
-    href: "/articulos/unidades",
-    title: "Unidades de medida",
-    description: "Mantén coherencia entre unidades base, detalle y factores de conversión.",
-    icon: Ruler,
   },
   {
     href: "/articulos/ensamble",
@@ -32,7 +26,7 @@ export default function ArticulosPage() {
     <section className="space-y-10 pb-16">
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Artículos</h1>
-        <p className="text-sm text-muted-foreground">Elige el submódulo para gestionar productos, unidades o componentes.</p>
+        <p className="text-sm text-muted-foreground">Elige el submódulo para gestionar productos individuales o kits.</p>
       </header>
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">

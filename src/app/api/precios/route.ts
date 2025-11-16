@@ -11,7 +11,7 @@ import {
   setPriceListAsDefault,
   upsertPriceList,
 } from "@/lib/db/prices";
-import { requireAdministrator } from "@/lib/auth/access";
+import { forbiddenResponse, requireAdministrator, requireSession, isAdministrator, isFacturador, hasPermission } from "@/lib/auth/access";
 
 const priceListSchema = z.object({
   code: z.string().trim().min(1).max(30),
@@ -53,8 +53,19 @@ const deleteArticleSchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
-  const access = await requireAdministrator(request, "Solo un administrador puede consultar listas de precio");
+  const access = await requireSession(request);
   if ("response" in access) return access.response;
+
+  const { session } = access;
+  const canConsult =
+    isAdministrator(session) ||
+    isFacturador(session) ||
+    hasPermission(session, "invoice.issue") ||
+    hasPermission(session, "cash.register.open");
+
+  if (!canConsult) {
+    return forbiddenResponse("No tienes permisos para consultar listas de precio");
+  }
 
   try {
     const searchParams = request.nextUrl.searchParams;
