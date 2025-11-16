@@ -9,31 +9,35 @@ import {
   normalizeIdentifier,
   sanitizeNullable,
 } from "@/lib/utils/auth";
+import type { IAdminUserRepository } from "@/lib/repositories/IAdminUserRepository";
 import type {
-  IAdminUserRepository,
   VerifyAdminCredentialsResult,
   AdminDirectoryEntry,
   CreateAdminParams,
   UpdateAdminParams,
-} from "@/lib/repositories/IAdminUserRepository";
+  RoleDefinition,
+} from "@/lib/types/admin-users";
 
-type AdminUserWithRoles = Prisma.admin_usersGetPayload<{
-  include: {
-    admin_user_roles: {
-      orderBy: { assigned_at: "asc" };
-      include: {
-        roles: {
-          select: {
-            code: true;
-            is_active: true;
-            role_permissions: {
-              select: { permission_code: true };
-            };
-          };
-        };
-      };
-    };
-  };
+// Definir el include para admin_users de forma explícita
+const adminUserInclude = {
+  user_roles: {
+    orderBy: { assigned_at: "asc" as const },
+    include: {
+      role: {
+        include: {
+          role_permissions: {
+            include: {
+              permission: true,
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+type AdminUserWithRelations = Prisma.admin_usersGetPayload<{
+  include: typeof adminUserInclude;
 }>;
 
 type LoginAuditParams = {
@@ -49,16 +53,16 @@ function toIsoString(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
 }
 
-function mapAdminDirectoryEntry(record: AdminUserWithRoles): AdminDirectoryEntry {
+function mapAdminDirectoryEntry(record: AdminUserWithRelations): AdminDirectoryEntry {
   const roles = dedupeUpper(
-    record.admin_user_roles
-      .map((link) => (link.roles?.is_active ? link.roles.code : null))
-      .filter((roleCode): roleCode is string => Boolean(roleCode))
+    record.user_roles
+      .filter((link) => link.role?.is_active)
+      .map((link) => link.role.code)
   );
 
   const permissions = dedupePermissions(
-    record.admin_user_roles.flatMap((link) =>
-      link.roles?.is_active ? link.roles.role_permissions?.map((perm) => perm.permission_code) ?? [] : []
+    record.user_roles.flatMap((link) =>
+      link.role?.is_active ? link.role.role_permissions.map((rp) => rp.permission.code) : []
     )
   );
 
@@ -76,6 +80,30 @@ function mapAdminDirectoryEntry(record: AdminUserWithRoles): AdminDirectoryEntry
 }
 
 export class AdminUserRepository implements IAdminUserRepository {
+  async listAdminRoleDefinitions(options: { includeInactive?: boolean } = {}): Promise<RoleDefinition[]> {
+    const includeInactive = options.includeInactive ?? false;
+
+    const roles = await prisma.role.findMany({
+      where: includeInactive ? {} : { is_active: true },
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        description: true,
+        is_active: true,
+      },
+    });
+
+    return roles.map((role) => ({
+      id: role.id,
+      code: role.code.toUpperCase(),
+      name: role.name,
+      description: role.description,
+      isActive: role.is_active,
+    } satisfies RoleDefinition));
+  }
+
   async verifyAdminCredentials(
     username: string,
     password: string,
@@ -131,27 +159,27 @@ export class AdminUserRepository implements IAdminUserRepository {
     ]);
 
     const [roles, permissions] = await Promise.all([
-      prisma.roles.findMany({
+      prisma.role.findMany({
         where: {
           is_active: true,
-          admin_user_roles: { some: { admin_user_id: admin.id } },
+          user_roles: { some: { admin_user_id: admin.id } },
         },
         select: { code: true },
       }),
-      prisma.role_permissions.findMany({
+      prisma.rolePermission.findMany({
         where: {
-          roles: {
+          role: {
             is_active: true,
-            admin_user_roles: { some: { admin_user_id: admin.id } },
+            user_roles: { some: { admin_user_id: admin.id } },
           },
         },
-        distinct: ["permission_code"],
-        select: { permission_code: true },
+        distinct: ["permission_id"],
+        include: { permission: { select: { code: true } } },
       }),
     ]);
 
     const normalizedRoles = dedupeUpper(roles.map((role) => role.code));
-    const normalizedPermissions = dedupePermissions(permissions.map((perm) => perm.permission_code));
+    const normalizedPermissions = dedupePermissions(permissions.map((perm) => perm.permission.code));
 
     const cashRegisters = await cashRegisterService.listCashRegistersForAdmin(admin.id);
     const defaultCashRegister = cashRegisters.find((assignment) => assignment.isDefault) ?? cashRegisters[0] ?? null;
@@ -179,20 +207,7 @@ export class AdminUserRepository implements IAdminUserRepository {
     const admins = await prisma.admin_users.findMany({
       where: includeInactive ? {} : { is_active: true },
       orderBy: { username: "asc" },
-      include: {
-        admin_user_roles: {
-          orderBy: { assigned_at: "asc" },
-          include: {
-            roles: {
-              select: {
-                code: true,
-                is_active: true,
-                role_permissions: { select: { permission_code: true } },
-              },
-            },
-          },
-        },
-      },
+      include: adminUserInclude,
     });
 
     return admins.map(mapAdminDirectoryEntry);
@@ -216,7 +231,7 @@ export class AdminUserRepository implements IAdminUserRepository {
       });
 
       if (roleCodes.length > 0) {
-        await this.assignRoles(tx, admin.id, roleCodes);
+        await this.assignRoles(tx, admin.id, roleCodes, true);
       }
 
       const entry = await this.fetchAdminDirectoryEntry(admin.id, tx);
@@ -252,9 +267,9 @@ export class AdminUserRepository implements IAdminUserRepository {
       }
 
       if (typeof roleCodes !== "undefined") {
-        await tx.admin_user_roles.deleteMany({ where: { admin_user_id: adminUserId } });
+        await tx.userRole.deleteMany({ where: { admin_user_id: adminUserId } });
         if (roleCodes.length > 0) {
-          await this.assignRoles(tx, adminUserId, roleCodes);
+          await this.assignRoles(tx, adminUserId, roleCodes, true);
         }
       }
 
@@ -294,43 +309,11 @@ export class AdminUserRepository implements IAdminUserRepository {
     adminUserId: number,
     tx?: Prisma.TransactionClient
   ): Promise<AdminDirectoryEntry | null> {
-    if (tx) {
-      const admin = await tx.admin_users.findUnique({
-        where: { id: adminUserId },
-        include: {
-          admin_user_roles: {
-            orderBy: { assigned_at: "asc" },
-            include: {
-              roles: {
-                select: {
-                  code: true,
-                  is_active: true,
-                  role_permissions: { select: { permission_code: true } },
-                },
-              },
-            },
-          },
-        },
-      });
-      return admin ? mapAdminDirectoryEntry(admin) : null;
-    }
+    const client = tx ?? prisma;
 
-    const admin = await prisma.admin_users.findUnique({
+    const admin = await client.admin_users.findUnique({
       where: { id: adminUserId },
-      include: {
-        admin_user_roles: {
-          orderBy: { assigned_at: "asc" },
-          include: {
-            roles: {
-              select: {
-                code: true,
-                is_active: true,
-                role_permissions: { select: { permission_code: true } },
-              },
-            },
-          },
-        },
-      },
+      include: adminUserInclude,
     });
 
     return admin ? mapAdminDirectoryEntry(admin) : null;
@@ -339,11 +322,12 @@ export class AdminUserRepository implements IAdminUserRepository {
   private async assignRoles(
     tx: Prisma.TransactionClient,
     adminUserId: number,
-    roleCodes: string[]
+    roleCodes: string[],
+    setPrimary: boolean = false,
   ): Promise<void> {
     const normalizedCodes = roleCodes.map((code) => code.toUpperCase());
 
-    const roles = await tx.roles.findMany({
+    const roles = await tx.role.findMany({
       where: {
         is_active: true,
         code: { in: normalizedCodes },
@@ -366,11 +350,11 @@ export class AdminUserRepository implements IAdminUserRepository {
       return {
         admin_user_id: adminUserId,
         role_id: role.id,
-        is_primary: index === 0,
+        is_primary: setPrimary ? index === 0 : false,
       };
     });
 
-    await tx.admin_user_roles.createMany({ data });
+    await tx.userRole.createMany({ data });
   }
 
   private async createLoginAudit(params: LoginAuditParams): Promise<void> {

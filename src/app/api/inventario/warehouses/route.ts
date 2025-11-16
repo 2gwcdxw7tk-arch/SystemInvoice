@@ -74,6 +74,7 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "No se pudo crear la bodega";
-    return NextResponse.json({ success: false, message }, { status: 400 });
+    const status = error instanceof Error && /ya existe/i.test(message) ? 409 : 500;
+    return NextResponse.json({ success: false, message }, { status });
   }
 }

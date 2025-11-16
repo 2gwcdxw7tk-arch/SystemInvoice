@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type MouseEvent } from "react";
-import { ChevronLeft, ChevronRight, LayoutDashboard, ListChecks, PackageSearch, Receipt, Settings, Table, Users, BarChart3, ShieldCheck, type LucideIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, LayoutDashboard, ListChecks, PackageSearch, Receipt, Settings, Table, Users, BarChart3, ShieldCheck, Wallet, Shield, type LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -22,11 +22,13 @@ type SidebarNavItem = NavItem & { disabled?: boolean };
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: { pathname: "/dashboard" }, icon: LayoutDashboard, description: "Resumen operativo y KPIs" },
   { label: "Facturación", href: { pathname: "/facturacion" }, icon: Receipt, description: "Procesar ventas y revisar historial" },
+  { label: "Caja", href: { pathname: "/caja" }, icon: Wallet, description: "Aperturas, cierres y reportes" },
   { label: "Artículos", href: { pathname: "/articulos" }, icon: PackageSearch, description: "Catálogo y precios" },
   { label: "Inventario", href: { pathname: "/inventario" }, icon: ListChecks, description: "Stock, kardex y compras" },
   { label: "Mesas", href: { pathname: "/mesas" }, icon: Table, description: "Mantenimiento de mesas y zonas" },
   { label: "Meseros", href: { pathname: "/meseros" }, icon: Users, description: "Staff y permisos" },
   { label: "Usuarios", href: { pathname: "/usuarios" }, icon: ShieldCheck, description: "Cuentas administrativas y roles" },
+  { label: "Roles", href: { pathname: "/roles" }, icon: Shield, description: "Roles del sistema y permisos" },
   { label: "Reportes", href: { pathname: "/reportes" }, icon: BarChart3, description: "KPIs y descargas" },
   { label: "Preferencias", href: { pathname: "/preferencias" }, icon: Settings, description: "Ajustes y catálogos auxiliares" },
 ];
@@ -45,7 +47,7 @@ export function Sidebar({ collapsed = false, onToggleCollapse, variant = "deskto
   const sessionIsAdministrator = isSessionAdministrator(session);
   const sessionIsFacturadorOnly = isSessionFacturadorOnly(session);
 
-  const allowedPathsForFacturador = new Set(["/dashboard", "/facturacion", "/reportes"]);
+  const allowedPathsForFacturador = new Set(["/dashboard", "/facturacion", "/facturas", "/caja", "/reportes"]);
 
   const navItems: SidebarNavItem[] = NAV_ITEMS.map((item) => {
     const isAllowed = sessionIsAdministrator || allowedPathsForFacturador.has(item.href.pathname);

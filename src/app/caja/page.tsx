@@ -1,0 +1,809 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AlertCircle, ArrowLeft, Download, History, Loader2, Lock, Minus, Plus, Receipt } from "lucide-react";
+
+import { useSession } from "@/components/providers/session-provider";
+import { useToast } from "@/components/ui/toast-provider";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Modal } from "@/components/ui/modal";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import { formatCurrency } from "@/config/currency";
+import { hasSessionPermission, isSessionAdministrator } from "@/lib/auth/session-roles";
+
+interface CashRegisterAssignmentOption {
+  cashRegisterId: number;
+  cashRegisterCode: string;
+  cashRegisterName: string;
+  allowManualWarehouseOverride: boolean;
+  warehouseId: number;
+  warehouseCode: string;
+  warehouseName: string;
+  isDefault: boolean;
+}
+
+interface CashRegisterActiveSession {
+  id: number;
+  status: "OPEN" | "CLOSED" | "CANCELLED";
+  openingAmount: number;
+  openingAt: string;
+  openingNotes: string | null;
+  cashRegister: {
+    cashRegisterId: number;
+    cashRegisterCode: string;
+    cashRegisterName: string;
+    warehouseCode: string;
+    warehouseName: string;
+  };
+}
+
+interface CashRegisterSessionSnapshot {
+  id: number;
+  status: "OPEN" | "CLOSED" | "CANCELLED";
+  openingAmount: number;
+  openingAt: string;
+  closingAmount: number | null;
+  closingAt: string | null;
+  cashRegister: {
+    code: string;
+    name: string;
+    warehouseCode: string;
+    warehouseName: string;
+  };
+}
+
+type PaymentMethod = "CASH" | "CARD" | "TRANSFER" | "OTHER";
+
+interface ClosingFormPayment {
+  method: PaymentMethod;
+  amount: string;
+  transactionCount: string;
+}
+
+type NormalizedClosingPayment = {
+  method: PaymentMethod;
+  reported_amount: number;
+  transaction_count: number;
+};
+
+const paymentMethodOptions: ComboboxOption<PaymentMethod>[] = [
+  { value: "CASH", label: "Efectivo" },
+  { value: "CARD", label: "Tarjeta" },
+  { value: "TRANSFER", label: "Transferencia" },
+  { value: "OTHER", label: "Otro" },
+];
+
+const formatTimestampLocale = (value: string | null | undefined): string => {
+  if (!value) return "Sin registro";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Sin registro";
+  }
+  return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(date);
+};
+
+const createInitialClosingPayments = (): ClosingFormPayment[] => [{ method: "CASH", amount: "", transactionCount: "" }];
+
+export default function CashManagementPage() {
+  const session = useSession();
+  const { toast } = useToast();
+
+  const isAdmin = isSessionAdministrator(session);
+  const canOpenCash = hasSessionPermission(session, "cash.register.open");
+  const canCloseCash = hasSessionPermission(session, "cash.register.close");
+  const canViewCashReports = hasSessionPermission(session, "cash.report.view");
+  const canAccess = isAdmin || canOpenCash || canCloseCash || canViewCashReports;
+
+  const [cashState, setCashState] = useState<{
+    loading: boolean;
+    activeSession: CashRegisterActiveSession | null;
+    cashRegisters: CashRegisterAssignmentOption[];
+    defaultCashRegisterId: number | null;
+    recentSessions: CashRegisterSessionSnapshot[];
+  }>({
+    loading: false,
+    activeSession: null,
+    cashRegisters: [],
+    defaultCashRegisterId: null,
+    recentSessions: [],
+  });
+  const [cashError, setCashError] = useState<string | null>(null);
+
+  const [openingModalOpen, setOpeningModalOpen] = useState(false);
+  const [openingForm, setOpeningForm] = useState({ cashRegisterCode: "", openingAmount: "", openingNotes: "" });
+  const [openingSubmitting, setOpeningSubmitting] = useState(false);
+
+  const [closingModalOpen, setClosingModalOpen] = useState(false);
+  const [closingForm, setClosingForm] = useState<{ closingAmount: string; closingNotes: string; payments: ClosingFormPayment[] }>(
+    { closingAmount: "", closingNotes: "", payments: createInitialClosingPayments() }
+  );
+  const [closingSubmitting, setClosingSubmitting] = useState(false);
+
+  const loadCashSession = useCallback(async () => {
+    if (!canAccess) {
+      setCashState((prev) => ({ ...prev, loading: false }));
+      return;
+    }
+    setCashState((prev) => ({ ...prev, loading: true }));
+    try {
+      const response = await fetch("/api/cajas/sesion-activa", { cache: "no-store", credentials: "include" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = data?.message ?? "No se pudo obtener la información de la caja";
+        throw new Error(message);
+      }
+
+      const assignments: CashRegisterAssignmentOption[] = Array.isArray(data?.cashRegisters) ? data.cashRegisters : [];
+      const recentSessions: CashRegisterSessionSnapshot[] = Array.isArray(data?.recentSessions) ? data.recentSessions : [];
+
+      setCashState({
+        loading: false,
+        activeSession: (data?.activeSession ?? null) as CashRegisterActiveSession | null,
+        cashRegisters: assignments,
+        defaultCashRegisterId: typeof data?.defaultCashRegisterId === "number" ? data.defaultCashRegisterId : null,
+        recentSessions,
+      });
+      setCashError(null);
+
+      const preferred = assignments.find((assignment) => assignment.cashRegisterId === data?.defaultCashRegisterId) ?? assignments[0];
+      setOpeningForm((prev) => ({
+        ...prev,
+        cashRegisterCode: prev.cashRegisterCode || preferred?.cashRegisterCode || "",
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo obtener la información de la caja";
+      setCashState((prev) => ({ ...prev, loading: false, activeSession: null }));
+      setCashError(message);
+      toast({
+        variant: "error",
+        title: "Caja",
+        description: message,
+      });
+    }
+  }, [canAccess, toast]);
+
+  useEffect(() => {
+    void loadCashSession();
+  }, [loadCashSession]);
+
+  const cashRegisterOptions = useMemo<ComboboxOption<string>[]>(() => {
+    return cashState.cashRegisters.map((assignment) => ({
+      value: assignment.cashRegisterCode,
+      label: `${assignment.cashRegisterCode} • ${assignment.cashRegisterName}`,
+      description: `${assignment.warehouseCode} • ${assignment.warehouseName}`,
+    }));
+  }, [cashState.cashRegisters]);
+
+  const normalizedCashRegisterCode = openingForm.cashRegisterCode.trim().toUpperCase();
+  const selectedCashRegister = normalizedCashRegisterCode
+    ? cashState.cashRegisters.find((assignment) => assignment.cashRegisterCode === normalizedCashRegisterCode) ?? null
+    : null;
+
+  const handleRefresh = useCallback(() => {
+    void loadCashSession();
+  }, [loadCashSession]);
+
+  const handleOpenCashRegister = useCallback(async () => {
+    const rawCode = openingForm.cashRegisterCode.trim().toUpperCase();
+    if (!rawCode) {
+      toast({ variant: "warning", title: "Caja", description: "Selecciona una caja asignada" });
+      return;
+    }
+    const normalizedAmount = openingForm.openingAmount.trim().replace(/,/g, ".");
+    const amountValue = normalizedAmount === "" ? 0 : Number(normalizedAmount);
+    if (!Number.isFinite(amountValue) || amountValue < 0) {
+      toast({ variant: "warning", title: "Caja", description: "Ingresa un monto de apertura válido" });
+      return;
+    }
+
+    setOpeningSubmitting(true);
+    try {
+      const response = await fetch("/api/cajas/aperturas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          cash_register_code: rawCode,
+          opening_amount: amountValue,
+          opening_notes: openingForm.openingNotes.trim() ? openingForm.openingNotes.trim() : null,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = data?.message ?? "No se pudo abrir la caja";
+        throw new Error(message);
+      }
+
+      toast({ variant: "success", title: "Caja", description: "Caja aperturada correctamente" });
+      setOpeningModalOpen(false);
+      setOpeningForm({ cashRegisterCode: rawCode, openingAmount: "", openingNotes: "" });
+      await loadCashSession();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo abrir la caja";
+      toast({ variant: "error", title: "Caja", description: message });
+    } finally {
+      setOpeningSubmitting(false);
+    }
+  }, [loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, toast]);
+
+  const handleDownloadOpeningSummary = useCallback((snapshot: CashRegisterSessionSnapshot) => {
+    const payload = {
+      session_id: snapshot.id,
+      status: snapshot.status,
+      opening_at: snapshot.openingAt,
+      opening_amount: snapshot.openingAmount,
+      cash_register: {
+        code: snapshot.cashRegister.code,
+        name: snapshot.cashRegister.name,
+        warehouse_code: snapshot.cashRegister.warehouseCode,
+        warehouse_name: snapshot.cashRegister.warehouseName,
+      },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `apertura-caja-${snapshot.id}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleDownloadClosureReport = useCallback((sessionId: number, format: "json" | "csv") => {
+    const url = `/api/cajas/cierres/${sessionId}/reporte?format=${format}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, []);
+
+  const addClosingPayment = useCallback(() => {
+    setClosingForm((prev) => ({
+      ...prev,
+      payments: [...prev.payments, { method: "CASH", amount: "", transactionCount: "" }],
+    }));
+  }, []);
+
+  const removeClosingPayment = useCallback((index: number) => {
+    setClosingForm((prev) => {
+      if (prev.payments.length === 1) {
+        return prev;
+      }
+      const next = prev.payments.filter((_, idx) => idx !== index);
+      return { ...prev, payments: next };
+    });
+  }, []);
+
+  const updateClosingPayment = useCallback((index: number, patch: Partial<ClosingFormPayment>) => {
+    setClosingForm((prev) => ({
+      ...prev,
+      payments: prev.payments.map((payment, idx) => (idx === index ? { ...payment, ...patch } : payment)),
+    }));
+  }, []);
+
+  const handleCloseCashRegister = useCallback(async () => {
+    const normalizedAmount = closingForm.closingAmount.trim().replace(/,/g, ".");
+    const amountValue = Number(normalizedAmount);
+    if (!Number.isFinite(amountValue) || amountValue < 0) {
+      toast({ variant: "warning", title: "Caja", description: "Ingresa un monto de cierre válido" });
+      return;
+    }
+
+    const normalizedPayments = closingForm.payments
+      .map((payment) => {
+        const paymentAmount = Number(payment.amount.trim().replace(/,/g, "."));
+        if (!Number.isFinite(paymentAmount) || paymentAmount < 0) {
+          return null;
+        }
+        const transactionCount = payment.transactionCount.trim()
+          ? Number(payment.transactionCount.trim())
+          : 0;
+        if (!Number.isFinite(transactionCount) || transactionCount < 0) {
+          return null;
+        }
+        return {
+          method: payment.method,
+          reported_amount: Number(paymentAmount.toFixed(2)),
+          transaction_count: Math.trunc(transactionCount),
+        };
+      })
+      .filter((entry): entry is NormalizedClosingPayment => entry !== null);
+
+    if (normalizedPayments.length === 0) {
+      toast({ variant: "warning", title: "Caja", description: "Agrega al menos un método de pago válido" });
+      return;
+    }
+
+    setClosingSubmitting(true);
+    try {
+      const response = await fetch("/api/cajas/cierres", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          session_id: cashState.activeSession?.id,
+          closing_amount: Number(amountValue.toFixed(2)),
+          payments: normalizedPayments,
+          closing_notes: closingForm.closingNotes.trim() ? closingForm.closingNotes.trim() : null,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = data?.message ?? "No se pudo cerrar la caja";
+        throw new Error(message);
+      }
+
+      toast({ variant: "success", title: "Caja", description: "Caja cerrada correctamente" });
+      setClosingModalOpen(false);
+      setClosingForm({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments() });
+      await loadCashSession();
+      if (data?.report_url) {
+        window.open(String(data.report_url), "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo cerrar la caja";
+      toast({ variant: "error", title: "Caja", description: message });
+    } finally {
+      setClosingSubmitting(false);
+    }
+  }, [cashState.activeSession?.id, closingForm, loadCashSession, toast]);
+
+  const activeSession = cashState.activeSession;
+  const hasAssignments = cashState.cashRegisters.length > 0;
+  const localCurrency = process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO";
+
+  return (
+    <section className="space-y-10 pb-16">
+      <header className="space-y-2">
+        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Caja</h1>
+        <p className="text-sm text-muted-foreground">Gestiona aperturas, cierres y consulta el historial de tu caja asignada.</p>
+      </header>
+
+      {!canAccess ? (
+        <Card className="rounded-3xl border bg-background/95 shadow-sm">
+          <CardContent className="p-6">
+            <div className="flex items-start gap-3 text-sm">
+              <AlertCircle className="h-5 w-5 text-destructive" />
+              <div>
+                <p className="font-semibold text-foreground">No tienes permisos para gestionar la caja.</p>
+                <p className="text-muted-foreground">Contacta a un administrador para solicitar acceso.</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <Card className="rounded-3xl border bg-background/95 shadow-sm">
+            <CardHeader className="space-y-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-start gap-3">
+                  <span className={
+                    activeSession
+                      ? "flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600"
+                      : cashError
+                        ? "flex h-10 w-10 items-center justify-center rounded-2xl bg-destructive/10 text-destructive"
+                        : hasAssignments
+                          ? "flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600"
+                          : "flex h-10 w-10 items-center justify-center rounded-2xl bg-muted text-muted-foreground"
+                  }>
+                    <Receipt className="h-5 w-5" />
+                  </span>
+                  <div className="space-y-1">
+                    <CardTitle className="text-lg font-semibold text-foreground">Estado actual</CardTitle>
+                    {cashState.loading ? (
+                      <p className="text-sm text-muted-foreground">Consultando información de la caja…</p>
+                    ) : cashError ? (
+                      <p className="text-sm text-destructive">{cashError}</p>
+                    ) : activeSession ? (
+                      <div className="text-sm text-muted-foreground">
+                        <p className="font-semibold text-foreground">Caja abierta</p>
+                        <p>{`${activeSession.cashRegister.cashRegisterCode} • ${activeSession.cashRegister.cashRegisterName}`}</p>
+                        <p>{`${activeSession.cashRegister.warehouseCode} • ${activeSession.cashRegister.warehouseName}`}</p>
+                      </div>
+                    ) : hasAssignments ? (
+                      <p className="text-sm text-muted-foreground">Aún no has aperturado tu caja asignada.</p>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No tienes cajas asignadas actualmente.</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRefresh}
+                    disabled={cashState.loading}
+                  >
+                    {cashState.loading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Actualizando
+                      </>
+                    ) : (
+                      <>
+                        <History className="mr-2 h-4 w-4" />
+                        Actualizar
+                      </>
+                    )}
+                  </Button>
+                  {canOpenCash ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="rounded-2xl"
+                      onClick={() => setOpeningModalOpen(true)}
+                      disabled={cashState.loading || (!activeSession && !hasAssignments)}
+                    >
+                      {activeSession ? "Ver apertura" : "Abrir caja"}
+                    </Button>
+                  ) : null}
+                  {canCloseCash ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-2xl"
+                      onClick={() => setClosingModalOpen(true)}
+                      disabled={!activeSession}
+                    >
+                      <Lock className="mr-2 h-4 w-4" />
+                      Cerrar caja
+                    </Button>
+                  ) : null}
+                  <Button type="button" variant="outline" size="sm" className="rounded-2xl" asChild>
+                    <Link href="/facturacion">
+                      <ArrowLeft className="mr-2 h-4 w-4" />
+                      Ir a facturación
+                    </Link>
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {cashState.loading ? (
+                <div className="flex items-center gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Actualizando datos…
+                </div>
+              ) : cashError ? (
+                <div className="flex items-start gap-3 rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                  <AlertCircle className="h-5 w-5" />
+                  <div>
+                    <p className="font-semibold">No se pudo consultar la caja</p>
+                    <p className="opacity-90">{cashError}</p>
+                  </div>
+                </div>
+              ) : activeSession ? (
+                <dl className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
+                  <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
+                    <dt className="text-xs uppercase tracking-wide opacity-70">Apertura</dt>
+                    <dd className="font-medium text-foreground">{formatTimestampLocale(activeSession.openingAt)}</dd>
+                  </div>
+                  <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
+                    <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
+                    <dd className="font-medium text-foreground">{formatCurrency(activeSession.openingAmount ?? 0, { currency: localCurrency })}</dd>
+                  </div>
+                  <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
+                    <dt className="text-xs uppercase tracking-wide opacity-70">Notas</dt>
+                    <dd className="font-medium text-foreground">{activeSession.openingNotes?.trim() || "Sin notas"}</dd>
+                  </div>
+                </dl>
+              ) : hasAssignments ? (
+                <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-700">
+                  Selecciona tu caja asignada y registra la apertura para comenzar tus operaciones.
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+                  No tienes cajas asignadas. Solicita apoyo a un administrador.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-3xl border bg-background/95 shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold text-foreground">Historial reciente</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {cashState.loading ? (
+                <div className="flex items-center gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Consultando historial…
+                </div>
+              ) : cashState.recentSessions.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+                  No se encontraron aperturas o cierres recientes.
+                </div>
+              ) : (
+                cashState.recentSessions.map((snapshot) => {
+                  const isClosed = snapshot.status === "CLOSED";
+                  const statusLabel = snapshot.status === "CLOSED" ? "Cerrada" : snapshot.status === "OPEN" ? "Abierta" : "Cancelada";
+                  const statusTone = snapshot.status === "CLOSED" ? "text-emerald-600" : snapshot.status === "OPEN" ? "text-amber-600" : "text-destructive";
+                  return (
+                    <div key={snapshot.id} className="space-y-4 rounded-2xl border border-muted-foreground/20 bg-background/95 p-5">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-base font-semibold text-foreground">
+                            {snapshot.cashRegister.code} • {snapshot.cashRegister.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {snapshot.cashRegister.warehouseCode} • {snapshot.cashRegister.warehouseName}
+                          </p>
+                        </div>
+                        <span className={`text-sm font-semibold ${statusTone}`}>{statusLabel}</span>
+                      </div>
+                      <dl className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
+                        <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
+                          <dt className="text-xs uppercase tracking-wide opacity-70">Apertura</dt>
+                          <dd className="font-medium text-foreground">{formatTimestampLocale(snapshot.openingAt)}</dd>
+                        </div>
+                        <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
+                          <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
+                          <dd className="font-medium text-foreground">{formatCurrency(snapshot.openingAmount ?? 0, { currency: localCurrency })}</dd>
+                        </div>
+                        <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
+                          <dt className="text-xs uppercase tracking-wide opacity-70">Cierre</dt>
+                          <dd className="font-medium text-foreground">{snapshot.closingAt ? formatTimestampLocale(snapshot.closingAt) : "Sin cierre"}</dd>
+                        </div>
+                      </dl>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => handleDownloadOpeningSummary(snapshot)}>
+                          <Download className="mr-2 h-4 w-4" />
+                          Resumen apertura (JSON)
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={!isClosed}
+                          onClick={() => handleDownloadClosureReport(snapshot.id, "json")}
+                        >
+                          <Download className="mr-2 h-4 w-4" />
+                          Reporte de cierre (JSON)
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={!isClosed}
+                          onClick={() => handleDownloadClosureReport(snapshot.id, "csv")}
+                        >
+                          <Download className="mr-2 h-4 w-4" />
+                          Reporte de cierre (CSV)
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      <Modal
+        open={openingModalOpen}
+        onClose={() => setOpeningModalOpen(false)}
+        title={activeSession ? "Detalles de apertura" : "Abrir caja"}
+        description={activeSession ? "Consulta la información de la sesión activa." : "Selecciona tu caja y registra el monto inicial."}
+        contentClassName="max-w-2xl"
+      >
+        {cashState.loading ? (
+          <div className="flex items-center gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Consultando estado de caja…
+          </div>
+        ) : cashError ? (
+          <div className="flex items-start gap-3 rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+            <AlertCircle className="h-5 w-5" />
+            <div>
+              <p className="font-semibold">No se pudo consultar la caja</p>
+              <p className="opacity-90">{cashError}</p>
+            </div>
+          </div>
+        ) : activeSession ? (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5">
+              <p className="text-sm font-semibold text-emerald-700">Caja asignada</p>
+              <p className="text-base font-semibold text-foreground">
+                {activeSession.cashRegister.cashRegisterCode} • {activeSession.cashRegister.cashRegisterName}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {activeSession.cashRegister.warehouseCode} • {activeSession.cashRegister.warehouseName}
+              </p>
+              <dl className="mt-4 grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
+                <div className="rounded-2xl bg-white/70 p-3">
+                  <dt className="text-xs uppercase tracking-wide opacity-70">Apertura</dt>
+                  <dd className="font-semibold text-foreground">{formatTimestampLocale(activeSession.openingAt)}</dd>
+                </div>
+                <div className="rounded-2xl bg-white/70 p-3">
+                  <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
+                  <dd className="font-semibold text-foreground">{formatCurrency(activeSession.openingAmount ?? 0, { currency: localCurrency })}</dd>
+                </div>
+                <div className="rounded-2xl bg-white/70 p-3">
+                  <dt className="text-xs uppercase tracking-wide opacity-70">Notas</dt>
+                  <dd className="font-semibold text-foreground">{activeSession.openingNotes?.trim() || "Sin notas"}</dd>
+                </div>
+              </dl>
+            </div>
+            <div className="flex justify-end">
+              <Button type="button" variant="outline" onClick={() => setOpeningModalOpen(false)}>
+                Cerrar
+              </Button>
+            </div>
+          </div>
+        ) : hasAssignments ? (
+          <div className="space-y-6">
+            <Combobox<string>
+              value={openingForm.cashRegisterCode}
+              onChange={(value) =>
+                setOpeningForm((prev) => ({
+                  ...prev,
+                  cashRegisterCode: (value ?? "").toUpperCase(),
+                }))
+              }
+              options={cashRegisterOptions}
+              placeholder="Selecciona una caja"
+              label="Caja asignada"
+              ariaLabel="Seleccionar caja para apertura"
+            />
+            {selectedCashRegister ? (
+              <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-4 text-xs text-muted-foreground">
+                <p className="font-semibold text-foreground">Detalles</p>
+                <p>{selectedCashRegister.cashRegisterName}</p>
+                <p className="mt-1">Almacén: {selectedCashRegister.warehouseCode} • {selectedCashRegister.warehouseName}</p>
+              </div>
+            ) : null}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Monto de apertura</Label>
+                <Input
+                  value={openingForm.openingAmount}
+                  onChange={(event) =>
+                    setOpeningForm((prev) => ({ ...prev, openingAmount: event.target.value.replace(/[^0-9.,]/g, "") }))
+                  }
+                  placeholder="0.00"
+                  inputMode="decimal"
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
+                <textarea
+                  value={openingForm.openingNotes}
+                  onChange={(event) =>
+                    setOpeningForm((prev) => ({ ...prev, openingNotes: event.target.value }))
+                  }
+                  placeholder="Observaciones opcionales"
+                  rows={3}
+                  className="w-full rounded-2xl border border-muted bg-background/95 p-3 text-sm text-foreground"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setOpeningModalOpen(false)} disabled={openingSubmitting}>
+                Cancelar
+              </Button>
+              <Button type="button" onClick={() => { void handleOpenCashRegister(); }} disabled={openingSubmitting}>
+                {openingSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Aperturando…
+                  </>
+                ) : (
+                  "Abrir caja"
+                )}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+            No tienes cajas asignadas. Solicita a un administrador que te asigne una antes de aperturar.
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={closingModalOpen}
+        onClose={() => setClosingModalOpen(false)}
+        title="Cerrar caja"
+        description="Registra el monto final y los detalles del cierre."
+        contentClassName="max-w-3xl"
+      >
+        {activeSession ? (
+          <div className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Monto de cierre</Label>
+                <Input
+                  value={closingForm.closingAmount}
+                  onChange={(event) =>
+                    setClosingForm((prev) => ({ ...prev, closingAmount: event.target.value.replace(/[^0-9.,]/g, "") }))
+                  }
+                  placeholder="0.00"
+                  inputMode="decimal"
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
+                <textarea
+                  value={closingForm.closingNotes}
+                  onChange={(event) =>
+                    setClosingForm((prev) => ({ ...prev, closingNotes: event.target.value }))
+                  }
+                  placeholder="Observaciones del cierre"
+                  rows={3}
+                  className="w-full rounded-2xl border border-muted bg-background/95 p-3 text-sm text-foreground"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs uppercase text-muted-foreground">Detalle por método de pago</p>
+              <div className="space-y-3">
+                {closingForm.payments.map((payment, index) => (
+                  <div key={`payment-${index}`} className="grid gap-3 rounded-2xl border border-muted-foreground/20 bg-muted/10 p-4 sm:grid-cols-[minmax(140px,1fr),minmax(120px,1fr),minmax(120px,1fr),auto]">
+                    <Combobox<PaymentMethod>
+                      value={payment.method}
+                      onChange={(value) => updateClosingPayment(index, { method: value })}
+                      options={paymentMethodOptions}
+                      placeholder="Método"
+                      ariaLabel="Método de pago"
+                      className="min-w-[140px]"
+                    />
+                    <Input
+                      value={payment.amount}
+                      onChange={(event) => updateClosingPayment(index, { amount: event.target.value.replace(/[^0-9.,]/g, "") })}
+                      placeholder="0.00"
+                      inputMode="decimal"
+                      className="rounded-2xl"
+                    />
+                    <Input
+                      value={payment.transactionCount}
+                      onChange={(event) => updateClosingPayment(index, { transactionCount: event.target.value.replace(/[^0-9]/g, "") })}
+                      placeholder="Transacciones"
+                      inputMode="numeric"
+                      className="rounded-2xl"
+                    />
+                    <div className="flex items-center justify-end gap-2">
+                      <Button type="button" variant="destructive" size="icon" className="h-6 w-6 rounded-full" onClick={() => removeClosingPayment(index)}>
+                        <Minus className="h-3 w-3" />
+                      </Button>
+                      {index === closingForm.payments.length - 1 ? (
+                        <Button type="button" variant="success" size="icon" className="h-6 w-6 rounded-full" onClick={addClosingPayment}>
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setClosingModalOpen(false)} disabled={closingSubmitting}>
+                Cancelar
+              </Button>
+              <Button type="button" onClick={() => { void handleCloseCashRegister(); }} disabled={closingSubmitting}>
+                {closingSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Cerrando…
+                  </>
+                ) : (
+                  "Cerrar caja"
+                )}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+            Necesitas tener una caja abierta para registrar el cierre.
+          </div>
+        )}
+      </Modal>
+    </section>
+  );
+}

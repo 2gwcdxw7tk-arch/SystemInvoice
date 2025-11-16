@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { adminUserService } from "@/lib/services/AdminUserService";
+import { AdminUserService } from "@/lib/services/AdminUserService";
+import { RepositoryFactory } from "@/lib/repositories/RepositoryFactory";
+
+const adminUserService = new AdminUserService(RepositoryFactory.getAdminUserRepository());
 
 const updateAdminUserSchema = z.object({
   display_name: z

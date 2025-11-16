@@ -16,7 +16,11 @@ export function normalizeSessionPermissions(session: SessionPayload | null | und
 
 export function hasSessionPermission(session: SessionPayload | null | undefined, permissionCode: string): boolean {
   const permissions = normalizeSessionPermissions(session);
-  return permissions.includes(permissionCode.trim());
+  const target = permissionCode.trim().toLowerCase();
+  if (!target) {
+    return false;
+  }
+  return permissions.some((permission) => permission.toLowerCase() === target);
 }
 
 export function isSessionAdministrator(session: SessionPayload | null | undefined): boolean {
@@ -25,23 +29,24 @@ export function isSessionAdministrator(session: SessionPayload | null | undefine
   }
 
   const roles = normalizeSessionRoles(session);
-  if (roles.includes("ADMINISTRADOR")) {
+  if (roles.some((role) => role === "ADMINISTRADOR" || role === "ADMIN" || role === "ADMINISTRATOR")) {
     return true;
   }
 
-  const permissions = normalizeSessionPermissions(session);
-  if (permissions.includes("admin.users.manage")) {
+  const normalizedRole = session.role?.trim().toUpperCase();
+  if (normalizedRole === "ADMIN" || normalizedRole === "ADMINISTRADOR" || normalizedRole === "ADMINISTRATOR") {
     return true;
   }
 
-  if (session.role === "admin" && roles.length === 0 && permissions.length === 0) {
-    return true;
-  }
 
   return false;
 }
 
 export function isSessionFacturador(session: SessionPayload | null | undefined): boolean {
+  const normalizedRole = session?.role?.trim().toUpperCase();
+  if (normalizedRole === "FACTURADOR") {
+    return true;
+  }
   const roles = normalizeSessionRoles(session);
   return roles.includes("FACTURADOR");
 }

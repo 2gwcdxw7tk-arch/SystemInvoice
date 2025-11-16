@@ -128,7 +128,10 @@ export default function UsuariosPage() {
   }, [isAdmin, toast]);
 
   const loadRoles = useCallback(async () => {
-    if (!isAdmin) return;
+    if (!isAdmin) {
+      setRoles([]);
+      return;
+    }
     setLoadingRoles(true);
     try {
       const res = await fetch("/api/admin-users/roles?include_inactive=false", { cache: "no-store" });

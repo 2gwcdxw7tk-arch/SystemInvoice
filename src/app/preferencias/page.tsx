@@ -341,7 +341,7 @@ export default function PreferenciasPage() {
     warehousesRequestedRef.current = true;
     setWarehousesLoading(true);
     try {
-      const res = await fetch("/api/inventario/warehouses");
+      const res = await fetch("/api/inventario/warehouses", { credentials: "include" });
       if (!res.ok) throw new Error("No se pudieron cargar los almacenes");
       const data = (await res.json()) as { items?: Array<{ id: number; code: string; name: string; is_active: boolean }> };
       setWarehouses(Array.isArray(data.items) ? data.items.map((item) => ({
@@ -365,7 +365,7 @@ export default function PreferenciasPage() {
     cashRegistersRequestedRef.current = true;
     setCashRegistersLoading(true);
     try {
-      const res = await fetch("/api/cajas?include_inactive=true", { cache: "no-store" });
+      const res = await fetch("/api/cajas?include_inactive=true", { cache: "no-store", credentials: "include" });
       if (!res.ok) throw new Error("No se pudieron cargar las cajas");
       const data = (await res.json()) as { items?: CashRegisterRecord[] };
       setCashRegisters(Array.isArray(data.items) ? data.items : []);
@@ -422,7 +422,7 @@ export default function PreferenciasPage() {
     cashAssignmentsRequestedRef.current = true;
     setCashAssignmentsLoading(true);
     try {
-      const res = await fetch("/api/cajas/asignaciones", { cache: "no-store" });
+      const res = await fetch("/api/cajas/asignaciones", { cache: "no-store", credentials: "include" });
       if (!res.ok) throw new Error("No se pudieron cargar las asignaciones");
       const data = (await res.json()) as { items?: CashRegisterAssignmentGroup[] };
       setCashAssignments(Array.isArray(data.items) ? data.items : []);
@@ -657,6 +657,7 @@ export default function PreferenciasPage() {
         const res = await fetch(`/api/cajas/${encodeURIComponent(editingCashRegisterCode)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             name,
             warehouse_code: warehouseCode,
@@ -674,6 +675,7 @@ export default function PreferenciasPage() {
         const res = await fetch("/api/cajas", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             code,
             name,
@@ -706,6 +708,7 @@ export default function PreferenciasPage() {
       const res = await fetch(`/api/cajas/${encodeURIComponent(register.code)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ is_active: !register.isActive }),
       });
       if (!res.ok) {
@@ -735,6 +738,7 @@ export default function PreferenciasPage() {
       const res = await fetch("/api/cajas/asignaciones", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           admin_user_id: adminUserId,
           cash_register_code: selection,
@@ -762,6 +766,7 @@ export default function PreferenciasPage() {
       const res = await fetch("/api/cajas/asignaciones", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           admin_user_id: adminUserId,
           cash_register_code: cashRegisterCode,
@@ -786,6 +791,7 @@ export default function PreferenciasPage() {
       const res = await fetch("/api/cajas/asignaciones", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           admin_user_id: adminUserId,
           cash_register_code: cashRegisterCode,

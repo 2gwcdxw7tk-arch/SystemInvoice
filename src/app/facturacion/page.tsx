@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button } from "@/components/ui/button";
@@ -14,10 +14,10 @@ import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/config/currency";
 import { SERVICE_RATE, VAT_RATE } from "@/config/taxes";
-import { Printer, Plus, Minus, Loader2, Ban, ArrowLeft, ArrowRight, Receipt, UtensilsCrossed, Tags, AlertCircle, History, FileText, Download } from "lucide-react";
+import { Printer, Plus, Minus, Loader2, Ban, ArrowLeft, ArrowRight, Receipt, UtensilsCrossed, Tags, AlertCircle, History } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
-import { isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
+import { hasSessionPermission, isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
 
 /**
  * Página dedicada de Facturación.
@@ -1333,8 +1333,12 @@ export default function FacturacionPage() {
   const isAdmin = isSessionAdministrator(session);
   const isFacturadorOnly = isSessionFacturadorOnly(session);
   const canManagePriceLists = isAdmin;
-  const canManageCashRegisters = session?.role === "admin";
-  const mustHaveOpenCashSession = canManageCashRegisters && isFacturadorOnly;
+  const canOpenCash = hasSessionPermission(session, "cash.register.open");
+  const canCloseCash = hasSessionPermission(session, "cash.register.close");
+  const canViewCashReports = hasSessionPermission(session, "cash.report.view");
+  const mustIssueInvoices = hasSessionPermission(session, "invoice.issue");
+  const canManageCashRegisters = isAdmin || canOpenCash || canCloseCash || canViewCashReports;
+  const mustHaveOpenCashSession = isFacturadorOnly && (canOpenCash || mustIssueInvoices);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -1670,14 +1674,6 @@ function FacturacionWorkspace({
     recentSessions: [],
   });
   const [cashSessionError, setCashSessionError] = useState<string | null>(null);
-  const [manualCashModalOpen, setManualCashModalOpen] = useState(false);
-  const [openingForm, setOpeningForm] = useState({
-    cashRegisterCode: "",
-    openingAmount: "",
-    openingNotes: "",
-  });
-  const [openingSubmitting, setOpeningSubmitting] = useState(false);
-  const [cashReportsModalOpen, setCashReportsModalOpen] = useState(false);
 
   useEffect(() => {
     if (vatRate === 0) {
@@ -1693,15 +1689,6 @@ function FacturacionWorkspace({
 
   const { toast } = useToast();
 
-  const formatCashTimestamp = useCallback((value: string | null | undefined) => {
-    if (!value) return "Sin registro";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return "Sin registro";
-    }
-    return formatTimestampLocale(date);
-  }, []);
-
   const loadCashSession = useCallback(async () => {
     if (!canManageCashRegisters) {
       setCashSessionState((prev) => ({ ...prev, loading: false }));
@@ -1709,7 +1696,7 @@ function FacturacionWorkspace({
     }
     setCashSessionState((prev) => ({ ...prev, loading: true }));
     try {
-      const response = await fetch("/api/cajas/sesion-activa", { cache: "no-store" });
+      const response = await fetch("/api/cajas/sesion-activa", { cache: "no-store", credentials: "include" });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
         const message = data?.message ?? "No se pudo obtener la información de la caja";
@@ -1727,17 +1714,6 @@ function FacturacionWorkspace({
         recentSessions,
       });
       setCashSessionError(null);
-      setOpeningForm((prev) => {
-        if (prev.cashRegisterCode) {
-          return prev;
-        }
-        const preferred =
-          assignments.find((assignment) => assignment.cashRegisterId === data?.defaultCashRegisterId) ?? assignments[0];
-        return {
-          ...prev,
-          cashRegisterCode: preferred?.cashRegisterCode ?? "",
-        };
-      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo obtener la información de la caja";
       setCashSessionState((prev) => ({ ...prev, loading: false, activeSession: null }));
@@ -1756,116 +1732,9 @@ function FacturacionWorkspace({
     }
   }, [canManageCashRegisters, loadCashSession]);
 
-  useEffect(() => {
-    if (cashReportsModalOpen) {
-      void loadCashSession();
-    }
-  }, [cashReportsModalOpen, loadCashSession]);
-
-  const cashRegisterOptions = useMemo<ComboboxOption<string>[]>(() => {
-    return cashSessionState.cashRegisters.map((assignment) => ({
-      value: assignment.cashRegisterCode,
-      label: `${assignment.cashRegisterCode} • ${assignment.cashRegisterName}`,
-      description: `${assignment.warehouseCode} • ${assignment.warehouseName}`,
-    }));
-  }, [cashSessionState.cashRegisters]);
-
-  const selectedCashRegister = useMemo(() => {
-    const code = openingForm.cashRegisterCode.trim().toUpperCase();
-    if (!code) return null;
-    return cashSessionState.cashRegisters.find((assignment) => assignment.cashRegisterCode === code) ?? null;
-  }, [cashSessionState.cashRegisters, openingForm.cashRegisterCode]);
-
-  const forceCashModal = canManageCashRegisters && mustHaveOpenCashSession && !cashSessionState.loading && !cashSessionState.activeSession;
-  const cashModalOpen = canManageCashRegisters && (forceCashModal || manualCashModalOpen);
+  const canAccessCashManagement = canManageCashRegisters;
+  const requiresOpenCashSession = canManageCashRegisters && mustHaveOpenCashSession && !cashSessionState.loading && !cashSessionState.activeSession;
   const hasCashAssignments = cashSessionState.cashRegisters.length > 0;
-
-  const handleCloseCashModal = useCallback(() => {
-    if (forceCashModal) return;
-    setManualCashModalOpen(false);
-  }, [forceCashModal]);
-
-  const handleOpenCashModal = useCallback(() => {
-    setManualCashModalOpen(true);
-  }, []);
-
-  const handleOpenCashRegister = useCallback(async () => {
-    const rawCode = openingForm.cashRegisterCode.trim().toUpperCase();
-    if (!rawCode) {
-      toast({ variant: "warning", title: "Caja", description: "Selecciona una caja asignada" });
-      return;
-    }
-    const normalizedAmount = openingForm.openingAmount.trim().replace(/,/g, ".");
-    const amountValue = normalizedAmount === "" ? 0 : Number(normalizedAmount);
-    if (!Number.isFinite(amountValue) || amountValue < 0) {
-      toast({ variant: "warning", title: "Caja", description: "Ingresa un monto de apertura válido" });
-      return;
-    }
-
-    setOpeningSubmitting(true);
-    try {
-      const response = await fetch("/api/cajas/aperturas", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          cash_register_code: rawCode,
-          opening_amount: amountValue,
-          opening_notes: openingForm.openingNotes.trim() ? openingForm.openingNotes.trim() : null,
-        }),
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        const message = data?.message ?? "No se pudo abrir la caja";
-        throw new Error(message);
-      }
-
-      toast({
-        variant: "success",
-        title: "Caja",
-        description: "Caja aperturada correctamente",
-      });
-      await loadCashSession();
-      setOpeningForm((prev) => ({
-        ...prev,
-        cashRegisterCode: rawCode,
-        openingAmount: "",
-        openingNotes: "",
-      }));
-      setManualCashModalOpen(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "No se pudo abrir la caja";
-      toast({ variant: "error", title: "Caja", description: message });
-    } finally {
-      setOpeningSubmitting(false);
-    }
-  }, [loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, toast]);
-
-  const handleDownloadClosureReport = useCallback((sessionId: number, format: "json" | "csv") => {
-    const url = `/api/cajas/cierres/${sessionId}/reporte?format=${format}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, []);
-
-  const handleDownloadOpeningSummary = useCallback((snapshot: CashRegisterSessionSnapshot) => {
-    const payload = {
-      session_id: snapshot.id,
-      status: snapshot.status,
-      opening_at: snapshot.openingAt,
-      opening_amount: snapshot.openingAmount,
-      cash_register: {
-        code: snapshot.cashRegister.code,
-        name: snapshot.cashRegister.name,
-        warehouse_code: snapshot.cashRegister.warehouseCode,
-        warehouse_name: snapshot.cashRegister.warehouseName,
-      },
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `apertura-caja-${snapshot.id}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }, []);
 
   const handleRefreshCashSessions = useCallback(() => {
     void loadCashSession();
@@ -2417,8 +2286,7 @@ function FacturacionWorkspace({
     if (!isDraft && !selectedOrder) return { id: null, invoiceNumber: null };
 
     if (mustHaveOpenCashSession && !cashSessionState.activeSession) {
-      toast({ variant: "warning", title: "Caja requerida", description: "Abre tu caja asignada para poder generar la factura." });
-      setManualCashModalOpen(true);
+      toast({ variant: "warning", title: "Caja requerida", description: "Abre tu caja en la sección Caja antes de generar la factura." });
       return { id: null, invoiceNumber: null };
     }
 
@@ -2563,145 +2431,123 @@ function FacturacionWorkspace({
     }
   };
 
-  const cashSessionPanel = canManageCashRegisters ? (
-    <section className="rounded-3xl border bg-background/95 p-5 shadow-sm">
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1">
-            <h2 className="text-lg font-semibold leading-tight text-foreground">Control de caja</h2>
-            <p className="text-sm text-muted-foreground">
-              Abre la caja para registrar ventas y descarga los reportes recientes de tu turno.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleRefreshCashSessions}
-              disabled={cashSessionState.loading}
-            >
-              {cashSessionState.loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Actualizando…
-                </>
-              ) : (
-                <>
-                  <History className="mr-2 h-4 w-4" />
-                  Actualizar
-                </>
-              )}
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => setCashReportsModalOpen(true)}>
-              <FileText className="mr-2 h-4 w-4" />
-              Reportes
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleOpenCashModal}
-              disabled={cashSessionState.loading || (!cashSessionState.activeSession && !hasCashAssignments)}
-            >
-              {cashSessionState.activeSession ? (
-                <>
-                  <Receipt className="mr-2 h-4 w-4" />
-                  Ver apertura
-                </>
-              ) : (
-                <>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Abrir caja
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
+  const cashActionButtons = canAccessCashManagement ? (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={handleRefreshCashSessions}
+        disabled={cashSessionState.loading}
+      >
         {cashSessionState.loading ? (
-          <div className="flex items-center gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
-            <span>Consultando estado de caja…</span>
-          </div>
-        ) : cashSessionError ? (
-          <div className="flex flex-col gap-3 rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-destructive">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5" />
-              <div>
-                <p className="text-sm font-semibold">No se pudo consultar la caja</p>
-                <p className="text-sm opacity-90">{cashSessionError}</p>
-              </div>
-            </div>
-            <div>
-              <Button type="button" variant="outline" size="sm" onClick={handleRefreshCashSessions}>
-                Reintentar
-              </Button>
-            </div>
-          </div>
-        ) : cashSessionState.activeSession ? (
-          <div className="grid gap-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 dark:border-emerald-500/40 dark:bg-emerald-900/40">
-            <div className="flex items-start gap-3">
-              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-700 dark:text-emerald-200">
-                <Receipt className="h-5 w-5" />
-              </span>
-              <div className="space-y-1">
-                <p className="text-sm font-semibold uppercase tracking-wide text-emerald-800 dark:text-emerald-200">Caja abierta</p>
-                <p className="text-sm text-emerald-900/90 dark:text-emerald-100/90">
-                  {cashSessionState.activeSession.cashRegister.cashRegisterCode} • {cashSessionState.activeSession.cashRegister.cashRegisterName}
-                </p>
-                <p className="text-xs text-emerald-900/70 dark:text-emerald-100/70">
-                  {cashSessionState.activeSession.cashRegister.warehouseCode} • {cashSessionState.activeSession.cashRegister.warehouseName}
-                </p>
-              </div>
-            </div>
-            <dl className="grid gap-3 sm:grid-cols-3">
-              <div className="space-y-1 rounded-2xl bg-white/70 p-3 text-sm text-emerald-900 shadow-sm dark:bg-emerald-950/40 dark:text-emerald-100">
-                <dt className="text-xs uppercase tracking-wide opacity-70">Apertura</dt>
-                <dd className="font-semibold">{formatCashTimestamp(cashSessionState.activeSession.openingAt)}</dd>
-              </div>
-              <div className="space-y-1 rounded-2xl bg-white/70 p-3 text-sm text-emerald-900 shadow-sm dark:bg-emerald-950/40 dark:text-emerald-100">
-                <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
-                <dd className="font-semibold">{formatCurrency(cashSessionState.activeSession.openingAmount ?? 0)}</dd>
-              </div>
-              <div className="space-y-1 rounded-2xl bg-white/70 p-3 text-sm text-emerald-900 shadow-sm dark:bg-emerald-950/40 dark:text-emerald-100">
-                <dt className="text-xs uppercase tracking-wide opacity-70">Notas</dt>
-                <dd className="line-clamp-2">{cashSessionState.activeSession.openingNotes?.trim() || "Sin notas"}</dd>
-              </div>
-            </dl>
-          </div>
-        ) : hasCashAssignments ? (
-          <div className="flex flex-col gap-3 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-100">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5" />
-              <div>
-                <p className="text-sm font-semibold">Caja pendiente de apertura</p>
-                <p className="text-sm opacity-90">Abre tu caja antes de generar facturas para que el sistema registre la sesión.</p>
-                {forceCashModal ? (
-                  <p className="mt-1 text-xs uppercase tracking-wide opacity-90">Requisito obligatorio para facturar</p>
-                ) : null}
-              </div>
-            </div>
-          </div>
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Actualizando
+          </>
         ) : (
-          <div className="flex flex-col gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-muted-foreground">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5" />
-              <div>
-                <p className="text-sm font-semibold text-foreground">Sin cajas asignadas</p>
-                <p className="text-sm">Solicita a un administrador que te asigne una caja para poder aperturarla.</p>
-              </div>
-            </div>
-          </div>
+          <>
+            <History className="mr-2 h-4 w-4" />
+            Actualizar
+          </>
         )}
-      </div>
-    </section>
+      </Button>
+      <Button type="button" size="sm" className="rounded-2xl" asChild>
+        <Link href="/caja">
+          Gestionar caja
+        </Link>
+      </Button>
+    </div>
   ) : null;
 
-  
+  let statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-muted text-muted-foreground";
+  let statusIcon: ReactNode = <History className="h-4 w-4" />;
+  let statusInfo: ReactNode = (
+    <div className="space-y-1">
+      <p className="text-sm font-semibold text-foreground">Estado de caja</p>
+      <p className="text-xs text-muted-foreground">Consulta tu caja asignada y gestiona aperturas en la sección Caja.</p>
+    </div>
+  );
+
+  if (cashSessionState.loading) {
+    statusIcon = <Loader2 className="h-4 w-4 animate-spin" />;
+    statusInfo = (
+      <div className="space-y-1">
+        <p className="text-sm font-semibold text-foreground">Consultando estado de caja</p>
+        <p className="text-xs text-muted-foreground">Actualizando informacion asignada.</p>
+      </div>
+    );
+  } else if (cashSessionError) {
+    statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-destructive/10 text-destructive";
+    statusIcon = <AlertCircle className="h-4 w-4" />;
+    statusInfo = (
+      <div className="space-y-0.5">
+        <p className="text-sm font-semibold text-destructive">No se pudo consultar la caja</p>
+        <p className="text-xs text-destructive/80">{cashSessionError}</p>
+        <p className="text-xs text-muted-foreground">Intenta nuevamente con Actualizar.</p>
+      </div>
+    );
+  } else if (cashSessionState.activeSession) {
+    const active = cashSessionState.activeSession;
+    statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600";
+    statusIcon = <Receipt className="h-4 w-4" />;
+    statusInfo = (
+      <div className="space-y-1">
+        <p className="text-sm font-semibold text-foreground">Caja abierta</p>
+        <p className="text-xs text-muted-foreground">
+          {`${active.cashRegister.cashRegisterCode} - ${active.cashRegister.cashRegisterName}`}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {`${active.cashRegister.warehouseCode} - ${active.cashRegister.warehouseName}`}
+        </p>
+        <p className="text-xs text-muted-foreground">Consulta los detalles completos en la sección Caja.</p>
+      </div>
+    );
+  } else if (hasCashAssignments) {
+    statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600";
+    statusIcon = <AlertCircle className="h-4 w-4" />;
+    statusInfo = (
+      <div className="space-y-1">
+        <p className="text-sm font-semibold text-foreground">Caja pendiente de apertura</p>
+        <p className="text-xs text-muted-foreground">Abre tu caja en la sección Caja antes de generar facturas.</p>
+      </div>
+    );
+  } else {
+    statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-muted text-muted-foreground";
+    statusIcon = <Ban className="h-4 w-4" />;
+    statusInfo = (
+      <div className="space-y-1">
+        <p className="text-sm font-semibold text-foreground">Sin cajas asignadas</p>
+        <p className="text-xs text-muted-foreground">Solicita a un administrador una asignacion de caja.</p>
+      </div>
+    );
+  }
+
+  const cashReminder = requiresOpenCashSession ? (
+    <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-600">
+      Abre tu caja desde la sección Caja para poder facturar.
+    </div>
+  ) : null;
+
+  const cashSessionBanner = canManageCashRegisters ? (
+    <div className="rounded-3xl border bg-background/95 p-5 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-start gap-3">
+          <span className={statusBadgeClass}>{statusIcon}</span>
+          {statusInfo}
+        </div>
+        {cashActionButtons}
+      </div>
+      {cashReminder}
+    </div>
+  ) : null;
+
+
 
   return (
     <>
-  <section className="space-y-8 pb-8">
-        {cashSessionPanel}
+      <section className="space-y-8 pb-8">
+        {cashSessionBanner}
        <header className="space-y-3">
          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
            <div className="space-y-3">
@@ -3078,268 +2924,6 @@ function FacturacionWorkspace({
 
        {/* Vista previa eliminada: se imprime directamente al presionar el botón */}
       </section>
-
-      <Modal
-        open={cashModalOpen}
-        onClose={handleCloseCashModal}
-        title={cashSessionState.activeSession ? "Caja abierta" : "Abrir caja"}
-        description={cashSessionState.activeSession ? "Consulta los detalles de tu sesión activa." : "Registra la apertura para comenzar a facturar."}
-        contentClassName="max-w-2xl"
-      >
-        {cashSessionState.loading ? (
-          <div className="flex items-center gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
-            <span>Consultando estado de caja…</span>
-          </div>
-        ) : cashSessionError ? (
-          <div className="space-y-4">
-            <div className="flex items-start gap-3 rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-destructive">
-              <AlertCircle className="mt-0.5 h-5 w-5" />
-              <div>
-                <p className="text-sm font-semibold">No se pudo consultar la caja</p>
-                <p className="text-sm opacity-90">{cashSessionError}</p>
-              </div>
-            </div>
-            <div className="flex justify-end">
-              <Button type="button" variant="outline" onClick={handleRefreshCashSessions}>
-                Intentar de nuevo
-              </Button>
-            </div>
-          </div>
-        ) : cashSessionState.activeSession ? (
-          <div className="space-y-5">
-            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-5 dark:border-emerald-500/40 dark:bg-emerald-900/40">
-              <div className="flex flex-col gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-200">Caja asignada</span>
-                <p className="text-base font-semibold text-emerald-900 dark:text-emerald-100">
-                  {cashSessionState.activeSession.cashRegister.cashRegisterCode} • {cashSessionState.activeSession.cashRegister.cashRegisterName}
-                </p>
-                <p className="text-xs text-emerald-900/80 dark:text-emerald-100/80">
-                  {cashSessionState.activeSession.cashRegister.warehouseCode} • {cashSessionState.activeSession.cashRegister.warehouseName}
-                </p>
-              </div>
-              <dl className="mt-4 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-2xl bg-white/70 p-3 text-sm text-emerald-900 shadow-sm dark:bg-emerald-950/40 dark:text-emerald-100">
-                  <dt className="text-xs uppercase tracking-wide opacity-70">Apertura</dt>
-                  <dd className="font-semibold">{formatCashTimestamp(cashSessionState.activeSession.openingAt)}</dd>
-                </div>
-                <div className="rounded-2xl bg-white/70 p-3 text-sm text-emerald-900 shadow-sm dark:bg-emerald-950/40 dark:text-emerald-100">
-                  <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
-                  <dd className="font-semibold">{formatCurrency(cashSessionState.activeSession.openingAmount ?? 0)}</dd>
-                </div>
-                <div className="rounded-2xl bg-white/70 p-3 text-sm text-emerald-900 shadow-sm dark:bg-emerald-950/40 dark:text-emerald-100">
-                  <dt className="text-xs uppercase tracking-wide opacity-70">Notas</dt>
-                  <dd className="text-sm">{cashSessionState.activeSession.openingNotes?.trim() || "Sin notas"}</dd>
-                </div>
-              </dl>
-            </div>
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  handleDownloadOpeningSummary({
-                    id: cashSessionState.activeSession!.id,
-                    status: cashSessionState.activeSession!.status,
-                    openingAmount: cashSessionState.activeSession!.openingAmount,
-                    openingAt: cashSessionState.activeSession!.openingAt,
-                    closingAmount: null,
-                    closingAt: null,
-                    cashRegister: {
-                      code: cashSessionState.activeSession!.cashRegister.cashRegisterCode,
-                      name: cashSessionState.activeSession!.cashRegister.cashRegisterName,
-                      warehouseCode: cashSessionState.activeSession!.cashRegister.warehouseCode,
-                      warehouseName: cashSessionState.activeSession!.cashRegister.warehouseName,
-                    },
-                  })
-                }
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Descargar apertura (JSON)
-              </Button>
-            </div>
-          </div>
-        ) : hasCashAssignments ? (
-          <div className="space-y-6">
-            {forceCashModal ? (
-              <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-100">
-                <p className="font-semibold">Debes abrir una caja para continuar</p>
-                <p className="mt-1 text-xs uppercase tracking-wide opacity-90">Requisito obligatorio para generar facturas</p>
-              </div>
-            ) : null}
-            <div className="space-y-4">
-              <Combobox<string>
-                value={openingForm.cashRegisterCode}
-                onChange={(value) =>
-                  setOpeningForm((prev) => ({
-                    ...prev,
-                    cashRegisterCode: (value ?? "").toUpperCase(),
-                  }))
-                }
-                options={cashRegisterOptions}
-                placeholder="Selecciona una caja"
-                label="Caja asignada"
-                ariaLabel="Seleccionar caja para apertura"
-              />
-              {selectedCashRegister ? (
-                <div className="rounded-2xl border border-muted bg-muted/20 p-4 text-xs text-muted-foreground">
-                  <p className="font-semibold text-foreground">Detalles de la caja</p>
-                  <p>{selectedCashRegister.cashRegisterName}</p>
-                  <p className="mt-1">Almacén: {selectedCashRegister.warehouseCode} • {selectedCashRegister.warehouseName}</p>
-                </div>
-              ) : null}
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Monto de apertura</Label>
-                <Input
-                  value={openingForm.openingAmount}
-                  onChange={(event) =>
-                    setOpeningForm((prev) => ({
-                      ...prev,
-                      openingAmount: event.target.value.replace(/[^0-9.,]/g, ""),
-                    }))
-                  }
-                  placeholder="0.00"
-                  className="rounded-2xl"
-                  inputMode="decimal"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
-                <textarea
-                  value={openingForm.openingNotes}
-                  onChange={(event) =>
-                    setOpeningForm((prev) => ({
-                      ...prev,
-                      openingNotes: event.target.value,
-                    }))
-                  }
-                  placeholder="Observaciones opcionales"
-                  rows={3}
-                  className="w-full rounded-2xl border border-muted bg-background/95 p-3 text-sm text-foreground outline-none focus:border-primary"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              {!forceCashModal ? (
-                <Button type="button" variant="outline" onClick={handleCloseCashModal} disabled={openingSubmitting}>
-                  Cancelar
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                onClick={() => {
-                  void handleOpenCashRegister();
-                }}
-                disabled={openingSubmitting}
-              >
-                {openingSubmitting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Aperturando…
-                  </>
-                ) : (
-                  "Abrir caja"
-                )}
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
-            <p className="font-semibold text-foreground">No tienes cajas asignadas</p>
-            <p className="mt-1">Solicita a un administrador que te asigne una caja antes de intentar abrir una sesión.</p>
-          </div>
-        )}
-      </Modal>
-
-      <Modal
-        open={cashReportsModalOpen}
-        onClose={() => setCashReportsModalOpen(false)}
-        title="Reportes de caja"
-        description="Descarga la información de aperturas y cierres recientes."
-        contentClassName="max-w-4xl"
-      >
-        {cashSessionState.loading ? (
-          <div className="flex items-center gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
-            <span>Consultando registros…</span>
-          </div>
-        ) : cashSessionState.recentSessions.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
-            No se encontraron sesiones recientes.
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {cashSessionState.recentSessions.map((snapshot) => {
-              const isClosed = snapshot.status === "CLOSED";
-              const statusLabel = snapshot.status === "CLOSED" ? "Cerrada" : snapshot.status === "OPEN" ? "Abierta" : "Cancelada";
-              const statusTone = snapshot.status === "CLOSED" ? "text-emerald-600" : snapshot.status === "OPEN" ? "text-amber-600" : "text-destructive";
-              return (
-                <div key={snapshot.id} className="space-y-4 rounded-2xl border bg-background/95 p-5 shadow-sm">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-base font-semibold text-foreground">
-                        {snapshot.cashRegister.code} • {snapshot.cashRegister.name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {snapshot.cashRegister.warehouseCode} • {snapshot.cashRegister.warehouseName}
-                      </p>
-                    </div>
-                    <span className={`text-sm font-semibold ${statusTone}`}>{statusLabel}</span>
-                  </div>
-                  <dl className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-                    <div className="rounded-2xl bg-muted/20 p-3">
-                      <dt className="text-xs uppercase tracking-wide opacity-70">Apertura</dt>
-                      <dd className="font-medium text-foreground">{formatCashTimestamp(snapshot.openingAt)}</dd>
-                    </div>
-                    <div className="rounded-2xl bg-muted/20 p-3">
-                      <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
-                      <dd className="font-medium text-foreground">{formatCurrency(snapshot.openingAmount ?? 0)}</dd>
-                    </div>
-                    <div className="rounded-2xl bg-muted/20 p-3">
-                      <dt className="text-xs uppercase tracking-wide opacity-70">Cierre</dt>
-                      <dd className="font-medium text-foreground">{snapshot.closingAt ? formatCashTimestamp(snapshot.closingAt) : "Sin cierre"}</dd>
-                    </div>
-                  </dl>
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDownloadOpeningSummary(snapshot)}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Resumen apertura (JSON)
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={!isClosed}
-                      onClick={() => handleDownloadClosureReport(snapshot.id, "json")}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Reporte de cierre (JSON)
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={!isClosed}
-                      onClick={() => handleDownloadClosureReport(snapshot.id, "csv")}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Reporte de cierre (CSV)
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Modal>
 
       <Modal
         open={addItemModalOpen}

@@ -150,7 +150,7 @@ export default function TraspasosPage() {
 
   async function loadWarehouses() {
     try {
-      const response = await fetch("/api/inventario/warehouses");
+      const response = await fetch("/api/inventario/warehouses", { credentials: "include" });
       if (!response.ok) throw new Error("No se pudieron cargar los almacenes");
       const data = (await response.json()) as { items?: WarehouseOption[] };
       const mapped: WarehouseOption[] = Array.isArray(data.items)

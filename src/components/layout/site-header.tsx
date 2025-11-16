@@ -1,6 +1,7 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback, useState } from "react";
 import { LogOut } from "lucide-react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -8,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { siteConfig } from "@/config/site";
 import { useSession } from "@/components/providers/session-provider";
 import { isSessionAdministrator, isSessionFacturador, normalizeSessionRoles } from "@/lib/auth/session-roles";
+import { useToast } from "@/components/ui/toast-provider";
 
 function getInitials(source: string): string {
   const cleaned = source.trim();
@@ -33,6 +35,9 @@ function humanizeRole(code: string): string {
 
 export function SiteHeader() {
   const session = useSession();
+  const router = useRouter();
+  const { toast } = useToast();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const displayName = session?.name?.trim() || session?.sub || "Invitado";
   const normalizedRoles = normalizeSessionRoles(session);
   let roleLabel = "Sin rol";
@@ -48,6 +53,38 @@ export function SiteHeader() {
   }
 
   const initials = getInitials(displayName);
+
+  const handleLogout = useCallback(async () => {
+    if (isLoggingOut) return;
+
+    setIsLoggingOut(true);
+
+    try {
+      const response = await fetch("/logout", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Respuesta inesperada: ${response.status}`);
+      }
+
+      router.replace("/?logout=1");
+      router.refresh();
+    } catch (error) {
+      console.error("No se pudo cerrar sesión", error);
+      toast({
+        variant: "error",
+        title: "No se pudo cerrar sesión",
+        description: "Intenta nuevamente o verifica tu conexión.",
+      });
+    } finally {
+      setIsLoggingOut(false);
+    }
+  }, [isLoggingOut, router, toast]);
 
   return (
     <header className="sticky top-0 z-50 border-b bg-background/85 backdrop-blur">
@@ -73,10 +110,16 @@ export function SiteHeader() {
             </div>
           ) : null}
           <ThemeToggle />
-          <Button variant="ghost" size="icon" type="button" asChild>
-            <Link href="/logout" aria-label="Cerrar sesión" prefetch={false}>
-              <LogOut className="h-4 w-4" />
-            </Link>
+          <Button
+            variant="ghost"
+            size="icon"
+            type="button"
+            onClick={handleLogout}
+            aria-label="Cerrar sesión"
+            title="Cerrar sesión"
+            disabled={isLoggingOut}
+          >
+            <LogOut className="h-4 w-4" />
           </Button>
         </nav>
       </div>

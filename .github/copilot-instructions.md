@@ -43,4 +43,7 @@ Siempre constesta y presenta lo que debas en español.## Instrucciones para Copi
 
 Siempre usa los controles que tenemos previamente creados para que todo mantenga el mismo diseño homogéneo.
 
-Siempre revisa el código antes de terminar para evitar errores de sintaxis o de lógica.
+Siempre revisa el código y corrige antes de terminar,para evitar errores de sintaxis o de lógica.
+
+Puedes usar herramientas MCP como perplexity para consultar mejores prácticas de desarrollo en TypeScript y Next.js.
+para corrección de código y lo que consideres necesario.

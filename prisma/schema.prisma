@@ -8,17 +8,18 @@ datasource db {
   schemas  = ["app"]
 }
 
-model admin_user_roles {
+model UserRole {
   id            BigInt      @id @default(autoincrement())
   admin_user_id Int
   role_id       Int
   is_primary    Boolean     @default(false)
   assigned_at   DateTime    @default(now()) @db.Timestamptz(6)
   admin_users   admin_users @relation(fields: [admin_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  roles         roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  role          Role        @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([admin_user_id, role_id])
   @@index([admin_user_id, is_primary(sort: Desc)], map: "ix_admin_user_roles_admin")
+  @@map("admin_user_roles")
   @@schema("app")
 }
 
@@ -31,7 +32,7 @@ model admin_users {
   last_login_at                                                              DateTime?                @db.Timestamptz(6)
   created_at                                                                 DateTime                 @default(now()) @db.Timestamptz(6)
   updated_at                                                                 DateTime?                @default(now()) @db.Timestamptz(6)
-  admin_user_roles                                                           admin_user_roles[]
+  user_roles                                                                 UserRole[]
   cash_register_sessions_cash_register_sessions_admin_user_idToadmin_users   cash_register_sessions[] @relation("cash_register_sessions_admin_user_idToadmin_users")
   cash_register_sessions_cash_register_sessions_closing_user_idToadmin_users cash_register_sessions[] @relation("cash_register_sessions_closing_user_idToadmin_users")
   cash_register_users                                                        cash_register_users[]
@@ -419,18 +420,33 @@ model price_lists {
   @@schema("app")
 }
 
-model role_permissions {
-  role_id         Int
-  permission_code String   @db.VarChar(80)
-  created_at      DateTime @default(now()) @db.Timestamptz(6)
-  roles           roles    @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+model Permission {
+  id          Int              @id @default(autoincrement())
+  code        String           @unique @db.VarChar(80)
+  name        String           @db.VarChar(120)
+  description String?          @db.VarChar(250)
+  created_at  DateTime         @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime?        @default(now()) @db.Timestamptz(6)
+  role_permissions RolePermission[]
 
-  @@unique([role_id, permission_code])
-  @@index([permission_code], map: "ix_role_permissions_permission")
+  @@map("permissions")
   @@schema("app")
 }
 
-model roles {
+model RolePermission {
+  role_id         Int
+  permission_id   Int
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+  role            Role     @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  permission      Permission @relation(fields: [permission_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([role_id, permission_id])
+  @@index([permission_id], map: "ix_role_permissions_permission")
+  @@map("role_permissions")
+  @@schema("app")
+}
+
+model Role {
   id               Int                @id @default(autoincrement())
   code             String             @unique @db.VarChar(40)
   name             String             @db.VarChar(120)
@@ -438,9 +454,10 @@ model roles {
   is_active        Boolean            @default(true)
   created_at       DateTime           @default(now()) @db.Timestamptz(6)
   updated_at       DateTime?          @default(now()) @db.Timestamptz(6)
-  admin_user_roles admin_user_roles[]
-  role_permissions role_permissions[]
+  user_roles       UserRole[]
+  role_permissions RolePermission[]
 
+  @@map("roles")
   @@schema("app")
 }
 

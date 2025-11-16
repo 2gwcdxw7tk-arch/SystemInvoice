@@ -13,7 +13,7 @@ import { useToast } from "@/components/ui/toast-provider";
 import { isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
 
 const HIDE_CHROME_PATHS = new Set<string>(["/", "/meseros/comandas"]);
-const FACTURADOR_ALLOWED_PATHS = ["/dashboard", "/facturacion", "/reportes"] as const;
+const FACTURADOR_ALLOWED_PATHS = ["/dashboard", "/facturacion", "/facturas", "/caja", "/reportes"] as const;
 
 function canFacturadorVisit(pathname: string): boolean {
   return FACTURADOR_ALLOWED_PATHS.some((allowed) => pathname === allowed || pathname.startsWith(`${allowed}/`));

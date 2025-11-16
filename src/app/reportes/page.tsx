@@ -470,7 +470,7 @@ export default function ReportesPage() {
   const loadWarehouses = useCallback(async () => {
     setWarehousesLoading(true);
     try {
-      const response = await fetch("/api/inventario/warehouses", { cache: "no-store" });
+      const response = await fetch("/api/inventario/warehouses", { cache: "no-store", credentials: "include" });
       if (!response.ok) throw new Error("No se pudieron obtener las bodegas disponibles");
       const payload = (await response.json()) as { items?: Array<{ code: string; name: string }> };
       const mapped: WarehouseOption[] = Array.isArray(payload.items)

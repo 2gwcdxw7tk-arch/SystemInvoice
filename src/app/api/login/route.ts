@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { createEmptySessionCookie, createSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { createEmptySessionCookie, createSessionCookie, SESSION_COOKIE_NAME, SessionPayload } from "@/lib/auth/session";
 import { env } from "@/lib/env";
 import { adminUserService } from "@/lib/services/AdminUserService";
 import { waiterService } from "@/lib/services/WaiterService";
@@ -93,10 +93,10 @@ export async function POST(request: NextRequest) {
         sub: String(result.user.id),
         role: "admin",
         name: result.user.displayName ?? result.user.username,
-        roles: result.context?.roles,
-        permissions: result.context?.permissions,
+        roles: result.context?.roles ?? [], // Asegurarse de que siempre sea un array
+        permissions: result.context?.permissions ?? [], // Asegurarse de que siempre sea un array
         defaultCashRegister,
-      });
+      } satisfies SessionPayload);
 
       response.cookies.set({
         name: SESSION_COOKIE_NAME,
@@ -138,7 +138,9 @@ export async function POST(request: NextRequest) {
       sub: String(result.waiter.id),
       role: "waiter",
       name: result.waiter.fullName,
-    });
+      roles: ["waiter"], // Asignar rol por defecto para meseros
+      permissions: [], // Sin permisos específicos por ahora
+    } satisfies SessionPayload);
 
     response.cookies.set({
       name: SESSION_COOKIE_NAME,

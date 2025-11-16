@@ -20,7 +20,7 @@ const updateWarehouseSchema = z
     message: "Se requiere al menos un campo a actualizar",
   });
 
-export async function GET(request: NextRequest, context: { params: { code?: string } }) {
+export async function GET(request: NextRequest, context: { params: Promise<{ code: string }> }) {
   const access = await requireSession(request);
   if ("response" in access) return access.response;
 
@@ -35,7 +35,8 @@ export async function GET(request: NextRequest, context: { params: { code?: stri
     return forbiddenResponse("No tienes permisos para consultar bodegas");
   }
 
-  const code = context.params.code?.trim();
+  const params = await context.params;
+  const code = params.code?.trim();
   if (!code) {
     return NextResponse.json({ success: false, message: "Código inválido" }, { status: 400 });
   }
@@ -57,11 +58,12 @@ export async function GET(request: NextRequest, context: { params: { code?: stri
   });
 }
 
-export async function PATCH(request: NextRequest, context: { params: { code?: string } }) {
+export async function PATCH(request: NextRequest, context: { params: Promise<{ code: string }> }) {
   const access = await requireAdministrator(request, "Solo un administrador puede actualizar bodegas");
   if ("response" in access) return access.response;
 
-  const code = context.params.code?.trim();
+  const params = await context.params;
+  const code = params.code?.trim();
   if (!code) {
     return NextResponse.json({ success: false, message: "Código inválido" }, { status: 400 });
   }
@@ -90,7 +92,7 @@ export async function PATCH(request: NextRequest, context: { params: { code?: st
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "No se pudo actualizar la bodega";
-    const status = /no existe/i.test(message) ? 404 : 400;
+    const status = error instanceof Error && /no existe/i.test(message) ? 404 : 500;
     return NextResponse.json({ success: false, message }, { status });
   }
 }

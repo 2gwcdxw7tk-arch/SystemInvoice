@@ -3,10 +3,8 @@ import { NextResponse } from "next/server";
 import { createEmptySessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { env } from "@/lib/env";
 
-export async function GET() {
+function buildLogoutResponse<T extends NextResponse>(response: T): T {
   const session = createEmptySessionCookie();
-  const url = new URL("/?logout=1", env.appUrl);
-  const response = NextResponse.redirect(url);
 
   response.cookies.set({
     name: SESSION_COOKIE_NAME,
@@ -19,4 +17,17 @@ export async function GET() {
   });
 
   return response;
+}
+
+export async function GET() {
+  const url = new URL("/?logout=1", env.appUrl);
+  const response = NextResponse.redirect(url);
+
+  return buildLogoutResponse(response);
+}
+
+export async function POST() {
+  const response = NextResponse.json({ success: true });
+
+  return buildLogoutResponse(response);
 }
