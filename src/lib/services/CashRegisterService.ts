@@ -394,12 +394,30 @@ export class CashRegisterService {
     if (!(input.openingAmount >= 0)) {
       throw new Error("El monto de apertura debe ser positivo o cero");
     }
+    const allowUnassigned = input.allowUnassigned ?? false;
 
     if (env.useMockData && this.mockSessions && this.mockAssignments) {
+      const normalizedCode = input.cashRegisterCode.trim().toUpperCase();
       const assignments = this.ensureMockAssignments(input.adminUserId);
-      const target = assignments.find(
-        (assignment) => assignment.cashRegisterCode === input.cashRegisterCode.trim().toUpperCase()
-      );
+      let target = assignments.find((assignment) => assignment.cashRegisterCode === normalizedCode);
+      if (!target && allowUnassigned) {
+        const register = this.mockCashRegisters.find(
+          (item) => item.code === normalizedCode && item.isActive
+        );
+        if (!register) {
+          throw new Error(`La caja ${input.cashRegisterCode} no existe o está inactiva (mock)`);
+        }
+        target = {
+          cashRegisterId: register.id,
+          cashRegisterCode: register.code,
+          cashRegisterName: register.name,
+          allowManualWarehouseOverride: register.allowManualWarehouseOverride,
+          warehouseId: register.warehouseId,
+          warehouseCode: register.warehouseCode,
+          warehouseName: register.warehouseName,
+          isDefault: false,
+        } satisfies CashRegisterAssignment;
+      }
       if (!target) {
         throw new Error(`No tienes permisos para operar la caja ${input.cashRegisterCode}`);
       }
@@ -437,6 +455,8 @@ export class CashRegisterService {
       cashRegisterCode: input.cashRegisterCode,
       openingAmount: input.openingAmount,
       openingNotes,
+      allowUnassigned,
+      actingAdminUserId: input.actingAdminUserId,
     });
   }
 
@@ -446,6 +466,7 @@ export class CashRegisterService {
     if (!(closingAmount >= 0)) {
       throw new Error("El monto de cierre debe ser positivo o cero");
     }
+    const allowDifferentUser = input.allowDifferentUser ?? false;
 
     const normalizedPayments: ReportedPayment[] = input.payments.map((payment) => {
       const method = payment.method.trim().toUpperCase();
@@ -476,6 +497,9 @@ export class CashRegisterService {
       }
       if (session.status !== "OPEN") {
         throw new Error("La sesión indicada ya fue cerrada");
+      }
+      if (session.adminUserId !== input.adminUserId && !allowDifferentUser) {
+        throw new Error("Solo el usuario que abrió la caja puede cerrarla");
       }
 
       const invoices = this.mockSessionInvoices.filter((item) => item.sessionId === session.id);
@@ -528,6 +552,7 @@ export class CashRegisterService {
       closingAmount,
       payments: normalizedPayments,
       closingNotes,
+      allowDifferentUser,
     });
   }
 
@@ -641,6 +666,16 @@ export class CashRegisterService {
         amount: payment.amount,
       })),
     });
+  }
+
+  async listActiveCashRegisterSessions(): Promise<CashRegisterSessionRecord[]> {
+    if (env.useMockData && this.mockSessions) {
+      const sessions = Array.from(this.mockSessions.values()).filter((session) => session.status === "OPEN");
+      sessions.sort((a, b) => new Date(a.openingAt).getTime() - new Date(b.openingAt).getTime());
+      return sessions.map((session) => cloneSession(session));
+    }
+
+    return this.repository.listActiveCashRegisterSessions();
   }
 }
 

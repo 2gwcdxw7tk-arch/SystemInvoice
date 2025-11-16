@@ -2,7 +2,20 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowLeft, Download, History, Loader2, Lock, Minus, Plus, Receipt } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  CircleDot,
+  Download,
+  History,
+  Loader2,
+  Lock,
+  Minus,
+  Plus,
+  Receipt,
+  Store,
+  Users2,
+} from "lucide-react";
 
 import { useSession } from "@/components/providers/session-provider";
 import { useToast } from "@/components/ui/toast-provider";
@@ -56,6 +69,32 @@ interface CashRegisterSessionSnapshot {
   };
 }
 
+interface CashRegisterOperatorOption {
+  adminUserId: number;
+  username: string;
+  displayName: string | null;
+  roles: string[];
+}
+
+interface CashRegisterOverviewRegister {
+  cashRegisterId: number;
+  cashRegisterCode: string;
+  cashRegisterName: string;
+  warehouseCode: string;
+  warehouseName: string;
+  allowManualWarehouseOverride: boolean;
+  isActive: boolean;
+  assignments: Array<{ adminUserId: number; username: string; displayName: string | null; isDefault: boolean }>;
+  activeSession: {
+    id: number;
+    adminUserId: number;
+    adminUsername: string;
+    adminDisplayName: string | null;
+    openingAt: string;
+    openingAmount: number;
+  } | null;
+}
+
 type PaymentMethod = "CASH" | "CARD" | "TRANSFER" | "OTHER";
 
 interface ClosingFormPayment {
@@ -76,6 +115,8 @@ const paymentMethodOptions: ComboboxOption<PaymentMethod>[] = [
   { value: "TRANSFER", label: "Transferencia" },
   { value: "OTHER", label: "Otro" },
 ];
+
+const HISTORY_FILTER_ALL = "__ALL__";
 
 const formatTimestampLocale = (value: string | null | undefined): string => {
   if (!value) return "Sin registro";
@@ -98,29 +139,47 @@ export default function CashManagementPage() {
   const canViewCashReports = hasSessionPermission(session, "cash.report.view");
   const canAccess = isAdmin || canOpenCash || canCloseCash || canViewCashReports;
 
+  const currentAdminId = useMemo(() => {
+    const rawId = Number(session?.sub);
+    return Number.isFinite(rawId) ? rawId : null;
+  }, [session?.sub]);
+
   const [cashState, setCashState] = useState<{
     loading: boolean;
     activeSession: CashRegisterActiveSession | null;
     cashRegisters: CashRegisterAssignmentOption[];
     defaultCashRegisterId: number | null;
     recentSessions: CashRegisterSessionSnapshot[];
+    operators: CashRegisterOperatorOption[];
+    overview: CashRegisterOverviewRegister[];
   }>({
     loading: false,
     activeSession: null,
     cashRegisters: [],
     defaultCashRegisterId: null,
     recentSessions: [],
+    operators: [],
+    overview: [],
   });
   const [cashError, setCashError] = useState<string | null>(null);
+  const [historyFilter, setHistoryFilter] = useState<string>(HISTORY_FILTER_ALL);
 
   const [openingModalOpen, setOpeningModalOpen] = useState(false);
-  const [openingForm, setOpeningForm] = useState({ cashRegisterCode: "", openingAmount: "", openingNotes: "" });
+  const [openingForm, setOpeningForm] = useState({
+    cashRegisterCode: "",
+    openingAmount: "",
+    openingNotes: "",
+    operatorAdminUserId: currentAdminId,
+  });
   const [openingSubmitting, setOpeningSubmitting] = useState(false);
 
   const [closingModalOpen, setClosingModalOpen] = useState(false);
-  const [closingForm, setClosingForm] = useState<{ closingAmount: string; closingNotes: string; payments: ClosingFormPayment[] }>(
-    { closingAmount: "", closingNotes: "", payments: createInitialClosingPayments() }
-  );
+  const [closingForm, setClosingForm] = useState<{
+    closingAmount: string;
+    closingNotes: string;
+    payments: ClosingFormPayment[];
+    targetSessionId: number | null;
+  }>({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments(), targetSessionId: null });
   const [closingSubmitting, setClosingSubmitting] = useState(false);
 
   const loadCashSession = useCallback(async () => {
@@ -139,6 +198,10 @@ export default function CashManagementPage() {
 
       const assignments: CashRegisterAssignmentOption[] = Array.isArray(data?.cashRegisters) ? data.cashRegisters : [];
       const recentSessions: CashRegisterSessionSnapshot[] = Array.isArray(data?.recentSessions) ? data.recentSessions : [];
+      const operators: CashRegisterOperatorOption[] = Array.isArray(data?.operators) ? data.operators : [];
+      const overview: CashRegisterOverviewRegister[] = Array.isArray(data?.overview?.registers)
+        ? data.overview.registers
+        : [];
 
       setCashState({
         loading: false,
@@ -146,13 +209,21 @@ export default function CashManagementPage() {
         cashRegisters: assignments,
         defaultCashRegisterId: typeof data?.defaultCashRegisterId === "number" ? data.defaultCashRegisterId : null,
         recentSessions,
+        operators,
+        overview,
       });
       setCashError(null);
 
-      const preferred = assignments.find((assignment) => assignment.cashRegisterId === data?.defaultCashRegisterId) ?? assignments[0];
+      const preferred =
+        assignments.find((assignment) => assignment.cashRegisterId === data?.defaultCashRegisterId) ?? assignments[0];
+      const fallbackOperatorId =
+        operators.length > 0 && isAdmin
+          ? operators.find((operator) => operator.adminUserId === currentAdminId)?.adminUserId ?? operators[0].adminUserId
+          : currentAdminId;
       setOpeningForm((prev) => ({
         ...prev,
         cashRegisterCode: prev.cashRegisterCode || preferred?.cashRegisterCode || "",
+        operatorAdminUserId: prev.operatorAdminUserId ?? fallbackOperatorId ?? null,
       }));
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo obtener la información de la caja";
@@ -164,7 +235,7 @@ export default function CashManagementPage() {
         description: message,
       });
     }
-  }, [canAccess, toast]);
+  }, [canAccess, currentAdminId, isAdmin, toast]);
 
   useEffect(() => {
     void loadCashSession();
@@ -178,10 +249,133 @@ export default function CashManagementPage() {
     }));
   }, [cashState.cashRegisters]);
 
+  const operatorOptions = useMemo<ComboboxOption<number>[]>(() => {
+    return cashState.operators.map((operator) => ({
+      value: operator.adminUserId,
+      label: operator.displayName?.trim() ? `${operator.displayName} (${operator.username})` : operator.username,
+      description: operator.roles.length > 0 ? operator.roles.join(", ") : undefined,
+    }));
+  }, [cashState.operators]);
+
+  const historyFilterOptions = useMemo<ComboboxOption<string>[]>(() => {
+    const registerMap = new Map<string, { label: string; description: string }>();
+    for (const snapshot of cashState.recentSessions) {
+      if (!registerMap.has(snapshot.cashRegister.code)) {
+        registerMap.set(snapshot.cashRegister.code, {
+          label: `${snapshot.cashRegister.code} • ${snapshot.cashRegister.name}`,
+          description: `${snapshot.cashRegister.warehouseCode} • ${snapshot.cashRegister.warehouseName}`,
+        });
+      }
+    }
+
+    const registerOptions = Array.from(registerMap.entries()).map(([code, meta]) => ({
+      value: code,
+      label: meta.label,
+      description: meta.description,
+    }));
+
+    return [
+      { value: HISTORY_FILTER_ALL, label: "Todas las cajas" },
+      ...registerOptions.sort((a, b) => a.label.localeCompare(b.label)),
+    ];
+  }, [cashState.recentSessions]);
+
+  const filteredRecentSessions = useMemo(() => {
+    if (historyFilter === HISTORY_FILTER_ALL) {
+      return cashState.recentSessions;
+    }
+    return cashState.recentSessions.filter((session) => session.cashRegister.code === historyFilter);
+  }, [cashState.recentSessions, historyFilter]);
+
+  useEffect(() => {
+    if (historyFilter === HISTORY_FILTER_ALL) {
+      return;
+    }
+    const exists = cashState.recentSessions.some((session) => session.cashRegister.code === historyFilter);
+    if (!exists) {
+      setHistoryFilter(HISTORY_FILTER_ALL);
+    }
+  }, [cashState.recentSessions, historyFilter]);
+
   const normalizedCashRegisterCode = openingForm.cashRegisterCode.trim().toUpperCase();
   const selectedCashRegister = normalizedCashRegisterCode
     ? cashState.cashRegisters.find((assignment) => assignment.cashRegisterCode === normalizedCashRegisterCode) ?? null
     : null;
+  const selectedOperator =
+    openingForm.operatorAdminUserId != null
+      ? cashState.operators.find((operator) => operator.adminUserId === openingForm.operatorAdminUserId) ?? null
+      : null;
+  const closableSessions = useMemo<ComboboxOption<number>[]>(() => {
+    const options: ComboboxOption<number>[] = [];
+    if (cashState.activeSession) {
+      options.push({
+        value: cashState.activeSession.id,
+        label: `${cashState.activeSession.cashRegister.cashRegisterCode} • ${cashState.activeSession.cashRegister.cashRegisterName}`,
+        description: `Propia • ${formatTimestampLocale(cashState.activeSession.openingAt)}`,
+      });
+    }
+    if (isAdmin) {
+      for (const register of cashState.overview) {
+        if (!register.activeSession) continue;
+        options.push({
+          value: register.activeSession.id,
+          label: `${register.cashRegisterCode} • ${register.cashRegisterName}`,
+          description: `${register.activeSession.adminDisplayName?.trim() || register.activeSession.adminUsername} • ${formatTimestampLocale(register.activeSession.openingAt)}`,
+        });
+      }
+    }
+    const seen = new Set<number>();
+    return options.filter((option) => {
+      if (seen.has(option.value)) {
+        return false;
+      }
+      seen.add(option.value);
+      return true;
+    });
+  }, [cashState.activeSession, cashState.overview, isAdmin]);
+  const closingTarget = useMemo(() => {
+    const sessionId = closingForm.targetSessionId ?? cashState.activeSession?.id ?? null;
+    if (sessionId == null) {
+      return null;
+    }
+
+    if (cashState.activeSession && cashState.activeSession.id === sessionId) {
+      const operatorFromDirectory = currentAdminId
+        ? cashState.operators.find((operator) => operator.adminUserId === currentAdminId) ?? null
+        : null;
+      return {
+        sessionId,
+        cashRegisterCode: cashState.activeSession.cashRegister.cashRegisterCode,
+        cashRegisterName: cashState.activeSession.cashRegister.cashRegisterName,
+        warehouseCode: cashState.activeSession.cashRegister.warehouseCode,
+        warehouseName: cashState.activeSession.cashRegister.warehouseName,
+        operatorDisplayName:
+          operatorFromDirectory?.displayName?.trim() ||
+          operatorFromDirectory?.username ||
+          session?.name ||
+          (session?.sub ? `Usuario ${session.sub}` : ""),
+        operatorUsername: operatorFromDirectory?.username || session?.sub || "-",
+        openingAt: cashState.activeSession.openingAt,
+      };
+    }
+
+    const registerMatch = cashState.overview.find((register) => register.activeSession?.id === sessionId);
+    if (registerMatch?.activeSession) {
+      return {
+        sessionId,
+        cashRegisterCode: registerMatch.cashRegisterCode,
+        cashRegisterName: registerMatch.cashRegisterName,
+        warehouseCode: registerMatch.warehouseCode,
+        warehouseName: registerMatch.warehouseName,
+        operatorDisplayName:
+          registerMatch.activeSession.adminDisplayName?.trim() || registerMatch.activeSession.adminUsername,
+        operatorUsername: registerMatch.activeSession.adminUsername,
+        openingAt: registerMatch.activeSession.openingAt,
+      };
+    }
+
+    return null;
+  }, [cashState.activeSession, cashState.overview, cashState.operators, closingForm.targetSessionId, currentAdminId, session?.name, session?.sub]);
 
   const handleRefresh = useCallback(() => {
     void loadCashSession();
@@ -191,6 +385,11 @@ export default function CashManagementPage() {
     const rawCode = openingForm.cashRegisterCode.trim().toUpperCase();
     if (!rawCode) {
       toast({ variant: "warning", title: "Caja", description: "Selecciona una caja asignada" });
+      return;
+    }
+    const resolvedOperatorId = isAdmin ? openingForm.operatorAdminUserId : currentAdminId;
+    if (resolvedOperatorId == null || !Number.isFinite(resolvedOperatorId)) {
+      toast({ variant: "warning", title: "Caja", description: "Selecciona el cajero responsable" });
       return;
     }
     const normalizedAmount = openingForm.openingAmount.trim().replace(/,/g, ".");
@@ -210,6 +409,7 @@ export default function CashManagementPage() {
           cash_register_code: rawCode,
           opening_amount: amountValue,
           opening_notes: openingForm.openingNotes.trim() ? openingForm.openingNotes.trim() : null,
+          operator_admin_user_id: isAdmin ? resolvedOperatorId : undefined,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -220,7 +420,15 @@ export default function CashManagementPage() {
 
       toast({ variant: "success", title: "Caja", description: "Caja aperturada correctamente" });
       setOpeningModalOpen(false);
-      setOpeningForm({ cashRegisterCode: rawCode, openingAmount: "", openingNotes: "" });
+      setOpeningForm({
+        cashRegisterCode: rawCode,
+        openingAmount: "",
+        openingNotes: "",
+        operatorAdminUserId: resolvedOperatorId,
+      });
+      if (data?.report_url) {
+        window.open(String(data.report_url), "_blank", "noopener,noreferrer");
+      }
       await loadCashSession();
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo abrir la caja";
@@ -228,32 +436,15 @@ export default function CashManagementPage() {
     } finally {
       setOpeningSubmitting(false);
     }
-  }, [loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, toast]);
+  }, [currentAdminId, isAdmin, loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, openingForm.operatorAdminUserId, toast]);
 
-  const handleDownloadOpeningSummary = useCallback((snapshot: CashRegisterSessionSnapshot) => {
-    const payload = {
-      session_id: snapshot.id,
-      status: snapshot.status,
-      opening_at: snapshot.openingAt,
-      opening_amount: snapshot.openingAmount,
-      cash_register: {
-        code: snapshot.cashRegister.code,
-        name: snapshot.cashRegister.name,
-        warehouse_code: snapshot.cashRegister.warehouseCode,
-        warehouse_name: snapshot.cashRegister.warehouseName,
-      },
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `apertura-caja-${snapshot.id}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+  const handleOpenOpeningReport = useCallback((sessionId: number) => {
+    const url = `/api/cajas/aperturas/${sessionId}/reporte?format=html`;
+    window.open(url, "_blank", "noopener,noreferrer");
   }, []);
 
-  const handleDownloadClosureReport = useCallback((sessionId: number, format: "json" | "csv") => {
-    const url = `/api/cajas/cierres/${sessionId}/reporte?format=${format}`;
+  const handleOpenClosureReport = useCallback((sessionId: number) => {
+    const url = `/api/cajas/cierres/${sessionId}/reporte?format=html`;
     window.open(url, "_blank", "noopener,noreferrer");
   }, []);
 
@@ -314,6 +505,12 @@ export default function CashManagementPage() {
       return;
     }
 
+    const sessionId = closingForm.targetSessionId ?? cashState.activeSession?.id ?? null;
+    if (sessionId == null) {
+      toast({ variant: "warning", title: "Caja", description: "Selecciona una sesión abierta para cerrar" });
+      return;
+    }
+
     setClosingSubmitting(true);
     try {
       const response = await fetch("/api/cajas/cierres", {
@@ -321,7 +518,7 @@ export default function CashManagementPage() {
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          session_id: cashState.activeSession?.id,
+          session_id: sessionId,
           closing_amount: Number(amountValue.toFixed(2)),
           payments: normalizedPayments,
           closing_notes: closingForm.closingNotes.trim() ? closingForm.closingNotes.trim() : null,
@@ -335,7 +532,7 @@ export default function CashManagementPage() {
 
       toast({ variant: "success", title: "Caja", description: "Caja cerrada correctamente" });
       setClosingModalOpen(false);
-      setClosingForm({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments() });
+      setClosingForm({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments(), targetSessionId: null });
       await loadCashSession();
       if (data?.report_url) {
         window.open(String(data.report_url), "_blank", "noopener,noreferrer");
@@ -347,6 +544,36 @@ export default function CashManagementPage() {
       setClosingSubmitting(false);
     }
   }, [cashState.activeSession?.id, closingForm, loadCashSession, toast]);
+
+  const openOpeningModalWithContext = useCallback(
+    (registerCode?: string, operatorAdminUserId?: number | null) => {
+      setOpeningForm((prev) => ({
+        cashRegisterCode: registerCode ?? prev.cashRegisterCode ?? "",
+        openingAmount: "",
+        openingNotes: "",
+        operatorAdminUserId:
+          operatorAdminUserId ??
+          prev.operatorAdminUserId ??
+          currentAdminId ??
+          (isAdmin && cashState.operators.length > 0 ? cashState.operators[0].adminUserId : null),
+      }));
+      setOpeningModalOpen(true);
+    },
+    [cashState.operators, currentAdminId, isAdmin]
+  );
+
+  const openClosingModalWithContext = useCallback(
+    (sessionId?: number | null) => {
+      setClosingForm({
+        closingAmount: "",
+        closingNotes: "",
+        payments: createInitialClosingPayments(),
+        targetSessionId: sessionId ?? cashState.activeSession?.id ?? null,
+      });
+      setClosingModalOpen(true);
+    },
+    [cashState.activeSession?.id]
+  );
 
   const activeSession = cashState.activeSession;
   const hasAssignments = cashState.cashRegisters.length > 0;
@@ -432,10 +659,22 @@ export default function CashManagementPage() {
                       type="button"
                       size="sm"
                       className="rounded-2xl"
-                      onClick={() => setOpeningModalOpen(true)}
+                      onClick={() => openOpeningModalWithContext()}
                       disabled={cashState.loading || (!activeSession && !hasAssignments)}
                     >
                       {activeSession ? "Ver apertura" : "Abrir caja"}
+                    </Button>
+                  ) : null}
+                  {activeSession ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-2xl"
+                      onClick={() => handleOpenOpeningReport(activeSession.id)}
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Reporte apertura
                     </Button>
                   ) : null}
                   {canCloseCash ? (
@@ -444,7 +683,7 @@ export default function CashManagementPage() {
                       variant="outline"
                       size="sm"
                       className="rounded-2xl"
-                      onClick={() => setClosingModalOpen(true)}
+                      onClick={() => openClosingModalWithContext()}
                       disabled={!activeSession}
                     >
                       <Lock className="mr-2 h-4 w-4" />
@@ -501,9 +740,162 @@ export default function CashManagementPage() {
             </CardContent>
           </Card>
 
+          {isAdmin ? (
+            <Card className="rounded-3xl border bg-background/95 shadow-sm">
+              <CardHeader className="space-y-2">
+                <CardTitle className="text-lg font-semibold text-foreground">Panel administrador</CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  Visualiza todas las cajas y apoya a los cajeros con aperturas o cierres cuando sea necesario.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {cashState.loading && cashState.overview.length === 0 ? (
+                  <div className="flex items-center gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Consultando registros…
+                  </div>
+                ) : cashState.overview.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+                    No hay cajas registradas actualmente.
+                  </div>
+                ) : (
+                  cashState.overview.map((register) => {
+                    const hasActiveSession = Boolean(register.activeSession);
+                    const defaultAssignment =
+                      register.assignments.find((assignment) => assignment.isDefault) ?? register.assignments[0] ?? null;
+                    const statusClasses = register.isActive
+                      ? "text-emerald-600 bg-emerald-500/10 border-emerald-500/30"
+                      : "text-muted-foreground bg-muted border-muted-foreground/30";
+
+                    return (
+                      <div
+                        key={register.cashRegisterId}
+                        className="space-y-4 rounded-2xl border border-muted-foreground/20 bg-background/95 p-5"
+                      >
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div className="space-y-1">
+                            <p className="text-base font-semibold text-foreground">
+                              {register.cashRegisterCode} • {register.cashRegisterName}
+                            </p>
+                            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Store className="h-3.5 w-3.5" />
+                              {register.warehouseCode} • {register.warehouseName}
+                            </p>
+                          </div>
+                          <span
+                            className={`inline-flex h-7 items-center justify-center rounded-full border px-3 text-xs font-semibold ${statusClasses}`}
+                          >
+                            {register.isActive ? "Activa" : "Inactiva"}
+                          </span>
+                        </div>
+
+                        <div className="space-y-3 text-sm text-muted-foreground">
+                          <div>
+                            <p className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground/80">
+                              <Users2 className="h-3.5 w-3.5" /> Responsables asignados
+                            </p>
+                            {register.assignments.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {register.assignments.map((assignment) => (
+                                  <span
+                                    key={`${register.cashRegisterId}-${assignment.adminUserId}`}
+                                    className="rounded-full border border-muted-foreground/30 bg-muted/10 px-3 py-1 text-xs text-muted-foreground"
+                                  >
+                                    {assignment.displayName?.trim() || assignment.username}
+                                    {assignment.isDefault ? " • Predeterminada" : ""}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs">Sin operadores asignados.</p>
+                            )}
+                          </div>
+
+                          {hasActiveSession && register.activeSession ? (
+                            <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-xs text-emerald-700">
+                              <p className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
+                                <CircleDot className="h-4 w-4" /> Sesión abierta por {register.activeSession.adminDisplayName?.trim() || register.activeSession.adminUsername}
+                              </p>
+                              <p className="text-emerald-700/80">Apertura: {formatTimestampLocale(register.activeSession.openingAt)}</p>
+                            </div>
+                          ) : (
+                            <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-xs text-muted-foreground">
+                              No hay sesiones activas en este momento.
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRefresh()}
+                          >
+                            <History className="mr-2 h-4 w-4" />
+                            Actualizar
+                          </Button>
+                          {hasActiveSession && register.activeSession ? (
+                            <>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleOpenOpeningReport(register.activeSession!.id)}
+                              >
+                                <Download className="mr-2 h-4 w-4" />
+                                Reporte apertura
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => openClosingModalWithContext(register.activeSession?.id)}
+                              >
+                                <Lock className="mr-2 h-4 w-4" />
+                                Cerrar sesión
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={!register.isActive}
+                              onClick={() =>
+                                openOpeningModalWithContext(
+                                  register.cashRegisterCode,
+                                  defaultAssignment?.adminUserId ?? currentAdminId ?? null
+                                )
+                              }
+                            >
+                              Abrir caja
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </CardContent>
+            </Card>
+          ) : null}
+
           <Card className="rounded-3xl border bg-background/95 shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-lg font-semibold text-foreground">Historial reciente</CardTitle>
+            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="space-y-1">
+                <CardTitle className="text-lg font-semibold text-foreground">Historial reciente</CardTitle>
+                <p className="text-xs text-muted-foreground">Mostramos hasta 20 movimientos recientes.</p>
+              </div>
+              {historyFilterOptions.length > 1 ? (
+                <Combobox<string>
+                  value={historyFilter}
+                  onChange={(value) => setHistoryFilter(value)}
+                  options={historyFilterOptions}
+                  placeholder="Filtrar por caja"
+                  ariaLabel="Filtrar historial por caja"
+                  className="w-full sm:w-64"
+                />
+              ) : null}
             </CardHeader>
             <CardContent className="space-y-4">
               {cashState.loading ? (
@@ -515,8 +907,12 @@ export default function CashManagementPage() {
                 <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
                   No se encontraron aperturas o cierres recientes.
                 </div>
+              ) : filteredRecentSessions.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+                  No hay movimientos para la caja seleccionada.
+                </div>
               ) : (
-                cashState.recentSessions.map((snapshot) => {
+                filteredRecentSessions.map((snapshot) => {
                   const isClosed = snapshot.status === "CLOSED";
                   const statusLabel = snapshot.status === "CLOSED" ? "Cerrada" : snapshot.status === "OPEN" ? "Abierta" : "Cancelada";
                   const statusTone = snapshot.status === "CLOSED" ? "text-emerald-600" : snapshot.status === "OPEN" ? "text-amber-600" : "text-destructive";
@@ -548,29 +944,19 @@ export default function CashManagementPage() {
                         </div>
                       </dl>
                       <div className="flex flex-wrap justify-end gap-2">
-                        <Button type="button" variant="outline" size="sm" onClick={() => handleDownloadOpeningSummary(snapshot)}>
+                        <Button type="button" variant="outline" size="sm" onClick={() => handleOpenOpeningReport(snapshot.id)}>
                           <Download className="mr-2 h-4 w-4" />
-                          Resumen apertura (JSON)
+                          Reporte apertura (HTML)
                         </Button>
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
                           disabled={!isClosed}
-                          onClick={() => handleDownloadClosureReport(snapshot.id, "json")}
+                          onClick={() => handleOpenClosureReport(snapshot.id)}
                         >
                           <Download className="mr-2 h-4 w-4" />
-                          Reporte de cierre (JSON)
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={!isClosed}
-                          onClick={() => handleDownloadClosureReport(snapshot.id, "csv")}
-                        >
-                          <Download className="mr-2 h-4 w-4" />
-                          Reporte de cierre (CSV)
+                          Reporte cierre (HTML)
                         </Button>
                       </div>
                     </div>
@@ -627,7 +1013,11 @@ export default function CashManagementPage() {
                 </div>
               </dl>
             </div>
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => handleOpenOpeningReport(activeSession.id)}>
+                <Download className="mr-2 h-4 w-4" />
+                Imprimir reporte
+              </Button>
               <Button type="button" variant="outline" onClick={() => setOpeningModalOpen(false)}>
                 Cerrar
               </Button>
@@ -635,6 +1025,33 @@ export default function CashManagementPage() {
           </div>
         ) : hasAssignments ? (
           <div className="space-y-6">
+            {isAdmin ? (
+              operatorOptions.length > 0 ? (
+                <Combobox<number>
+                  value={openingForm.operatorAdminUserId ?? null}
+                  onChange={(value) =>
+                    setOpeningForm((prev) => ({
+                      ...prev,
+                      operatorAdminUserId: value,
+                    }))
+                  }
+                  options={operatorOptions}
+                  placeholder="Selecciona un cajero"
+                  label="Cajero responsable"
+                  ariaLabel="Seleccionar cajero"
+                />
+              ) : (
+                <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-xs text-muted-foreground">
+                  No se encontraron usuarios administradores activos. Asigna operadores desde el módulo de usuarios.
+                </div>
+              )
+            ) : null}
+            {isAdmin && selectedOperator ? (
+              <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 text-xs text-muted-foreground">
+                Operará: {selectedOperator.displayName?.trim() || selectedOperator.username}
+                {selectedOperator.roles.length > 0 ? ` • ${selectedOperator.roles.join(", ")}` : ""}
+              </div>
+            ) : null}
             <Combobox<string>
               value={openingForm.cashRegisterCode}
               onChange={(value) =>
@@ -711,8 +1128,39 @@ export default function CashManagementPage() {
         description="Registra el monto final y los detalles del cierre."
         contentClassName="max-w-3xl"
       >
-        {activeSession ? (
+        {closingTarget ? (
           <div className="space-y-6">
+            <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-4 text-sm text-muted-foreground">
+              <p className="text-sm font-semibold text-foreground">Caja seleccionada</p>
+              <p className="text-base font-semibold text-foreground">
+                {closingTarget.cashRegisterCode} • {closingTarget.cashRegisterName}
+              </p>
+              <p className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <Store className="h-3.5 w-3.5" />
+                {closingTarget.warehouseCode} • {closingTarget.warehouseName}
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Responsable: {closingTarget.operatorDisplayName} ({closingTarget.operatorUsername})
+              </p>
+              <p className="text-xs text-muted-foreground">Apertura: {formatTimestampLocale(closingTarget.openingAt)}</p>
+            </div>
+
+            {isAdmin && closableSessions.length > 1 ? (
+              <Combobox<number>
+                value={closingTarget.sessionId}
+                onChange={(value) =>
+                  setClosingForm((prev) => ({
+                    ...prev,
+                    targetSessionId: value,
+                  }))
+                }
+                options={closableSessions}
+                placeholder="Selecciona la sesión a cerrar"
+                label="Sesión abierta"
+                ariaLabel="Seleccionar sesión abierta"
+              />
+            ) : null}
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1">
                 <Label className="text-xs uppercase text-muted-foreground">Monto de cierre</Label>
@@ -800,7 +1248,7 @@ export default function CashManagementPage() {
           </div>
         ) : (
           <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
-            Necesitas tener una caja abierta para registrar el cierre.
+            Selecciona una sesión activa desde el panel o abre una caja para registrar el cierre.
           </div>
         )}
       </Modal>

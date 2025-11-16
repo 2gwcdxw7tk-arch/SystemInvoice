@@ -10,6 +10,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { siteConfig } from "@/config/site";
 import { cn } from "@/lib/utils";
+import type { SessionPayload } from "@/lib/auth/session";
+import { useSessionActions } from "@/components/providers/session-provider";
 
 type LoginMode = "admin" | "waiter";
 
@@ -17,6 +19,7 @@ export default function Home() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [mode, setMode] = useState<LoginMode>("admin");
+  const { setSession } = useSessionActions();
   const redirectTarget = useMemo<Route | null>(() => {
     const value = searchParams?.get("redirect");
     if (!value) return null;
@@ -98,6 +101,40 @@ export default function Home() {
           return;
         }
 
+        if (mode === "admin" && data.user) {
+          const defaultCashRegister = data.user.defaultCashRegister
+            ? {
+                id: data.user.defaultCashRegister.cashRegisterId,
+                code: data.user.defaultCashRegister.cashRegisterCode,
+                name: data.user.defaultCashRegister.cashRegisterName,
+                warehouseCode: data.user.defaultCashRegister.warehouseCode,
+                warehouseName: data.user.defaultCashRegister.warehouseName,
+              }
+            : null;
+
+          const sessionPayload: SessionPayload = {
+            sub: String(data.user.id ?? data.user.username ?? ""),
+            role: "admin",
+            name: data.user.displayName ?? data.user.username ?? null,
+            roles: Array.isArray(data.user.roles) ? data.user.roles : [],
+            permissions: Array.isArray(data.user.permissions) ? data.user.permissions : [],
+            defaultCashRegister,
+          };
+
+          setSession(sessionPayload);
+        }
+
+        if (mode === "waiter" && data.waiter) {
+          const sessionPayload: SessionPayload = {
+            sub: String(data.waiter.id ?? data.waiter.code ?? ""),
+            role: "waiter",
+            name: data.waiter.fullName ?? data.waiter.code ?? null,
+            roles: ["WAITER"],
+            permissions: [],
+          };
+          setSession(sessionPayload);
+        }
+
         setMessage({ type: "success", text: data.message ?? "Acceso concedido" });
         form.reset();
         setWaiterPin("");
@@ -116,7 +153,8 @@ export default function Home() {
               : defaultWaiterRoute
             : redirectTarget ?? defaultAdminRoute;
 
-        router.push(destination);
+        router.replace(destination);
+        router.refresh();
       } catch (error) {
         console.error("Error al autenticar", error);
         setMessage({ type: "error", text: "No se pudo contactar el servidor" });

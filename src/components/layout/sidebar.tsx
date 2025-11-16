@@ -7,53 +7,119 @@ import { ChevronLeft, ChevronRight, LayoutDashboard, ListChecks, PackageSearch, 
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { SessionPayload } from "@/lib/auth/session";
-import { isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
+import { hasSessionPermission, isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
+import { useSession } from "@/components/providers/session-provider";
 
 export type NavItem = {
   label: string;
   href: { pathname: string; hash?: string };
   icon: LucideIcon;
   description: string;
+  permissionCode?: string;
 };
 
 type SidebarNavItem = NavItem & { disabled?: boolean };
 
 export const NAV_ITEMS: NavItem[] = [
-  { label: "Dashboard", href: { pathname: "/dashboard" }, icon: LayoutDashboard, description: "Resumen operativo y KPIs" },
-  { label: "Facturación", href: { pathname: "/facturacion" }, icon: Receipt, description: "Procesar ventas y revisar historial" },
-  { label: "Caja", href: { pathname: "/caja" }, icon: Wallet, description: "Aperturas, cierres y reportes" },
-  { label: "Artículos", href: { pathname: "/articulos" }, icon: PackageSearch, description: "Catálogo y precios" },
-  { label: "Inventario", href: { pathname: "/inventario" }, icon: ListChecks, description: "Stock, kardex y compras" },
-  { label: "Mesas", href: { pathname: "/mesas" }, icon: Table, description: "Mantenimiento de mesas y zonas" },
-  { label: "Meseros", href: { pathname: "/meseros" }, icon: Users, description: "Staff y permisos" },
-  { label: "Usuarios", href: { pathname: "/usuarios" }, icon: ShieldCheck, description: "Cuentas administrativas y roles" },
-  { label: "Roles", href: { pathname: "/roles" }, icon: Shield, description: "Roles del sistema y permisos" },
-  { label: "Reportes", href: { pathname: "/reportes" }, icon: BarChart3, description: "KPIs y descargas" },
-  { label: "Preferencias", href: { pathname: "/preferencias" }, icon: Settings, description: "Ajustes y catálogos auxiliares" },
+  {
+    label: "Dashboard",
+    href: { pathname: "/dashboard" },
+    icon: LayoutDashboard,
+    description: "Resumen operativo y KPIs",
+    permissionCode: "menu.dashboard.view",
+  },
+  {
+    label: "Facturación",
+    href: { pathname: "/facturacion" },
+    icon: Receipt,
+    description: "Procesar ventas y revisar historial",
+    permissionCode: "menu.facturacion.view",
+  },
+  {
+    label: "Caja",
+    href: { pathname: "/caja" },
+    icon: Wallet,
+    description: "Aperturas, cierres y reportes",
+    permissionCode: "menu.caja.view",
+  },
+  {
+    label: "Artículos",
+    href: { pathname: "/articulos" },
+    icon: PackageSearch,
+    description: "Catálogo y precios",
+    permissionCode: "menu.articulos.view",
+  },
+  {
+    label: "Inventario",
+    href: { pathname: "/inventario" },
+    icon: ListChecks,
+    description: "Stock, kardex y compras",
+    permissionCode: "menu.inventario.view",
+  },
+  {
+    label: "Mesas",
+    href: { pathname: "/mesas" },
+    icon: Table,
+    description: "Mantenimiento de mesas y zonas",
+    permissionCode: "menu.mesas.view",
+  },
+  {
+    label: "Meseros",
+    href: { pathname: "/meseros" },
+    icon: Users,
+    description: "Staff y permisos",
+    permissionCode: "menu.meseros.view",
+  },
+  {
+    label: "Usuarios",
+    href: { pathname: "/usuarios" },
+    icon: ShieldCheck,
+    description: "Cuentas administrativas y roles",
+    permissionCode: "menu.usuarios.view",
+  },
+  {
+    label: "Roles",
+    href: { pathname: "/roles" },
+    icon: Shield,
+    description: "Roles del sistema y permisos",
+    permissionCode: "menu.roles.view",
+  },
+  {
+    label: "Reportes",
+    href: { pathname: "/reportes" },
+    icon: BarChart3,
+    description: "KPIs y descargas",
+    permissionCode: "menu.reportes.view",
+  },
+  {
+    label: "Preferencias",
+    href: { pathname: "/preferencias" },
+    icon: Settings,
+    description: "Ajustes y catálogos auxiliares",
+    permissionCode: "menu.preferencias.view",
+  },
 ];
 
 interface SidebarProps {
   collapsed?: boolean;
   onToggleCollapse?: () => void;
   variant?: "desktop" | "mobile";
-  session: SessionPayload | null;
 }
 
-export function Sidebar({ collapsed = false, onToggleCollapse, variant = "desktop", session }: SidebarProps) {
+export function Sidebar({ collapsed = false, onToggleCollapse, variant = "desktop" }: SidebarProps) {
   const pathname = usePathname();
   const [currentHash, setCurrentHash] = useState<string>("#resumen");
+  const session = useSession();
 
   const sessionIsAdministrator = isSessionAdministrator(session);
   const sessionIsFacturadorOnly = isSessionFacturadorOnly(session);
 
-  const allowedPathsForFacturador = new Set(["/dashboard", "/facturacion", "/facturas", "/caja", "/reportes"]);
-
   const navItems: SidebarNavItem[] = NAV_ITEMS.map((item) => {
-    const isAllowed = sessionIsAdministrator || allowedPathsForFacturador.has(item.href.pathname);
+    const requiredPermission = item.permissionCode;
+    const hasAccess = sessionIsAdministrator || !requiredPermission || hasSessionPermission(session, requiredPermission);
     return {
       ...item,
-      disabled: sessionIsFacturadorOnly && !isAllowed,
+      disabled: !hasAccess && (sessionIsFacturadorOnly || !sessionIsAdministrator),
     };
   });
 

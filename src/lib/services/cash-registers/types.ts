@@ -94,6 +94,8 @@ export interface OpenCashRegisterSessionInput {
   cashRegisterCode: string;
   openingAmount: number;
   openingNotes?: string | null;
+  actingAdminUserId?: number;
+  allowUnassigned?: boolean;
 }
 
 export interface CloseCashRegisterSessionInput {
@@ -102,6 +104,7 @@ export interface CloseCashRegisterSessionInput {
   closingAmount: number;
   payments: Array<{ method: string; reportedAmount: number; transactionCount?: number }>;
   closingNotes?: string | null;
+  allowDifferentUser?: boolean;
 }
 
 export type ExpectedPayment = {

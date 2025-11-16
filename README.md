@@ -171,8 +171,9 @@ Los usuarios con rol `FACTURADOR` deben abrir una caja antes de emitir facturas.
 
 - `GET /api/cajas/sesion-activa`: devuelve la caja asignada, la apertura en curso (si existe) y el listado de cajas autorizadas para el usuario actual. El endpoint se usa en la UI para mostrar el banner de sesión o desplegar el modal de apertura.
 - `POST /api/cajas/aperturas`: abre una jornada de caja. Requiere `cash_register_code`, `opening_amount` y notas opcionales. Valida que no existan otras sesiones `OPEN` para el usuario ni para la caja objetivo.
+- `GET /api/cajas/aperturas/{sessionId}/reporte?format=html[&token=JWT]`: construye un reporte de apertura imprimible con los datos de la sesión, responsable y notas capturadas. Disponible para el titular de la caja, supervisores (`cash.report.view`) y administradores. El token opcional se envía al abrir la caja desde la UI para ver el HTML sin reenviar credenciales.
 - `POST /api/cajas/cierres`: cierra la sesión activa capturando conteo físico por método de pago. Calcula diferencias contra los montos de sistema, persiste el resumen en `app.cash_register_sessions` y normaliza el desglose en `app.cash_register_session_payments`.
-- `GET /api/cajas/cierres/{sessionId}/reporte?format=csv|json`: genera un reporte descargable con las ventas, formas de pago, diferencias y detalle de facturas asociadas a la jornada.
+- `GET /api/cajas/cierres/{sessionId}/reporte?format=html[&token=JWT]`: genera un reporte imprimible con las ventas, formas de pago, diferencias y detalle de facturas asociadas a la jornada, incluyendo los nombres de apertura y cierre. Cuando se cierra la caja desde la UI se anexa un token temporal para abrir la pestaña de impresión sin depender de la cookie de sesión.
 
 Todos los endpoints respetan `MOCK_DATA`: en modo demo se utiliza almacenamiento en memoria y los cálculos se realizan en estructuras locales.
 

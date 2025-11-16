@@ -25,6 +25,18 @@ $$;
 
 CREATE SCHEMA IF NOT EXISTS app;
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_language
+    WHERE lanname = 'plpgsql'
+  ) THEN
+    RAISE EXCEPTION 'El lenguaje PL/pgSQL no está habilitado en esta base de datos. Ejecute "CREATE EXTENSION plpgsql;" con un usuario con privilegios suficientes y vuelva a correr este script.';
+  END IF;
+END;
+$$;
+
 -- ========================================================
 -- Funcion utilitaria: actualiza la columna updated_at antes de cada UPDATE
 -- ========================================================
@@ -465,15 +477,116 @@ CREATE TRIGGER trg_roles_touch_updated_at
 BEFORE UPDATE ON app.roles
 FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 
+-- ========================================================
+-- Tabla: app.permissions
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.permissions (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code VARCHAR(80) NOT NULL UNIQUE,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(250),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_permissions_touch_updated_at ON app.permissions;
+CREATE TRIGGER trg_permissions_touch_updated_at
+BEFORE UPDATE ON app.permissions
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
 CREATE TABLE IF NOT EXISTS app.role_permissions (
   role_id INTEGER NOT NULL REFERENCES app.roles(id) ON DELETE CASCADE,
-  permission_code VARCHAR(80) NOT NULL,
+  permission_id INTEGER NOT NULL REFERENCES app.permissions(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (role_id, permission_code)
+  UNIQUE (role_id, permission_id)
 );
 
 CREATE INDEX IF NOT EXISTS ix_role_permissions_permission
-  ON app.role_permissions (permission_code);
+  ON app.role_permissions (permission_id);
+
+DO $$
+DECLARE
+  has_permission_code BOOLEAN;
+  fk_exists BOOLEAN;
+  uq_exists BOOLEAN;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'app'
+      AND table_name = 'role_permissions'
+      AND column_name = 'permission_code'
+  ) INTO has_permission_code;
+
+  IF has_permission_code THEN
+    ALTER TABLE app.role_permissions
+      ADD COLUMN IF NOT EXISTS permission_id INTEGER;
+
+    INSERT INTO app.permissions (code, name, description)
+    SELECT DISTINCT rp.permission_code, rp.permission_code, 'Migrado automáticamente'
+    FROM app.role_permissions rp
+    LEFT JOIN app.permissions p ON p.code = rp.permission_code
+    WHERE p.id IS NULL
+      AND rp.permission_code IS NOT NULL;
+
+    UPDATE app.role_permissions rp
+    SET permission_id = p.id
+    FROM app.permissions p
+    WHERE rp.permission_code = p.code
+      AND rp.permission_id IS NULL;
+
+    ALTER TABLE app.role_permissions
+      DROP COLUMN IF EXISTS permission_code;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM app.role_permissions WHERE permission_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'No se pudo asignar permission_id a todos los registros de app.role_permissions. Verifica el catálogo de permisos.';
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.table_constraints tc
+    WHERE tc.table_schema = 'app'
+      AND tc.table_name = 'role_permissions'
+      AND tc.constraint_type = 'FOREIGN KEY'
+      AND tc.constraint_name = 'role_permissions_permission_id_fkey'
+  ) INTO fk_exists;
+
+  IF NOT fk_exists THEN
+    ALTER TABLE app.role_permissions
+      ADD CONSTRAINT role_permissions_permission_id_fkey
+      FOREIGN KEY (permission_id) REFERENCES app.permissions(id) ON DELETE CASCADE;
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.table_constraints tc
+    WHERE tc.table_schema = 'app'
+      AND tc.table_name = 'role_permissions'
+      AND tc.constraint_type = 'UNIQUE'
+      AND tc.constraint_name = 'role_permissions_role_id_permission_id_key'
+  ) INTO uq_exists;
+
+  IF NOT uq_exists THEN
+    PERFORM 1
+    FROM pg_indexes
+    WHERE schemaname = 'app'
+      AND tablename = 'role_permissions'
+      AND indexname = 'role_permissions_role_id_permission_id_key';
+
+    IF FOUND THEN
+      EXECUTE 'ALTER TABLE app.role_permissions ADD CONSTRAINT role_permissions_role_id_permission_id_key UNIQUE USING INDEX role_permissions_role_id_permission_id_key';
+    ELSE
+      EXECUTE 'ALTER TABLE app.role_permissions ADD CONSTRAINT role_permissions_role_id_permission_id_key UNIQUE (role_id, permission_id)';
+    END IF;
+  END IF;
+
+  ALTER TABLE app.role_permissions
+    ALTER COLUMN permission_id SET NOT NULL;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS app.admin_user_roles (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -487,6 +600,29 @@ CREATE TABLE IF NOT EXISTS app.admin_user_roles (
 CREATE INDEX IF NOT EXISTS ix_admin_user_roles_admin
   ON app.admin_user_roles (admin_user_id, is_primary DESC);
 
+INSERT INTO app.permissions (code, name, description)
+VALUES
+  ('cash.register.open',      'Apertura de caja',            'Permite abrir sesiones de caja'),
+  ('cash.register.close',     'Cierre de caja',              'Autoriza cerrar sesiones de caja'),
+  ('invoice.issue',           'Emisión de facturas',         'Permite crear y cancelar facturas'),
+  ('cash.report.view',        'Reportes de caja',            'Acceso a reportes y arqueos de caja'),
+  ('admin.users.manage',      'Gestión de usuarios',         'Permite administrar usuarios y roles'),
+  ('menu.dashboard.view',     'Acceso a Dashboard',          'Permite acceder al panel principal y KPIs'),
+  ('menu.facturacion.view',   'Acceso a Facturación',        'Permite abrir la pantalla de facturación'),
+  ('menu.caja.view',          'Acceso a Caja',               'Permite acceder al módulo de caja'),
+  ('menu.articulos.view',     'Acceso a Artículos',          'Permite acceder al catálogo de artículos'),
+  ('menu.inventario.view',    'Acceso a Inventario',         'Permite acceder al módulo de inventario'),
+  ('menu.mesas.view',         'Acceso a Mesas',              'Permite acceder al mantenimiento de mesas'),
+  ('menu.meseros.view',       'Acceso a Meseros',            'Permite administrar meseros'),
+  ('menu.usuarios.view',      'Acceso a Usuarios',           'Permite administrar usuarios administrativos'),
+  ('menu.roles.view',         'Acceso a Roles',              'Permite administrar roles y permisos'),
+  ('menu.reportes.view',      'Acceso a Reportes',           'Permite acceder a reportes y descargas'),
+  ('menu.preferencias.view',  'Acceso a Preferencias',       'Permite acceder a preferencias y configuraciones')
+ON CONFLICT (code) DO UPDATE
+SET name = EXCLUDED.name,
+    description = EXCLUDED.description,
+    updated_at = CURRENT_TIMESTAMP;
+
 INSERT INTO app.roles (code, name, description, is_active)
 SELECT 'FACTURADOR', 'Facturador POS', 'Puede aperturar y cerrar caja además de emitir facturas en punto de venta', TRUE
 WHERE NOT EXISTS (SELECT 1 FROM app.roles WHERE code = 'FACTURADOR');
@@ -494,20 +630,20 @@ WHERE NOT EXISTS (SELECT 1 FROM app.roles WHERE code = 'FACTURADOR');
 WITH role_target AS (
   SELECT id FROM app.roles WHERE code = 'FACTURADOR' LIMIT 1
 )
-INSERT INTO app.role_permissions (role_id, permission_code)
-SELECT rt.id, perms.permission_code
+INSERT INTO app.role_permissions (role_id, permission_id)
+SELECT rt.id, p.id
 FROM role_target rt
-JOIN (VALUES
-  ('cash.register.open'),
-  ('cash.register.close'),
-  ('invoice.issue'),
-  ('cash.report.view')
-) AS perms(permission_code) ON TRUE
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM app.role_permissions rp
-  WHERE rp.role_id = rt.id AND rp.permission_code = perms.permission_code
-);
+JOIN app.permissions p ON p.code IN (
+  'cash.register.open',
+  'cash.register.close',
+  'invoice.issue',
+  'cash.report.view',
+  'menu.dashboard.view',
+  'menu.facturacion.view',
+  'menu.caja.view',
+  'menu.reportes.view'
+)
+ON CONFLICT (role_id, permission_id) DO NOTHING;
 
 INSERT INTO app.roles (code, name, description, is_active)
 SELECT 'ADMINISTRADOR', 'Administrador General', 'Acceso completo al mantenimiento y operaciones', TRUE
@@ -516,21 +652,51 @@ WHERE NOT EXISTS (SELECT 1 FROM app.roles WHERE code = 'ADMINISTRADOR');
 WITH admin_role AS (
   SELECT id FROM app.roles WHERE code = 'ADMINISTRADOR' LIMIT 1
 )
-INSERT INTO app.role_permissions (role_id, permission_code)
-SELECT ar.id, perms.permission_code
+INSERT INTO app.role_permissions (role_id, permission_id)
+SELECT ar.id, p.id
 FROM admin_role ar
-JOIN (VALUES
-  ('cash.register.open'),
-  ('cash.register.close'),
-  ('invoice.issue'),
-  ('cash.report.view'),
-  ('admin.users.manage')
-) AS perms(permission_code) ON TRUE
+JOIN app.permissions p ON p.code IN (
+  'cash.register.open',
+  'cash.register.close',
+  'invoice.issue',
+  'cash.report.view',
+  'admin.users.manage',
+  'menu.dashboard.view',
+  'menu.facturacion.view',
+  'menu.caja.view',
+  'menu.articulos.view',
+  'menu.inventario.view',
+  'menu.mesas.view',
+  'menu.meseros.view',
+  'menu.usuarios.view',
+  'menu.roles.view',
+  'menu.reportes.view',
+  'menu.preferencias.view'
+)
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+-- ========================================================
+-- Usuario administrador por defecto con clave temporal
+-- ========================================================
+-- La contraseña temporal es 'AdminTemporal2024!' y debe cambiarse al primer inicio de sesión.
+INSERT INTO app.admin_users (username, password_hash, display_name, is_active)
+SELECT 'admin', '$2a$10$38Vo//01YxVjdndfF/MfA.Nb5mKzGRV4F.ol5LI6dmriIRGH6QQti', 'Administrador Principal', TRUE
 WHERE NOT EXISTS (
-  SELECT 1
-  FROM app.role_permissions rp
-  WHERE rp.role_id = ar.id AND rp.permission_code = perms.permission_code
+  SELECT 1 FROM app.admin_users WHERE username = 'admin'
 );
+
+WITH admin_user AS (
+  SELECT id FROM app.admin_users WHERE username = 'admin' LIMIT 1
+),
+admin_role AS (
+  SELECT id FROM app.roles WHERE code = 'ADMINISTRADOR' LIMIT 1
+)
+INSERT INTO app.admin_user_roles (admin_user_id, role_id, is_primary)
+SELECT au.id, ar.id, TRUE
+FROM admin_user au
+CROSS JOIN admin_role ar
+ON CONFLICT (admin_user_id, role_id) DO UPDATE
+SET is_primary = EXCLUDED.is_primary;
 
 -- ========================================================
 -- Tabla: app.article_classifications

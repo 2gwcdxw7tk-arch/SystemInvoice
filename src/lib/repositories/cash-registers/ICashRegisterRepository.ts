@@ -31,6 +31,8 @@ export interface ICashRegisterRepository {
     cashRegisterCode: string;
     openingAmount: number;
     openingNotes: string | null;
+    allowUnassigned?: boolean;
+    actingAdminUserId?: number;
   }): Promise<CashRegisterSessionRecord>;
   closeCashRegisterSession(params: {
     adminUserId: number;
@@ -38,7 +40,9 @@ export interface ICashRegisterRepository {
     closingAmount: number;
     payments: ReportedPayment[];
     closingNotes: string | null;
+    allowDifferentUser?: boolean;
   }): Promise<CashRegisterClosureSummary>;
+  listActiveCashRegisterSessions(): Promise<CashRegisterSessionRecord[]>;
   getCashRegisterClosureReport(sessionId: number): Promise<{
     session: CashRegisterSessionRecord;
     payments: ExpectedPayment[];

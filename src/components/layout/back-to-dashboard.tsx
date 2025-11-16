@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { SessionPayload } from "@/lib/auth/session";
 import { isSessionFacturadorOnly } from "@/lib/auth/session-roles";
+import { useSession } from "@/components/providers/session-provider";
 
 /**
  * Componente: BackToDashboard
@@ -16,9 +16,10 @@ import { isSessionFacturadorOnly } from "@/lib/auth/session-roles";
  * - Compatible con tema claro/oscuro y contraste adecuado.
  * - Accesible por teclado (rol botón + aria-label descriptivo).
  */
-export function BackToDashboard({ className, session }: { className?: string; session: SessionPayload | null }) {
+export function BackToDashboard({ className }: { className?: string }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const session = useSession();
   if (!pathname) return null;
 
   if (isSessionFacturadorOnly(session)) return null;

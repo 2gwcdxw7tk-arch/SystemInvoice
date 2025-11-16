@@ -640,11 +640,13 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     cashRegisterCode: string;
     openingAmount: number;
     openingNotes: string | null;
+    allowUnassigned?: boolean;
+    actingAdminUserId?: number;
   }): Promise<CashRegisterSessionRecord> {
-    const { adminUserId, cashRegisterCode, openingAmount, openingNotes } = params;
+    const { adminUserId, cashRegisterCode, openingAmount, openingNotes, allowUnassigned = false } = params;
 
     return withTransaction(async (client) => {
-      const registerResult = await client.query<{
+      type RegisterRow = {
         cash_register_id: number;
         cash_register_code: string;
         cash_register_name: string;
@@ -653,25 +655,59 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         warehouse_code: string;
         warehouse_name: string;
         is_default: boolean;
-      }>(
-        `SELECT
-           cru.cash_register_id,
-           cr.code AS cash_register_code,
-           cr.name AS cash_register_name,
-           cr.allow_manual_warehouse_override,
-           cr.warehouse_id,
-           w.code AS warehouse_code,
-           w.name AS warehouse_name,
-           cru.is_default
-         FROM app.cash_register_users cru
-         INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
-         INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
-         WHERE cru.admin_user_id = $1 AND UPPER(cr.code) = $2
-         LIMIT 1`,
-        [adminUserId, normalizeCode(cashRegisterCode)]
-      );
+      };
 
-      const registerRow = registerResult.rows[0];
+      const normalizedCode = normalizeCode(cashRegisterCode);
+      let registerRow: RegisterRow | undefined;
+
+      if (allowUnassigned) {
+        const registerResult = await client.query<{
+          cash_register_id: number;
+          cash_register_code: string;
+          cash_register_name: string;
+          allow_manual_warehouse_override: boolean;
+          warehouse_id: number;
+          warehouse_code: string;
+          warehouse_name: string;
+          is_default: boolean;
+        }>(
+          `SELECT
+             cr.id AS cash_register_id,
+             cr.code AS cash_register_code,
+             cr.name AS cash_register_name,
+             cr.allow_manual_warehouse_override,
+             cr.warehouse_id,
+             w.code AS warehouse_code,
+             w.name AS warehouse_name,
+             FALSE AS is_default
+           FROM app.cash_registers cr
+           INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
+           WHERE cr.is_active = TRUE AND UPPER(cr.code) = $1
+           LIMIT 1`,
+          [normalizedCode]
+        );
+        registerRow = registerResult.rows[0];
+      } else {
+        const registerResult = await client.query<RegisterRow>(
+          `SELECT
+             cru.cash_register_id,
+             cr.code AS cash_register_code,
+             cr.name AS cash_register_name,
+             cr.allow_manual_warehouse_override,
+             cr.warehouse_id,
+             w.code AS warehouse_code,
+             w.name AS warehouse_name,
+             cru.is_default
+           FROM app.cash_register_users cru
+           INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
+           INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
+           WHERE cru.admin_user_id = $1 AND UPPER(cr.code) = $2
+           LIMIT 1`,
+          [adminUserId, normalizedCode]
+        );
+        registerRow = registerResult.rows[0];
+      }
+
       if (!registerRow) {
         throw new Error(`No tienes permisos para operar la caja ${cashRegisterCode}`);
       }
@@ -734,8 +770,9 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     closingAmount: number;
     payments: ReportedPayment[];
     closingNotes: string | null;
+    allowDifferentUser?: boolean;
   }): Promise<CashRegisterClosureSummary> {
-    const { adminUserId, sessionId, closingAmount, payments, closingNotes } = params;
+    const { adminUserId, sessionId, closingAmount, payments, closingNotes, allowDifferentUser = false } = params;
 
     return withTransaction(async (client) => {
       const sessionQuery = await client.query<SessionDbRow>(
@@ -777,7 +814,8 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       if (row.status !== "OPEN") {
         throw new Error("La sesión indicada ya fue cerrada");
       }
-      if (Number(row.admin_user_id) !== adminUserId) {
+      const sessionOwnerId = Number(row.admin_user_id);
+      if (sessionOwnerId !== adminUserId && !allowDifferentUser) {
         throw new Error("Solo el usuario que abrió la caja puede cerrarla");
       }
 
@@ -919,5 +957,38 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     const totalInvoices = invoiceCountResult.rows[0]?.total_invoices ?? 0;
 
     return { session, payments, totalInvoices };
+  }
+
+  async listActiveCashRegisterSessions(): Promise<CashRegisterSessionRecord[]> {
+    const result = await query<SessionDbRow>(
+      `SELECT
+         s.id,
+         s.status,
+         s.admin_user_id,
+         s.opening_amount,
+         s.opening_at,
+         s.opening_notes,
+         s.closing_amount,
+         s.closing_at,
+         s.closing_notes,
+         s.closing_user_id,
+         s.totals_snapshot,
+         cr.id AS cash_register_id,
+         cr.code AS cash_register_code,
+         cr.name AS cash_register_name,
+         cr.allow_manual_warehouse_override,
+         w.id AS warehouse_id,
+         w.code AS warehouse_code,
+         w.name AS warehouse_name,
+         cru.is_default
+       FROM app.cash_register_sessions s
+       INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
+       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
+       LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
+       WHERE s.status = 'OPEN'
+       ORDER BY s.opening_at ASC`
+    );
+
+    return result.rows.map((row) => mapSessionRow(row));
   }
 }

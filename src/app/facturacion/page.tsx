@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/config/currency";
 import { SERVICE_RATE, VAT_RATE } from "@/config/taxes";
-import { Printer, Plus, Minus, Loader2, Ban, ArrowLeft, ArrowRight, Receipt, UtensilsCrossed, Tags, AlertCircle, History } from "lucide-react";
+import { Printer, Plus, Minus, Loader2, Ban, ArrowLeft, ArrowRight, Receipt, UtensilsCrossed, Tags, History } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { hasSessionPermission, isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
@@ -1736,6 +1736,45 @@ function FacturacionWorkspace({
   const requiresOpenCashSession = canManageCashRegisters && mustHaveOpenCashSession && !cashSessionState.loading && !cashSessionState.activeSession;
   const hasCashAssignments = cashSessionState.cashRegisters.length > 0;
 
+  const [cashWarningModalOpen, setCashWarningModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!canManageCashRegisters) {
+      setCashWarningModalOpen(false);
+      return;
+    }
+    if (requiresOpenCashSession) {
+      setCashWarningModalOpen(true);
+    } else {
+      setCashWarningModalOpen(false);
+    }
+  }, [canManageCashRegisters, requiresOpenCashSession]);
+
+  let cashStatusText: string | null = null;
+  let cashStatusTone = "text-muted-foreground";
+  if (canManageCashRegisters) {
+    if (cashSessionState.loading) {
+      cashStatusText = "Consultando estado de caja…";
+    } else if (cashSessionError) {
+      cashStatusText = `No se pudo consultar la caja: ${cashSessionError}`;
+      cashStatusTone = "text-destructive";
+    } else if (cashSessionState.activeSession) {
+      const active = cashSessionState.activeSession;
+      cashStatusText = `Caja abierta: ${active.cashRegister.cashRegisterCode} • ${active.cashRegister.cashRegisterName}`;
+    } else if (hasCashAssignments) {
+      cashStatusText = "Caja pendiente de apertura. Abre tu caja antes de facturar.";
+      cashStatusTone = "text-amber-600";
+    } else {
+      cashStatusText = "Sin cajas asignadas. Solicita acceso a un administrador.";
+    }
+  }
+
+  const cashStatusIndicator = cashStatusText ? (
+    <p className={cn("text-xs font-medium text-right", cashStatusTone)}>
+      {cashStatusText}
+    </p>
+  ) : null;
+
   const handleRefreshCashSessions = useCallback(() => {
     void loadCashSession();
   }, [loadCashSession]);
@@ -2460,95 +2499,12 @@ function FacturacionWorkspace({
     </div>
   ) : null;
 
-  let statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-muted text-muted-foreground";
-  let statusIcon: ReactNode = <History className="h-4 w-4" />;
-  let statusInfo: ReactNode = (
-    <div className="space-y-1">
-      <p className="text-sm font-semibold text-foreground">Estado de caja</p>
-      <p className="text-xs text-muted-foreground">Consulta tu caja asignada y gestiona aperturas en la sección Caja.</p>
-    </div>
-  );
-
-  if (cashSessionState.loading) {
-    statusIcon = <Loader2 className="h-4 w-4 animate-spin" />;
-    statusInfo = (
-      <div className="space-y-1">
-        <p className="text-sm font-semibold text-foreground">Consultando estado de caja</p>
-        <p className="text-xs text-muted-foreground">Actualizando informacion asignada.</p>
-      </div>
-    );
-  } else if (cashSessionError) {
-    statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-destructive/10 text-destructive";
-    statusIcon = <AlertCircle className="h-4 w-4" />;
-    statusInfo = (
-      <div className="space-y-0.5">
-        <p className="text-sm font-semibold text-destructive">No se pudo consultar la caja</p>
-        <p className="text-xs text-destructive/80">{cashSessionError}</p>
-        <p className="text-xs text-muted-foreground">Intenta nuevamente con Actualizar.</p>
-      </div>
-    );
-  } else if (cashSessionState.activeSession) {
-    const active = cashSessionState.activeSession;
-    statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600";
-    statusIcon = <Receipt className="h-4 w-4" />;
-    statusInfo = (
-      <div className="space-y-1">
-        <p className="text-sm font-semibold text-foreground">Caja abierta</p>
-        <p className="text-xs text-muted-foreground">
-          {`${active.cashRegister.cashRegisterCode} - ${active.cashRegister.cashRegisterName}`}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          {`${active.cashRegister.warehouseCode} - ${active.cashRegister.warehouseName}`}
-        </p>
-        <p className="text-xs text-muted-foreground">Consulta los detalles completos en la sección Caja.</p>
-      </div>
-    );
-  } else if (hasCashAssignments) {
-    statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600";
-    statusIcon = <AlertCircle className="h-4 w-4" />;
-    statusInfo = (
-      <div className="space-y-1">
-        <p className="text-sm font-semibold text-foreground">Caja pendiente de apertura</p>
-        <p className="text-xs text-muted-foreground">Abre tu caja en la sección Caja antes de generar facturas.</p>
-      </div>
-    );
-  } else {
-    statusBadgeClass = "flex h-9 w-9 items-center justify-center rounded-2xl bg-muted text-muted-foreground";
-    statusIcon = <Ban className="h-4 w-4" />;
-    statusInfo = (
-      <div className="space-y-1">
-        <p className="text-sm font-semibold text-foreground">Sin cajas asignadas</p>
-        <p className="text-xs text-muted-foreground">Solicita a un administrador una asignacion de caja.</p>
-      </div>
-    );
-  }
-
-  const cashReminder = requiresOpenCashSession ? (
-    <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-600">
-      Abre tu caja desde la sección Caja para poder facturar.
-    </div>
-  ) : null;
-
-  const cashSessionBanner = canManageCashRegisters ? (
-    <div className="rounded-3xl border bg-background/95 p-5 shadow-sm">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-start gap-3">
-          <span className={statusBadgeClass}>{statusIcon}</span>
-          {statusInfo}
-        </div>
-        {cashActionButtons}
-      </div>
-      {cashReminder}
-    </div>
-  ) : null;
-
 
 
   return (
     <>
       <section className="space-y-8 pb-8">
-        {cashSessionBanner}
-       <header className="space-y-3">
+        <header className="space-y-3">
          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
            <div className="space-y-3">
              <Button
@@ -2569,7 +2525,12 @@ function FacturacionWorkspace({
                <h1 className="text-3xl font-semibold tracking-tight text-foreground">{modeTitle}</h1>
              </div>
            </div>
-           {/* Toggle IVA compacto se ubicará luego dentro del card de resumen */}
+           {(cashStatusIndicator || cashActionButtons) ? (
+             <div className="flex flex-col items-end gap-2">
+               {cashStatusIndicator}
+               {cashActionButtons}
+             </div>
+           ) : null}
          </div>
          {/* Bloque Cliente/RUC trasladado arriba */}
          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
@@ -2601,9 +2562,9 @@ function FacturacionWorkspace({
          </div>
        </header>
 
-        <div className="grid gap-6 xl:grid-cols-[1.7fr,1fr] xl:items-stretch">
-            <Card className="min-w-0 flex h-full flex-col overflow-hidden rounded-3xl border bg-background/95 shadow-sm">
-              <CardHeader className="space-y-2.5 pb-4">
+        <div className="grid gap-6 xl:grid-cols-[1.7fr,1fr] xl:items-stretch xl:min-h-[calc(100vh-310px)]">
+          <Card className="min-w-0 flex h-full flex-col overflow-hidden rounded-3xl border bg-background/95 shadow-sm xl:h-full">
+              <CardHeader className="space-y-2.5 pb-4 flex-shrink-0">
              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between lg:gap-6">
                <CardTitle className="text-lg font-semibold leading-tight">Detalle de consumo</CardTitle>
                
@@ -2675,6 +2636,7 @@ function FacturacionWorkspace({
                           <th className="px-3 py-2 font-medium">Cant.</th>
                           <th className="px-3 py-2 font-medium">P. unitario</th>
                           <th className="px-3 py-2 font-medium">Subtotal</th>
+                          <th className="px-3 py-2 text-center font-medium">Acciones</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
@@ -2744,8 +2706,8 @@ function FacturacionWorkspace({
                                 />
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{formatCurrency(item.unitPrice, { currency: "local" })}</td>
-                              <td className="flex items-center justify-between gap-2 px-3 py-2 font-semibold text-foreground">
-                                <span>{formatCurrency(item.qty * item.unitPrice, { currency: "local" })}</span>
+                              <td className="px-3 py-2 font-semibold text-foreground">{formatCurrency(item.qty * item.unitPrice, { currency: "local" })}</td>
+                              <td className="px-3 py-2 text-center">
                                 <Button
                                   type="button"
                                   variant="destructive"
@@ -2757,7 +2719,9 @@ function FacturacionWorkspace({
                                         ...prev,
                                         items: prev.items.filter((_, idx) => idx !== i),
                                       }));
-                                    } else if (selectedOrder && item.id != null) {
+                                      return;
+                                    }
+                                    if (selectedOrder && item.id != null) {
                                       const snapshot = orders;
                                       const selectedKey = orderSelectionKey(selectedOrder);
                                       setOrders((prev) =>
@@ -2796,7 +2760,7 @@ function FacturacionWorkspace({
                           ))
                         ) : (
                           <tr>
-                            <td colSpan={4} className="px-3 py-6 text-center text-xs text-muted-foreground">
+                            <td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">
                               Sin productos registrados.
                             </td>
                           </tr>
@@ -2862,11 +2826,11 @@ function FacturacionWorkspace({
             </CardContent>
           </Card>
 
-          <Card className="min-w-0 flex h-full flex-col overflow-hidden rounded-3xl border bg-background/95 shadow-sm">
-           <CardHeader className="space-y-2">
+          <Card className="min-w-0 flex h-full flex-col overflow-hidden rounded-3xl border bg-background/95 shadow-sm xl:h-full">
+           <CardHeader className="space-y-2 flex-shrink-0">
              <CardTitle className="text-xl font-semibold">Resumen de cobro</CardTitle>
            </CardHeader>
-           <CardContent className="space-y-5 flex-1">
+           <CardContent className="flex flex-1 flex-col space-y-5">
              {/* Pagos múltiples */}
              <PaymentsSectionUI
                payments={payments}
@@ -2896,7 +2860,7 @@ function FacturacionWorkspace({
              </div>
 
            </CardContent>
-           <div className="border-t p-4">
+           <div className="border-t p-4 flex-shrink-0">
              <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
               <Button
                 type="button"
@@ -2924,6 +2888,46 @@ function FacturacionWorkspace({
 
        {/* Vista previa eliminada: se imprime directamente al presionar el botón */}
       </section>
+
+      <Modal
+        open={cashWarningModalOpen}
+        onClose={() => setCashWarningModalOpen(true)}
+        title="Apertura de caja requerida"
+        description="Para facturar necesitas una jornada de caja abierta."
+        contentClassName="max-w-lg"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {hasCashAssignments
+              ? "Tienes cajas asignadas pero ninguna apertura activa. Abre tu caja desde la sección Caja antes de continuar."
+              : "No tienes cajas asignadas actualmente. Solicita acceso a un administrador para poder facturar."}
+          </p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleRefreshCashSessions}
+              disabled={cashSessionState.loading}
+            >
+              {cashSessionState.loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Consultando
+                </>
+              ) : (
+                <>
+                  <History className="mr-2 h-4 w-4" />
+                  Reintentar
+                </>
+              )}
+            </Button>
+            <Button type="button" size="sm" className="rounded-2xl" asChild>
+              <Link href="/caja">Gestionar caja</Link>
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={addItemModalOpen}

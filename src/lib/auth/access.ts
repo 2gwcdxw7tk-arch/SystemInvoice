@@ -110,6 +110,8 @@ const FACTURACION_PERMISSION_ALLOW_LIST = [
   "reports.sales.view",
   "reports.facturacion.view",
   "report.facturacion.view",
+  "menu.facturacion.view",
+  "menu.caja.view",
 ];
 
 export async function requireFacturacionAccess(

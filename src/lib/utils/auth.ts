@@ -46,13 +46,33 @@ export function sanitizeNullable(input: string | null | undefined): string | nul
 }
 
 export const MOCK_ROLE_PERMISSIONS: Record<string, string[]> = {
-  FACTURADOR: ["cash.register.open", "cash.register.close", "invoice.issue", "cash.report.view"],
+  FACTURADOR: [
+    "cash.register.open",
+    "cash.register.close",
+    "invoice.issue",
+    "cash.report.view",
+    "menu.dashboard.view",
+    "menu.facturacion.view",
+    "menu.caja.view",
+    "menu.reportes.view",
+  ],
   ADMINISTRADOR: [
     "cash.register.open",
     "cash.register.close",
     "invoice.issue",
     "cash.report.view",
     "admin.users.manage",
+    "menu.dashboard.view",
+    "menu.facturacion.view",
+    "menu.caja.view",
+    "menu.articulos.view",
+    "menu.inventario.view",
+    "menu.mesas.view",
+    "menu.meseros.view",
+    "menu.usuarios.view",
+    "menu.roles.view",
+    "menu.reportes.view",
+    "menu.preferencias.view",
   ],
 };
 

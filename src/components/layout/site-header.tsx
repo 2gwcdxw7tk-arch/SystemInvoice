@@ -7,7 +7,7 @@ import { LogOut } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { siteConfig } from "@/config/site";
-import { useSession } from "@/components/providers/session-provider";
+import { useSession, useSessionActions } from "@/components/providers/session-provider";
 import { isSessionAdministrator, isSessionFacturador, normalizeSessionRoles } from "@/lib/auth/session-roles";
 import { useToast } from "@/components/ui/toast-provider";
 
@@ -35,6 +35,7 @@ function humanizeRole(code: string): string {
 
 export function SiteHeader() {
   const session = useSession();
+  const { clearSession } = useSessionActions();
   const router = useRouter();
   const { toast } = useToast();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -72,6 +73,7 @@ export function SiteHeader() {
         throw new Error(`Respuesta inesperada: ${response.status}`);
       }
 
+      clearSession();
       router.replace("/?logout=1");
       router.refresh();
     } catch (error) {

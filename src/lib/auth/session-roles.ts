@@ -33,11 +33,10 @@ export function isSessionAdministrator(session: SessionPayload | null | undefine
     return true;
   }
 
-  const normalizedRole = session.role?.trim().toUpperCase();
-  if (normalizedRole === "ADMIN" || normalizedRole === "ADMINISTRADOR" || normalizedRole === "ADMINISTRATOR") {
+  const permissions = normalizeSessionPermissions(session);
+  if (permissions.some((permission) => permission.toLowerCase() === "admin.users.manage")) {
     return true;
   }
-
 
   return false;
 }
