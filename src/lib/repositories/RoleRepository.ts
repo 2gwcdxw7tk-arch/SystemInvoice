@@ -10,7 +10,7 @@ import type {
   UpdateRoleParams,
 } from "@/lib/types/roles";
 
-const rolePermissionsInclude = {
+const rolePermissionsArgs = Prisma.validator<Prisma.Role$role_permissionsArgs>()({
   include: {
     permission: {
       select: { code: true },
@@ -18,16 +18,20 @@ const rolePermissionsInclude = {
   },
   orderBy: [
     {
-      permission: { code: "asc" as const },
+      permission: { code: "asc" },
     },
   ],
-} satisfies Prisma.RolePermissionFindManyArgs;
+});
 
-const roleInclude = {
-  role_permissions: rolePermissionsInclude,
-} satisfies Prisma.RoleInclude;
+const roleWithRelationsArgs = Prisma.validator<Prisma.RoleDefaultArgs>()({
+  include: {
+    role_permissions: rolePermissionsArgs,
+  },
+});
 
-type RoleWithRelations = Prisma.RoleGetPayload<{ include: typeof roleInclude }>;
+const roleInclude = roleWithRelationsArgs.include;
+
+type RoleWithRelations = Prisma.RoleGetPayload<typeof roleWithRelationsArgs>;
 
 type PermissionRecord = {
   id: number;

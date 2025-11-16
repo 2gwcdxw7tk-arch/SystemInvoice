@@ -1,6 +1,6 @@
-import { Prisma } from "@prisma/client";
+import type { Role } from "@prisma/client";
 
-type RolePayload = Prisma.Role;
+type RolePayload = Role;
 
 const role: RolePayload | null = null;
 

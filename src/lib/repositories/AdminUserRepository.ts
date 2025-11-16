@@ -18,27 +18,30 @@ import type {
   RoleDefinition,
 } from "@/lib/types/admin-users";
 
-// Definir el include para admin_users de forma explícita
-const adminUserInclude = {
-  user_roles: {
-    orderBy: { assigned_at: "asc" as const },
-    include: {
-      role: {
-        include: {
-          role_permissions: {
-            include: {
-              permission: true,
-            },
+const adminUserRelationsArgs = Prisma.validator<Prisma.admin_usersDefaultArgs>()({
+  include: {
+    user_roles: Prisma.validator<Prisma.admin_users$user_rolesArgs>()({
+      orderBy: { assigned_at: "asc" },
+      include: {
+        role: Prisma.validator<Prisma.RoleDefaultArgs>()({
+          include: {
+            role_permissions: Prisma.validator<Prisma.Role$role_permissionsArgs>()({
+              include: {
+                permission: {
+                  select: { code: true },
+                },
+              },
+            }),
           },
-        },
+        }),
       },
-    },
+    }),
   },
-};
+});
 
-type AdminUserWithRelations = Prisma.admin_usersGetPayload<{
-  include: typeof adminUserInclude;
-}>;
+const adminUserInclude = adminUserRelationsArgs.include;
+
+type AdminUserWithRelations = Prisma.admin_usersGetPayload<typeof adminUserRelationsArgs>;
 
 type LoginAuditParams = {
   loginType: "admin";
