@@ -606,12 +606,12 @@ export default function MeserosComandasPage() {
 
   return (
     <div className="flex h-full flex-col gap-2 p-4 lg:p-6">
-      <div className="flex flex-col items-center gap-2">
-        <div className="flex items-center gap-4 rounded-full border border-emerald-500/40 bg-emerald-50/70 px-6 py-2 text-base font-medium text-emerald-800 shadow-sm">
-          <Sun className="h-4 w-4" aria-hidden="true" />
-          <span>{dateLabel}</span>
+      <div className="flex flex-col items-center gap-1">
+        <div className="flex items-center gap-3 rounded-full border border-emerald-500/30 bg-emerald-50/60 px-4 py-1 text-sm font-medium text-emerald-800 shadow-sm">
+          <Sun className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="text-sm">{dateLabel}</span>
           <span className="h-5 w-px bg-emerald-300" aria-hidden="true" />
-          <span className="tabular-nums text-lg font-semibold">{clockLabel}</span>
+          <span className="tabular-nums text-base font-semibold">{clockLabel}</span>
         </div>
         <div className="flex w-full flex-wrap items-center justify-between gap-2">
           <div className="space-y-1">
@@ -724,32 +724,18 @@ export default function MeserosComandasPage() {
       ) : (
         <>
           <Card className="rounded-3xl border bg-card/70 shadow-sm">
-            <CardContent className="flex flex-wrap items-center justify-between gap-2 p-4">
-              <div className="space-y-1">
+            <CardContent className="flex items-center justify-between gap-2 p-3">
+              <div>
                 <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
-                  <Table className="h-4 w-4" />
-                  <span>Mesa seleccionada</span>
+                  <Table className="h-3.5 w-3.5" />
+                  <span className="text-xs">Mesa seleccionada</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-2xl font-semibold text-foreground">{selectedTable.label}</h2>
-                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                <div className="mt-1 flex items-center gap-3">
+                  <h2 className="text-lg font-semibold text-foreground">{selectedTable.label}</h2>
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
                     Activa
                   </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                  {selectedTable.zone ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-medium uppercase tracking-wide">
-                      {selectedTable.zone}
-                    </span>
-                  ) : null}
-                  <span className="inline-flex items-center gap-1">
-                    <UtensilsCrossed className="h-4 w-4" />
-                    {totalGuests} en comanda
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <Save className="h-4 w-4" />
-                    Ultima actualizacion {lastUpdateLabel}
-                  </span>
+                  <span className="ml-2 text-sm text-muted-foreground">{totalGuests} uds</span>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -760,7 +746,7 @@ export default function MeserosComandasPage() {
             </CardContent>
           </Card>
 
-          <div className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[320px_1fr_360px]">
+          <div className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[280px_1fr_320px]">
             <Card className="h-full rounded-3xl border bg-card/60">
               <CardHeader className="space-y-2">
                 <CardTitle className="text-base">Catalogo</CardTitle>
@@ -810,7 +796,7 @@ export default function MeserosComandasPage() {
                   </div>
                 ) : null}
 
-                <div className="flex-1 space-y-2 overflow-hidden">
+                <div className="flex-1 flex flex-col overflow-hidden">
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Nivel {activeLevel}</p>
                   <div className="flex-1 space-y-2 overflow-y-auto pr-1">
                     {levelLoading ? (
@@ -856,34 +842,37 @@ export default function MeserosComandasPage() {
                 <CardDescription>Selecciona articulos para agregarlos a la comanda.</CardDescription>
               </CardHeader>
               <CardContent className="flex h-full min-h-0 flex-col gap-4">
-                <div className="flex-1 min-h-0">
+                <div className="flex-1 min-h-0 flex flex-col">
                   {loadingArticles ? (
-                    <div className="grid h-full grid-cols-2 gap-3 overflow-hidden auto-rows-min lg:grid-cols-3">
-                      {Array.from({ length: 9 }).map((_, index) => (
-                        <div key={index} className="h-20 animate-pulse rounded-2xl bg-muted" />
-                      ))}
+                    <div className="flex-1 overflow-hidden">
+                      <div className="grid grid-cols-2 gap-3 auto-rows-min lg:grid-cols-4">
+                        {Array.from({ length: 9 }).map((_, index) => (
+                          <div key={index} className="h-20 animate-pulse rounded-2xl bg-muted" />
+                        ))}
+                      </div>
                     </div>
                   ) : visibleArticles.length > 0 ? (
-                    <div className="grid h-full grid-cols-2 gap-3 overflow-y-auto pr-1 auto-rows-min lg:grid-cols-3">
-                      {visibleArticles.map((article) => (
-                        <button
-                          key={article.article_code}
-                          type="button"
-                          onClick={() => handleAddArticle(article)}
-                          className="flex min-h-[5.25rem] flex-col justify-between rounded-2xl border bg-background/80 p-2 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
-                        >
-                          <div className="space-y-1">
-                            <p className="text-sm font-semibold leading-snug text-foreground">{article.name}</p>
-                            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{article.article_code}</p>
-                          </div>
-                          <span className="text-xs font-semibold text-primary">
-                            {formatCurrency(article.price?.base_price ?? 0)}
-                          </span>
-                        </button>
-                      ))}
+                    <div className="flex-1 overflow-y-auto pr-1">
+                      <div className="grid grid-cols-2 gap-3 auto-rows-min lg:grid-cols-4">
+                        {visibleArticles.map((article) => (
+                          <button
+                            key={article.article_code}
+                            type="button"
+                            onClick={() => handleAddArticle(article)}
+                            className="flex min-h-[4rem] flex-col justify-between rounded-2xl border bg-background/80 p-2 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                          >
+                            <div>
+                              <p className="text-sm font-medium text-foreground">{article.name}</p>
+                            </div>
+                            <div>
+                              <span className="text-sm font-semibold text-primary">{formatCurrency(article.price?.base_price ?? 0)}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : (
-                    <div className="flex h-full min-h-[280px] items-center justify-center rounded-2xl border border-dashed border-muted-foreground/40 bg-background/70 p-6 text-center">
+                    <div className="flex-1 min-h-[280px] flex items-center justify-center rounded-2xl border border-dashed border-muted-foreground/40 bg-background/70 p-6 text-center">
                       <div className="flex flex-col items-center justify-center space-y-3 text-center">
                         <Table className="h-10 w-10 text-muted-foreground" />
                         <p className="text-sm text-muted-foreground">
@@ -904,10 +893,9 @@ export default function MeserosComandasPage() {
             <Card className="h-full rounded-3xl border bg-card/80">
               <CardHeader className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <CardTitle className="text-base">Comanda</CardTitle>
-                    <CardDescription>Agrega articulos y envialos a cocina.</CardDescription>
-                  </div>
+                      <div>
+                        <CardTitle className="text-base">Comanda</CardTitle>
+                      </div>
                   <div className="flex items-center gap-2">
                     <Button size="sm" onClick={handleSendOrder} disabled={pendingItems.length === 0}>
                       <Save className="mr-2 h-4 w-4" />
@@ -981,7 +969,7 @@ export default function MeserosComandasPage() {
                     <span>Total a enviar</span>
                     <span>{formatCurrency(pendingTotal)}</span>
                   </div>
-                  <p className="text-xs text-muted-foreground">Pulsa “Enviar comanda” para mover estos articulos a cocina o barra.</p>
+                
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <Button
                       className="w-full"
