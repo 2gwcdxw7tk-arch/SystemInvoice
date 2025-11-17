@@ -1339,7 +1339,7 @@ export default function FacturacionPage() {
   const canViewCashReports = hasSessionPermission(session, "cash.report.view");
   const mustIssueInvoices = hasSessionPermission(session, "invoice.issue");
   const canManageCashRegisters = isAdmin || canOpenCash || canCloseCash || canViewCashReports;
-  const mustHaveOpenCashSession = isFacturadorOnly && (canOpenCash || mustIssueInvoices);
+  const mustHaveOpenCashSession = canOpenCash || mustIssueInvoices;
   const { toast } = useToast();
 
   useEffect(() => {

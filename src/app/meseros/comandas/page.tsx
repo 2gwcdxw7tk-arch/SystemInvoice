@@ -858,25 +858,25 @@ export default function MeserosComandasPage() {
               <CardContent className="flex h-full min-h-0 flex-col gap-4">
                 <div className="flex-1 min-h-0">
                   {loadingArticles ? (
-                    <div className="grid h-full grid-cols-2 gap-3 overflow-hidden lg:grid-cols-3">
+                    <div className="grid h-full grid-cols-2 gap-3 overflow-hidden auto-rows-min lg:grid-cols-3">
                       {Array.from({ length: 9 }).map((_, index) => (
-                        <div key={index} className="h-28 animate-pulse rounded-3xl bg-muted" />
+                        <div key={index} className="h-20 animate-pulse rounded-2xl bg-muted" />
                       ))}
                     </div>
                   ) : visibleArticles.length > 0 ? (
-                    <div className="grid h-full grid-cols-2 gap-3 overflow-y-auto pr-1 lg:grid-cols-3">
+                    <div className="grid h-full grid-cols-2 gap-3 overflow-y-auto pr-1 auto-rows-min lg:grid-cols-3">
                       {visibleArticles.map((article) => (
                         <button
                           key={article.article_code}
                           type="button"
                           onClick={() => handleAddArticle(article)}
-                          className="flex min-h-[7rem] flex-col justify-between rounded-3xl border bg-background/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          className="flex min-h-[5.25rem] flex-col justify-between rounded-2xl border bg-background/80 p-2 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
                         >
                           <div className="space-y-1">
-                            <p className="text-sm font-semibold text-foreground">{article.name}</p>
-                            <p className="text-xs uppercase tracking-wide text-muted-foreground">{article.article_code}</p>
+                            <p className="text-sm font-semibold leading-snug text-foreground">{article.name}</p>
+                            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{article.article_code}</p>
                           </div>
-                          <span className="text-sm font-bold text-primary">
+                          <span className="text-xs font-semibold text-primary">
                             {formatCurrency(article.price?.base_price ?? 0)}
                           </span>
                         </button>
