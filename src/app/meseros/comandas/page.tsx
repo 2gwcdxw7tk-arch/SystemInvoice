@@ -605,15 +605,15 @@ export default function MeserosComandasPage() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 p-4 lg:p-6">
-      <div className="flex flex-col items-center gap-4">
-        <div className="flex items-center gap-4 rounded-full border border-emerald-500/40 bg-emerald-50/70 px-6 py-3 text-base font-medium text-emerald-800 shadow-sm">
+    <div className="flex h-full flex-col gap-2 p-4 lg:p-6">
+      <div className="flex flex-col items-center gap-2">
+        <div className="flex items-center gap-4 rounded-full border border-emerald-500/40 bg-emerald-50/70 px-6 py-2 text-base font-medium text-emerald-800 shadow-sm">
           <Sun className="h-4 w-4" aria-hidden="true" />
           <span>{dateLabel}</span>
           <span className="h-5 w-px bg-emerald-300" aria-hidden="true" />
           <span className="tabular-nums text-lg font-semibold">{clockLabel}</span>
         </div>
-        <div className="flex w-full flex-wrap items-center justify-between gap-3">
+        <div className="flex w-full flex-wrap items-center justify-between gap-2">
           <div className="space-y-1">
             <h1 className="text-2xl font-semibold text-foreground">
               <span role="img" aria-label="saludo" className="mr-2">👋</span>
@@ -724,13 +724,13 @@ export default function MeserosComandasPage() {
       ) : (
         <>
           <Card className="rounded-3xl border bg-card/70 shadow-sm">
-            <CardContent className="flex flex-wrap items-center justify-between gap-4 p-6">
-              <div className="space-y-2">
+            <CardContent className="flex flex-wrap items-center justify-between gap-2 p-4">
+              <div className="space-y-1">
                 <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
                   <Table className="h-4 w-4" />
                   <span>Mesa seleccionada</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-2xl font-semibold text-foreground">{selectedTable.label}</h2>
                   <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-700">
                     Activa
