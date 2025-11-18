@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
+import { Suspense } from "react";
+
 import { cn } from "@/lib/utils";
 import { isSessionFacturadorOnly } from "@/lib/auth/session-roles";
 import { useSession } from "@/components/providers/session-provider";
@@ -16,7 +18,15 @@ import { useSession } from "@/components/providers/session-provider";
  * - Compatible con tema claro/oscuro y contraste adecuado.
  * - Accesible por teclado (rol botón + aria-label descriptivo).
  */
-export function BackToDashboard({ className }: { className?: string }) {
+export function BackToDashboard(props: { className?: string }) {
+  return (
+    <Suspense fallback={null}>
+      <BackToDashboardInner {...props} />
+    </Suspense>
+  );
+}
+
+function BackToDashboardInner({ className }: { className?: string }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const session = useSession();

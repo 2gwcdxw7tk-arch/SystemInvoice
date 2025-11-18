@@ -10,6 +10,9 @@ import { cn } from "@/lib/utils";
 import { siteConfig } from "@/config/site";
 import { SESSION_COOKIE_NAME, parseSessionCookie, type SessionPayload } from "@/lib/auth/session";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export const metadata: Metadata = {
   title: {
     default: siteConfig.name,
