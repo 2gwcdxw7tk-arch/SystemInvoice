@@ -14,7 +14,7 @@ function normalizeCode(value: string): string {
   return value.trim().toUpperCase();
 }
 
-function mapWarehouse(row: { id: number; code: string; name: string; is_active: boolean; created_at: Date }): WarehouseRecord {
+function mapWarehouse(row: any): WarehouseRecord {
   return {
     id: Number(row.id),
     code: row.code,
@@ -39,13 +39,30 @@ export class WarehouseRepository implements IWarehouseRepository {
       },
     });
 
-    return warehouses.map(mapWarehouse);
+    return warehouses.map(row => mapWarehouse(row as { id: bigint; code: string; name: string; is_active: boolean; created_at: Date }));
   }
 
-  async findWarehouseByCode(code: string): Promise<WarehouseRecord | null> {
+  async findWarehouseByCode(code: string, tx?: Prisma.TransactionClient): Promise<WarehouseRecord | null> {
+    const client = tx ?? prisma;
     const normalizedCode = normalizeCode(code);
-    const warehouse = await prisma.warehouses.findUnique({
+    const warehouse = await client.warehouses.findUnique({
       where: { code: normalizedCode },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        is_active: true,
+        created_at: true,
+      },
+    });
+
+    return warehouse ? mapWarehouse(warehouse as { id: bigint; code: string; name: string; is_active: boolean; created_at: Date }) : null;
+  }
+
+  async findWarehouseById(id: number, tx?: Prisma.TransactionClient): Promise<WarehouseRecord | null> {
+    const client = tx ?? prisma;
+    const warehouse = await client.warehouses.findUnique({
+      where: { id },
       select: {
         id: true,
         code: true,
@@ -78,7 +95,7 @@ export class WarehouseRepository implements IWarehouseRepository {
           created_at: true,
         },
       });
-      return mapWarehouse(warehouse);
+      return mapWarehouse(warehouse as { id: bigint; code: string; name: string; is_active: boolean; created_at: Date });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === UNIQUE_VIOLATION) {
         throw new Error(`Ya existe una bodega con el código ${normalizedCode}`);
@@ -111,7 +128,7 @@ export class WarehouseRepository implements IWarehouseRepository {
           created_at: true,
         },
       });
-      return mapWarehouse(warehouse);
+      return mapWarehouse(warehouse as { id: bigint; code: string; name: string; is_active: boolean; created_at: Date });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
         throw new Error(`La bodega ${normalizedCode} no existe`);

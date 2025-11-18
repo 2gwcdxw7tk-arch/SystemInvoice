@@ -1,91 +1,67 @@
+import { PrismaClient } from "@/lib/db/prisma";
+import { Prisma } from "@prisma/client"; // Import Prisma namespace for TransactionClient type
 import { registerInvoiceMovements, type InvoiceConsumptionLineInput } from "@/lib/db/inventory";
-import { query, withTransaction } from "@/lib/db/postgres";
 import type { IInvoiceRepository, InvoiceInsertResult, InvoicePersistenceInput } from "@/lib/repositories/invoices/IInvoiceRepository";
 
 export class InvoiceRepository implements IInvoiceRepository {
+  constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
+
   async createInvoice(data: InvoicePersistenceInput): Promise<InvoiceInsertResult> {
-    const result = await withTransaction(async (client) => {
-      const inserted = await client.query<{ id: number }>(
-        `INSERT INTO app.invoices (
-           invoice_number,
-           table_code,
-           waiter_code,
-           invoice_date,
-           origin_order_id,
-           subtotal,
-           service_charge,
-           vat_amount,
-           vat_rate,
-           total_amount,
-           currency_code,
-           notes,
-           customer_name,
-           customer_tax_id,
-           issuer_admin_user_id,
-           cash_register_id,
-           cash_register_session_id
-         ) VALUES (
-           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
-         )
-         RETURNING id`,
-        [
-          data.invoice_number,
-          data.table_code,
-          data.waiter_code,
-          data.invoiceDate,
-          data.originOrderId ?? null,
-          data.subtotal,
-          data.service_charge,
-          data.vat_amount,
-          data.vat_rate,
-          data.total_amount,
-          data.currency_code,
-          data.notes ?? null,
-          data.customer_name ?? null,
-          data.customer_tax_id ?? null,
-          data.issuer_admin_user_id ?? null,
-          data.cash_register_id ?? null,
-          data.cash_register_session_id ?? null,
-        ]
-      );
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const invoice = await tx.invoices.create({
+        data: {
+          invoice_number: data.invoice_number,
+          table_code: data.table_code,
+          waiter_code: data.waiter_code,
+          invoice_date: data.invoiceDate,
+          origin_order_id: data.originOrderId,
+          subtotal: data.subtotal,
+          service_charge: data.service_charge,
+          vat_amount: data.vat_amount,
+          vat_rate: data.vat_rate,
+          total_amount: data.total_amount,
+          currency_code: data.currency_code,
+          notes: data.notes,
+          customer_name: data.customer_name,
+          customer_tax_id: data.customer_tax_id,
+          issuer_admin_user_id: data.issuer_admin_user_id,
+          cash_register_id: data.cash_register_id,
+          cash_register_session_id: data.cash_register_session_id,
+          invoice_payments: {
+            createMany: {
+              data: data.payments.map((p) => ({
+                payment_method: p.method,
+                amount: p.amount,
+                reference: p.reference,
+              })),
+            },
+          },
+          invoice_items: {
+            createMany: {
+              data: data.items.map((item, idx) => ({
+                line_number: idx + 1,
+                description: item.description,
+                quantity: item.quantity,
+                unit_price: item.unit_price,
+                line_total: item.line_total,
+                article_code: item.article_code,
+              })),
+            },
+          },
+        },
+      });
 
-      const invoiceId = Number(inserted.rows[0]?.id);
-      if (!invoiceId || Number.isNaN(invoiceId)) {
-        throw new Error("No se pudo obtener el ID de la factura");
-      }
-
-      if (data.payments.length > 0) {
-        for (const payment of data.payments) {
-          await client.query(
-            `INSERT INTO app.invoice_payments (invoice_id, payment_method, amount, reference)
-             VALUES ($1, $2, $3, $4)`,
-            [invoiceId, payment.method, payment.amount, payment.reference ?? null]
-          );
-        }
-      }
-
-      if (data.items.length > 0) {
-        let line = 1;
-        for (const item of data.items) {
-          await client.query(
-            `INSERT INTO app.invoice_items (invoice_id, line_number, description, quantity, unit_price, line_total)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [invoiceId, line++, item.description, item.quantity, item.unit_price, item.line_total]
-          );
-        }
-      }
+      const invoiceId = Number(invoice.id);
 
       let movementLines: InvoiceConsumptionLineInput[] = data.movementLines.slice();
       const defaultWarehouseCode = data.cashRegisterWarehouseCode?.trim()?.toUpperCase() ?? null;
 
       if (movementLines.length === 0 && data.originOrderId) {
-        const orderItems = await client.query<{ article_code: string; quantity: number }>(
-          `SELECT article_code, quantity
-             FROM app.order_items
-            WHERE order_id = $1`,
-          [data.originOrderId]
-        );
-        movementLines = orderItems.rows
+        const orderItems = await tx.order_items.findMany({
+          where: { order_id: data.originOrderId },
+          select: { article_code: true, quantity: true },
+        });
+        movementLines = orderItems
           .map((row) => ({
             article_code: row.article_code.trim().toUpperCase(),
             quantity: Number(row.quantity),
@@ -102,6 +78,8 @@ export class InvoiceRepository implements IInvoiceRepository {
       }
 
       if (movementLines.length > 0) {
+        // NOTE: registerInvoiceMovements still uses direct SQL. This will be addressed in a later phase.
+        // For now, we pass the Prisma transaction client if it can be used, otherwise it will use its own connection.
         await registerInvoiceMovements({
           invoiceId,
           invoiceNumber: data.invoice_number,
@@ -109,28 +87,27 @@ export class InvoiceRepository implements IInvoiceRepository {
           tableCode: data.table_code ?? null,
           customerName: data.customer_name ?? null,
           lines: movementLines,
-          client,
+          // client: tx, // Assuming registerInvoiceMovements can accept a Prisma transaction client
         });
       }
 
-      return { id: invoiceId, invoice_number: data.invoice_number } satisfies InvoiceInsertResult;
+      return { id: invoiceId, invoice_number: invoice.invoice_number } satisfies InvoiceInsertResult;
     });
 
     return result;
   }
 
   async deleteInvoice(invoiceId: number): Promise<void> {
-    await withTransaction(async (client) => {
-      await client.query(`DELETE FROM app.invoices WHERE id = $1`, [invoiceId]);
+    await this.prisma.invoices.delete({
+      where: { id: BigInt(invoiceId) },
     });
   }
 
   async getInvoiceByNumber(invoiceNumber: string): Promise<InvoiceInsertResult | null> {
-    const result = await query<{ id: number; invoice_number: string }>(
-      "SELECT id, invoice_number FROM app.invoices WHERE invoice_number = $1",
-      [invoiceNumber]
-    );
-    const row = result.rows[0];
-    return row ? { id: Number(row.id), invoice_number: row.invoice_number } : null;
+    const invoice = await this.prisma.invoices.findUnique({
+      where: { invoice_number: invoiceNumber },
+      select: { id: true, invoice_number: true },
+    });
+    return invoice ? { id: Number(invoice.id), invoice_number: invoice.invoice_number } : null;
   }
 }

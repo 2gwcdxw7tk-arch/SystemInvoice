@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 export type WarehouseRecord = {
   id: number;
   code: string;
@@ -19,7 +21,8 @@ export type UpdateWarehouseInput = {
 
 export interface IWarehouseRepository {
   listWarehouses(options?: { includeInactive?: boolean }): Promise<WarehouseRecord[]>;
-  findWarehouseByCode(code: string): Promise<WarehouseRecord | null>;
+  findWarehouseByCode(code: string, tx?: Prisma.TransactionClient): Promise<WarehouseRecord | null>;
+  findWarehouseById(id: number, tx?: Prisma.TransactionClient): Promise<WarehouseRecord | null>;
   createWarehouse(input: CreateWarehouseInput): Promise<WarehouseRecord>;
   updateWarehouse(code: string, input: UpdateWarehouseInput): Promise<WarehouseRecord>;
 }

@@ -1,3 +1,5 @@
+import { PrismaClient } from "@/lib/db/prisma";
+import { Prisma } from "@prisma/client"; // Import Prisma namespace for TransactionClient type
 import { buildClosureSummary } from "@/lib/services/cash-registers/summary";
 import {
   CashRegisterAssignment,
@@ -10,409 +12,282 @@ import {
   ReportedPayment,
   UpdateCashRegisterInput,
 } from "@/lib/services/cash-registers/types";
-import { query, withTransaction } from "@/lib/db/postgres";
 import type { ICashRegisterRepository } from "./ICashRegisterRepository";
+
+// Tipos para los payloads de Prisma con las relaciones incluidas
+type CashRegisterWithWarehouse = Prisma.cash_registersGetPayload<{
+  include: { warehouses: { select: { id: true, code: true, name: true } } };
+}>;
+
+type CashRegisterUserWithRelations = Prisma.cash_register_usersGetPayload<{
+  include: {
+    cash_registers: {
+      include: {
+        warehouses: { select: { id: true, code: true, name: true } };
+      };
+    };
+  };
+}>;
+
+type CashRegisterSessionWithRelations = Prisma.cash_register_sessionsGetPayload<{
+  include: {
+    cash_registers: {
+      include: {
+        warehouses: { select: { id: true, code: true, name: true } };
+      };
+    };
+  };
+}>;
 
 function normalizeCode(value: string): string {
   return value.trim().toUpperCase();
 }
 
-type RegisterDbRow = {
-  id: number;
-  code: string;
-  name: string;
-  warehouse_id: number;
-  warehouse_code: string;
-  warehouse_name: string;
-  allow_manual_warehouse_override: boolean;
-  is_active: boolean;
-  notes: string | null;
-  created_at: Date;
-  updated_at: Date | null;
-};
-
-function mapRegisterRow(row: RegisterDbRow): CashRegisterRecord {
+function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterRecord {
   return {
-    id: Number(row.id),
-    code: row.code,
-    name: row.name,
-    warehouseId: Number(row.warehouse_id),
-    warehouseCode: row.warehouse_code,
-    warehouseName: row.warehouse_name,
-    allowManualWarehouseOverride: !!row.allow_manual_warehouse_override,
-    isActive: !!row.is_active,
-    notes: row.notes,
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at ? row.updated_at.toISOString() : null,
+    id: Number(register.id),
+    code: register.code,
+    name: register.name,
+    warehouseId: Number(register.warehouses.id),
+    warehouseCode: register.warehouses.code,
+    warehouseName: register.warehouses.name,
+    allowManualWarehouseOverride: register.allow_manual_warehouse_override,
+    isActive: register.is_active,
+    notes: register.notes,
+    createdAt: register.created_at.toISOString(),
+    updatedAt: register.updated_at?.toISOString() ?? null,
   } satisfies CashRegisterRecord;
 }
 
-type SessionDbRow = {
-  id: number;
-  status: string;
-  admin_user_id: number;
-  opening_amount: string | number;
-  opening_at: Date;
-  opening_notes: string | null;
-  closing_amount: string | number | null;
-  closing_at: Date | null;
-  closing_notes: string | null;
-  closing_user_id: number | null;
-  totals_snapshot: unknown;
-  cash_register_id: number;
-  cash_register_code: string;
-  cash_register_name: string;
-  allow_manual_warehouse_override: boolean;
-  warehouse_id: number;
-  warehouse_code: string;
-  warehouse_name: string;
-  is_default: boolean | null;
-};
-
-function mapSessionRow(row: SessionDbRow): CashRegisterSessionRecord {
+function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_default?: boolean }): CashRegisterSessionRecord {
   return {
-    id: Number(row.id),
-    status: row.status as CashRegisterSessionRecord["status"],
-    adminUserId: Number(row.admin_user_id),
-    openingAmount: Number(row.opening_amount),
-    openingAt: new Date(row.opening_at).toISOString(),
-    openingNotes: row.opening_notes,
-    closingAmount: row.closing_amount != null ? Number(row.closing_amount) : null,
-    closingAt: row.closing_at ? new Date(row.closing_at).toISOString() : null,
-    closingNotes: row.closing_notes,
-    closingUserId: row.closing_user_id != null ? Number(row.closing_user_id) : null,
-    totalsSnapshot: row.totals_snapshot ?? null,
+    id: Number(session.id),
+    status: session.status,
+    adminUserId: Number(session.admin_user_id),
+    openingAmount: Number(session.opening_amount),
+    openingAt: session.opening_at.toISOString(),
+    openingNotes: session.opening_notes,
+    closingAmount: session.closing_amount != null ? Number(session.closing_amount) : null,
+    closingAt: session.closing_at?.toISOString() ?? null,
+    closingNotes: session.closing_notes,
+    closingUserId: session.closing_user_id != null ? Number(session.closing_user_id) : null,
+    totalsSnapshot: session.totals_snapshot ?? null,
     cashRegister: {
-      cashRegisterId: Number(row.cash_register_id),
-      cashRegisterCode: row.cash_register_code,
-      cashRegisterName: row.cash_register_name,
-      allowManualWarehouseOverride: !!row.allow_manual_warehouse_override,
-      warehouseId: Number(row.warehouse_id),
-      warehouseCode: row.warehouse_code,
-      warehouseName: row.warehouse_name,
-      isDefault: !!row.is_default,
+      cashRegisterId: Number(session.cash_registers.id),
+      cashRegisterCode: session.cash_registers.code,
+      cashRegisterName: session.cash_registers.name,
+      allowManualWarehouseOverride: session.cash_registers.allow_manual_warehouse_override,
+      warehouseId: Number(session.cash_registers.warehouses.id),
+      warehouseCode: session.cash_registers.warehouses.code,
+      warehouseName: session.cash_registers.warehouses.name,
+      isDefault: !!session.is_default,
     },
   } satisfies CashRegisterSessionRecord;
 }
 
 export class CashRegisterRepository implements ICashRegisterRepository {
+  constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
+
   async listCashRegisters(options: { includeInactive?: boolean } = {}): Promise<CashRegisterRecord[]> {
     const { includeInactive = false } = options;
 
-    const result = await query<RegisterDbRow>(
-      `SELECT
-         cr.id,
-         cr.code,
-         cr.name,
-         cr.warehouse_id,
-         w.code AS warehouse_code,
-         w.name AS warehouse_name,
-         cr.allow_manual_warehouse_override,
-         cr.is_active,
-         cr.notes,
-         cr.created_at,
-         cr.updated_at
-       FROM app.cash_registers cr
-       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-       ${includeInactive ? "" : "WHERE cr.is_active = TRUE"}
-       ORDER BY cr.code ASC`
-    );
+    const registers = await this.prisma.cash_registers.findMany({
+      where: {
+        is_active: includeInactive ? undefined : true,
+      },
+      include: {
+        warehouses: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
+      },
+      orderBy: {
+        code: "asc",
+      },
+    });
 
-    return result.rows.map((row) => mapRegisterRow(row));
+    return registers.map((register) => mapRegisterToRecord(register));
   }
 
   async createCashRegister(input: CreateCashRegisterInput): Promise<CashRegisterRecord> {
-    return withTransaction(async (client) => {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const normalizedCode = normalizeCode(input.code);
       const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
       const allowManualWarehouseOverride = Boolean(input.allowManualWarehouseOverride);
       const notes = input.notes?.trim() ? input.notes.trim().slice(0, 250) : null;
 
-      const warehouseResult = await client.query<{ id: number; code: string; name: string }>(
-        `SELECT id, code, name
-         FROM app.warehouses
-         WHERE UPPER(code) = $1 AND is_active = TRUE
-         LIMIT 1`,
-        [normalizedWarehouseCode]
-      );
+      const warehouse = await tx.warehouses.findFirst({
+        where: { code: normalizedWarehouseCode, is_active: true },
+        select: { id: true, code: true, name: true },
+      });
 
-      const warehouseRow = warehouseResult.rows[0];
-      if (!warehouseRow) {
+      if (!warehouse) {
         throw new Error(`El almacén ${normalizedWarehouseCode} no existe o está inactivo`);
       }
 
-      const insertResult = await client.query<{
-        id: number;
-        code: string;
-        name: string;
-        allow_manual_warehouse_override: boolean;
-        is_active: boolean;
-        notes: string | null;
-        created_at: Date;
-        updated_at: Date | null;
-      }>(
-        `INSERT INTO app.cash_registers (
-           code,
-           name,
-           warehouse_id,
-           allow_manual_warehouse_override,
-           notes
-         ) VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, code, name, allow_manual_warehouse_override, is_active, notes, created_at, updated_at`,
-        [
-          normalizedCode,
-          input.name.trim(),
-          warehouseRow.id,
-          allowManualWarehouseOverride,
-          notes,
-        ]
-      );
-
-      const row = insertResult.rows[0];
-      return mapRegisterRow({
-        id: row.id,
-        code: row.code,
-        name: row.name,
-        warehouse_id: warehouseRow.id,
-        warehouse_code: warehouseRow.code,
-        warehouse_name: warehouseRow.name,
-        allow_manual_warehouse_override: row.allow_manual_warehouse_override,
-        is_active: row.is_active,
-        notes: row.notes,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
+      const newRegister = await tx.cash_registers.create({
+        data: {
+          code: normalizedCode,
+          name: input.name.trim(),
+          warehouse_id: warehouse.id,
+          allow_manual_warehouse_override: allowManualWarehouseOverride,
+          notes: notes,
+        },
+        include: {
+          warehouses: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+            },
+          },
+        },
       });
+
+      return mapRegisterToRecord(newRegister);
     });
   }
 
   async updateCashRegister(cashRegisterCode: string, input: UpdateCashRegisterInput): Promise<CashRegisterRecord> {
-    return withTransaction(async (client) => {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const normalizedCode = normalizeCode(cashRegisterCode);
-      const registerQuery = await client.query<RegisterDbRow & { warehouse_id: number }>(
-        `SELECT
-           cr.id,
-           cr.code,
-           cr.name,
-           cr.warehouse_id,
-           w.code AS warehouse_code,
-           w.name AS warehouse_name,
-           cr.allow_manual_warehouse_override,
-           cr.is_active,
-           cr.notes,
-           cr.created_at,
-           cr.updated_at
-         FROM app.cash_registers cr
-         INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-         WHERE UPPER(cr.code) = $1
-         LIMIT 1`,
-        [normalizedCode]
-      );
 
-      const current = registerQuery.rows[0];
-      if (!current) {
+      const currentRegister = await tx.cash_registers.findUnique({
+        where: { code: normalizedCode },
+        include: {
+          warehouses: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+            },
+          },
+        },
+      });
+
+      if (!currentRegister) {
         throw new Error(`La caja ${normalizedCode} no existe`);
       }
 
-      let targetWarehouseId = current.warehouse_id;
+      let targetWarehouseId = currentRegister.warehouse_id;
 
       if (typeof input.warehouseCode === "string" && input.warehouseCode.trim().length > 0) {
-        const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
-        const warehouseResult = await client.query<{ id: number; code: string; name: string }>(
-          `SELECT id, code, name
-           FROM app.warehouses
-           WHERE UPPER(code) = $1 AND is_active = TRUE
-           LIMIT 1`,
-          [normalizedWarehouseCode]
-        );
-        const warehouseRow = warehouseResult.rows[0];
-        if (!warehouseRow) {
-          throw new Error(`El almacén ${normalizedWarehouseCode} no existe o está inactivo`);
+        const normalizedInputWarehouseCode = normalizeCode(input.warehouseCode);
+        const newWarehouse = await tx.warehouses.findFirst({
+          where: { code: normalizedInputWarehouseCode, is_active: true },
+          select: { id: true, code: true, name: true },
+        });
+
+        if (!newWarehouse) {
+          throw new Error(`El almacén ${normalizedInputWarehouseCode} no existe o está inactivo`);
         }
-        targetWarehouseId = warehouseRow.id;
+        targetWarehouseId = newWarehouse.id;
       }
 
-      const updates: string[] = [];
-      const values: unknown[] = [];
-      let index = 1;
-
-      if (typeof input.name === "string") {
-        updates.push(`name = $${index++}`);
-        values.push(input.name.trim());
-      }
-
-      if (typeof input.allowManualWarehouseOverride === "boolean") {
-        updates.push(`allow_manual_warehouse_override = $${index++}`);
-        values.push(input.allowManualWarehouseOverride);
-      }
-
-      if (typeof input.isActive === "boolean") {
-        updates.push(`is_active = $${index++}`);
-        values.push(input.isActive);
-      }
-
-      if (typeof input.notes !== "undefined") {
-        updates.push(`notes = $${index++}`);
-        values.push(input.notes?.trim() ? input.notes.trim().slice(0, 250) : null);
-      }
-
-      if (targetWarehouseId !== current.warehouse_id) {
-        updates.push(`warehouse_id = $${index++}`);
-        values.push(targetWarehouseId);
-      }
-
-      if (updates.length === 0) {
-        return mapRegisterRow(current);
-      }
-
-      values.push(normalizedCode);
-      await client.query(
-        `UPDATE app.cash_registers
-         SET ${updates.join(", ")}
-         WHERE UPPER(code) = $${index}
-         RETURNING id`,
-        values
-      );
-
-      const refreshed = await client.query<RegisterDbRow>(
-        `SELECT
-           cr.id,
-           cr.code,
-           cr.name,
-           cr.warehouse_id,
-           w.code AS warehouse_code,
-           w.name AS warehouse_name,
-           cr.allow_manual_warehouse_override,
-           cr.is_active,
-           cr.notes,
-           cr.created_at,
-           cr.updated_at
-         FROM app.cash_registers cr
-         INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-         WHERE UPPER(cr.code) = $1
-         LIMIT 1`,
-        [normalizedCode]
-      );
-
-      const row = refreshed.rows[0];
-      return mapRegisterRow({
-        id: row.id,
-        code: row.code,
-        name: row.name,
-        warehouse_id: row.warehouse_id,
-        warehouse_code: row.warehouse_code,
-        warehouse_name: row.warehouse_name,
-        allow_manual_warehouse_override: row.allow_manual_warehouse_override,
-        is_active: row.is_active,
-        notes: row.notes,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
+      const updatedRegister = await tx.cash_registers.update({
+        where: { code: normalizedCode },
+        data: {
+          name: input.name?.trim(),
+          allow_manual_warehouse_override: input.allowManualWarehouseOverride,
+          is_active: input.isActive,
+          notes: input.notes?.trim() ? input.notes.trim().slice(0, 250) : null,
+          warehouse_id: targetWarehouseId,
+        },
+        include: {
+          warehouses: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+            },
+          },
+        },
       });
+
+      return mapRegisterToRecord(updatedRegister);
     });
   }
 
   async listCashRegistersForAdmin(adminUserId: number): Promise<CashRegisterAssignment[]> {
-    const result = await query<{
-      cash_register_id: number;
-      cash_register_code: string;
-      cash_register_name: string;
-      allow_manual_warehouse_override: boolean;
-      warehouse_id: number;
-      warehouse_code: string;
-      warehouse_name: string;
-      is_default: boolean;
-    }>(
-      `SELECT
-         cru.cash_register_id,
-         cr.code AS cash_register_code,
-         cr.name AS cash_register_name,
-         cr.allow_manual_warehouse_override,
-         cr.warehouse_id,
-         w.code AS warehouse_code,
-         w.name AS warehouse_name,
-         cru.is_default
-       FROM app.cash_register_users cru
-       INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
-       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
-       WHERE cru.admin_user_id = $1
-       ORDER BY cru.is_default DESC, cr.code ASC`,
-      [adminUserId]
-    );
+    const assignments = await this.prisma.cash_register_users.findMany({
+      where: { admin_user_id: adminUserId, cash_registers: { is_active: true } }, // Filter active cash registers here
+      include: {
+        cash_registers: {
+          include: {
+            warehouses: {
+              select: { id: true, code: true, name: true },
+            },
+          },
+        },
+      },
+      orderBy: [{ is_default: "desc" }, { cash_registers: { code: "asc" } }],
+    });
 
-    return result.rows.map((row) => ({
-      cashRegisterId: Number(row.cash_register_id),
-      cashRegisterCode: row.cash_register_code,
-      cashRegisterName: row.cash_register_name,
-      allowManualWarehouseOverride: !!row.allow_manual_warehouse_override,
-      warehouseId: Number(row.warehouse_id),
-      warehouseCode: row.warehouse_code,
-      warehouseName: row.warehouse_name,
-      isDefault: !!row.is_default,
-    }));
+    return assignments
+      .filter((a) => a.cash_registers !== null && a.cash_registers.warehouses !== null)
+      .map((assignment: CashRegisterUserWithRelations) => ({
+        cashRegisterId: Number(assignment.cash_registers.id),
+        cashRegisterCode: assignment.cash_registers.code,
+        cashRegisterName: assignment.cash_registers.name,
+        allowManualWarehouseOverride: assignment.cash_registers.allow_manual_warehouse_override,
+        warehouseId: Number(assignment.cash_registers.warehouses.id),
+        warehouseCode: assignment.cash_registers.warehouses.code,
+        warehouseName: assignment.cash_registers.warehouses.name,
+        isDefault: assignment.is_default,
+      }));
   }
 
   async listCashRegisterAssignments(options: { adminUserIds?: number[] } = {}): Promise<CashRegisterAssignmentGroup[]> {
     const { adminUserIds } = options;
-    const params: unknown[] = [];
-    let filter = "";
+
+    const whereClause: Prisma.cash_register_usersWhereInput = {};
     if (Array.isArray(adminUserIds) && adminUserIds.length > 0) {
-      const placeholders = adminUserIds.map((_, idx) => `$${idx + 1}`).join(", ");
-      filter = `WHERE cru.admin_user_id IN (${placeholders})`;
-      params.push(...adminUserIds.map((id) => Number(id)));
+      whereClause.admin_user_id = { in: adminUserIds.map((id) => Number(id)) };
     }
 
-    const result = await query<{
-      admin_user_id: number;
-      is_default: boolean;
-      cash_register_id: number;
-      cash_register_code: string;
-      cash_register_name: string;
-      allow_manual_warehouse_override: boolean;
-      warehouse_id: number;
-      warehouse_code: string;
-      warehouse_name: string;
-    }>(
-      `SELECT
-         cru.admin_user_id,
-         cru.is_default,
-         cr.id AS cash_register_id,
-         cr.code AS cash_register_code,
-         cr.name AS cash_register_name,
-         cr.allow_manual_warehouse_override,
-         w.id AS warehouse_id,
-         w.code AS warehouse_code,
-         w.name AS warehouse_name
-       FROM app.cash_register_users cru
-       INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id
-       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-       ${filter}
-       ORDER BY cru.admin_user_id ASC, cru.is_default DESC, cr.code ASC`,
-      params
-    );
+    const assignments = await this.prisma.cash_register_users.findMany({
+      where: { ...whereClause, cash_registers: { is_active: true } }, // Filter active cash registers here
+      include: {
+        cash_registers: {
+          include: {
+            warehouses: {
+              select: { id: true, code: true, name: true },
+            },
+          },
+        },
+      },
+      orderBy: [{ admin_user_id: "asc" }, { is_default: "desc" }, { cash_registers: { code: "asc" } }],
+    });
 
     const grouped = new Map<number, CashRegisterAssignmentGroup>();
-    for (const row of result.rows) {
-      const assignment: CashRegisterAssignment = {
-        cashRegisterId: Number(row.cash_register_id),
-        cashRegisterCode: row.cash_register_code,
-        cashRegisterName: row.cash_register_name,
-        allowManualWarehouseOverride: !!row.allow_manual_warehouse_override,
-        warehouseId: Number(row.warehouse_id),
-        warehouseCode: row.warehouse_code,
-        warehouseName: row.warehouse_name,
-        isDefault: !!row.is_default,
+    for (const assignment of assignments) {
+      if (!assignment.cash_registers || !assignment.cash_registers.warehouses) continue;
+
+      const mappedAssignment: CashRegisterAssignment = {
+        cashRegisterId: Number(assignment.cash_registers.id),
+        cashRegisterCode: assignment.cash_registers.code,
+        cashRegisterName: assignment.cash_registers.name,
+        allowManualWarehouseOverride: assignment.cash_registers.allow_manual_warehouse_override,
+        warehouseId: Number(assignment.cash_registers.warehouses.id),
+        warehouseCode: assignment.cash_registers.warehouses.code,
+        warehouseName: assignment.cash_registers.warehouses.name,
+        isDefault: assignment.is_default,
       };
 
-      const existing = grouped.get(row.admin_user_id);
+      const existing = grouped.get(Number(assignment.admin_user_id));
       if (!existing) {
-        grouped.set(row.admin_user_id, {
-          adminUserId: Number(row.admin_user_id),
-          assignments: [assignment],
-          defaultCashRegisterId: assignment.isDefault ? assignment.cashRegisterId : null,
+        grouped.set(Number(assignment.admin_user_id), {
+          adminUserId: Number(assignment.admin_user_id),
+          assignments: [mappedAssignment],
+          defaultCashRegisterId: mappedAssignment.isDefault ? mappedAssignment.cashRegisterId : null,
         });
       } else {
-        existing.assignments.push(assignment);
-        if (assignment.isDefault) {
-          existing.defaultCashRegisterId = assignment.cashRegisterId;
+        existing.assignments.push(mappedAssignment);
+        if (mappedAssignment.isDefault) {
+          existing.defaultCashRegisterId = mappedAssignment.cashRegisterId;
         }
       }
     }
@@ -426,213 +301,207 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     makeDefault?: boolean;
   }): Promise<void> {
     const { adminUserId, cashRegisterCode, makeDefault = false } = params;
-    await withTransaction(async (client) => {
+    await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const normalizedCode = normalizeCode(cashRegisterCode);
-      const registerResult = await client.query<{ id: number }>(
-        `SELECT id
-         FROM app.cash_registers
-         WHERE UPPER(code) = $1 AND is_active = TRUE
-         LIMIT 1`,
-        [normalizedCode]
-      );
+      const register = await tx.cash_registers.findFirst({
+        where: { code: normalizedCode, is_active: true },
+        select: { id: true },
+      });
 
-      const row = registerResult.rows[0];
-      if (!row) {
+      if (!register) {
         throw new Error(`La caja ${normalizedCode} no existe o está inactiva`);
       }
 
       if (makeDefault) {
-        await client.query(
-          `UPDATE app.cash_register_users
-           SET is_default = FALSE
-           WHERE admin_user_id = $1`,
-          [adminUserId]
-        );
+        await tx.cash_register_users.updateMany({
+          where: { admin_user_id: adminUserId },
+          data: { is_default: false },
+        });
       }
 
-      await client.query(
-        `INSERT INTO app.cash_register_users (cash_register_id, admin_user_id, is_default)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (cash_register_id, admin_user_id)
-         DO UPDATE SET is_default = EXCLUDED.is_default, assigned_at = CURRENT_TIMESTAMP`,
-        [row.id, adminUserId, makeDefault]
-      );
+      await tx.cash_register_users.upsert({
+        where: {
+          cash_register_id_admin_user_id: {
+            cash_register_id: register.id,
+            admin_user_id: adminUserId,
+          },
+        },
+        update: {
+          is_default: makeDefault,
+          assigned_at: new Date(),
+        },
+        create: {
+          cash_register_id: register.id,
+          admin_user_id: adminUserId,
+          is_default: makeDefault,
+        },
+      });
     });
   }
 
   async unassignCashRegisterFromAdmin(params: { adminUserId: number; cashRegisterCode: string }): Promise<void> {
     const { adminUserId, cashRegisterCode } = params;
-    await withTransaction(async (client) => {
+    await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const normalizedCode = normalizeCode(cashRegisterCode);
-      const registerResult = await client.query<{ id: number }>(
-        `SELECT id
-         FROM app.cash_registers
-         WHERE UPPER(code) = $1
-         LIMIT 1`,
-        [normalizedCode]
-      );
+      const register = await tx.cash_registers.findFirst({
+        where: { code: normalizedCode },
+        select: { id: true },
+      });
 
-      const row = registerResult.rows[0];
-      if (!row) {
+      if (!register) {
         throw new Error(`La caja ${normalizedCode} no existe`);
       }
 
-      await client.query(
-        `DELETE FROM app.cash_register_users
-         WHERE admin_user_id = $1 AND cash_register_id = $2`,
-        [adminUserId, row.id]
-      );
+      await tx.cash_register_users.delete({
+        where: {
+          cash_register_id_admin_user_id: {
+            cash_register_id: register.id,
+            admin_user_id: adminUserId,
+          },
+        },
+      });
     });
   }
 
   async setDefaultCashRegisterForAdmin(params: { adminUserId: number; cashRegisterCode: string }): Promise<void> {
     const { adminUserId, cashRegisterCode } = params;
-    await withTransaction(async (client) => {
+    await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const normalizedCode = normalizeCode(cashRegisterCode);
-      const registerResult = await client.query<{ id: number }>(
-        `SELECT id
-         FROM app.cash_registers
-         WHERE UPPER(code) = $1 AND is_active = TRUE
-         LIMIT 1`,
-        [normalizedCode]
-      );
+      const register = await tx.cash_registers.findFirst({
+        where: { code: normalizedCode, is_active: true },
+        select: { id: true },
+      });
 
-      const row = registerResult.rows[0];
-      if (!row) {
+      if (!register) {
         throw new Error(`La caja ${normalizedCode} no existe o está inactiva`);
       }
 
-      const assignmentResult = await client.query(
-        `SELECT 1
-         FROM app.cash_register_users
-         WHERE admin_user_id = $1 AND cash_register_id = $2
-         LIMIT 1`,
-        [adminUserId, row.id]
-      );
+      const assignment = await tx.cash_register_users.findUnique({
+        where: {
+          cash_register_id_admin_user_id: {
+            cash_register_id: register.id,
+            admin_user_id: adminUserId,
+          },
+        },
+      });
 
-      if (assignmentResult.rowCount === 0) {
+      if (!assignment) {
         throw new Error("La caja no está asignada al usuario");
       }
 
-      await client.query(
-        `UPDATE app.cash_register_users
-         SET is_default = FALSE
-         WHERE admin_user_id = $1`,
-        [adminUserId]
-      );
+      await tx.cash_register_users.updateMany({
+        where: { admin_user_id: adminUserId },
+        data: { is_default: false },
+      });
 
-      await client.query(
-        `UPDATE app.cash_register_users
-         SET is_default = TRUE
-         WHERE admin_user_id = $1 AND cash_register_id = $2`,
-        [adminUserId, row.id]
-      );
+      await tx.cash_register_users.update({
+        where: {
+          cash_register_id_admin_user_id: {
+            cash_register_id: register.id,
+            admin_user_id: adminUserId,
+          },
+        },
+        data: { is_default: true },
+      });
     });
   }
 
   async getActiveCashRegisterSessionByAdmin(adminUserId: number): Promise<CashRegisterSessionRecord | null> {
-    const result = await query<SessionDbRow>(
-      `SELECT
-         s.id,
-         s.status,
-         s.admin_user_id,
-         s.opening_amount,
-         s.opening_at,
-         s.opening_notes,
-         s.closing_amount,
-         s.closing_at,
-         s.closing_notes,
-         s.closing_user_id,
-         s.totals_snapshot,
-         cr.id AS cash_register_id,
-         cr.code AS cash_register_code,
-         cr.name AS cash_register_name,
-         cr.allow_manual_warehouse_override,
-         w.id AS warehouse_id,
-         w.code AS warehouse_code,
-         w.name AS warehouse_name,
-         cru.is_default
-       FROM app.cash_register_sessions s
-       INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
-       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-       LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
-       WHERE s.admin_user_id = $1 AND s.status = 'OPEN'
-       ORDER BY s.opening_at DESC
-       LIMIT 1`,
-      [adminUserId]
-    );
-    const row = result.rows[0];
-    return row ? mapSessionRow(row) : null;
+    const session = await this.prisma.cash_register_sessions.findFirst({
+      where: { admin_user_id: adminUserId, status: "OPEN" },
+      include: {
+        cash_registers: {
+          include: {
+            warehouses: {
+              select: { id: true, code: true, name: true },
+            },
+          },
+        },
+      },
+      orderBy: { opening_at: "desc" },
+    });
+
+    if (!session || !session.cash_registers || !session.cash_registers.warehouses) return null;
+
+    // Simulate is_default from cash_register_users for mapping
+    const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
+      where: {
+        cash_register_id_admin_user_id: {
+          cash_register_id: session.cash_register_id,
+          admin_user_id: adminUserId,
+        },
+      },
+      select: { is_default: true },
+    });
+
+    return mapSessionToRecord({ ...session, is_default: cashRegisterUser?.is_default ?? false });
   }
 
   async listCashRegisterSessionsForAdmin(adminUserId: number, options: { limit?: number } = {}): Promise<CashRegisterSessionRecord[]> {
     const limit = Number.isFinite(options.limit) && options.limit && options.limit > 0 ? Math.min(Math.trunc(options.limit), 50) : 10;
-    const result = await query<SessionDbRow>(
-      `SELECT
-         s.id,
-         s.status,
-         s.admin_user_id,
-         s.opening_amount,
-         s.opening_at,
-         s.opening_notes,
-         s.closing_amount,
-         s.closing_at,
-         s.closing_notes,
-         s.closing_user_id,
-         s.totals_snapshot,
-         cr.id AS cash_register_id,
-         cr.code AS cash_register_code,
-         cr.name AS cash_register_name,
-         cr.allow_manual_warehouse_override,
-         w.id AS warehouse_id,
-         w.code AS warehouse_code,
-         w.name AS warehouse_name,
-         cru.is_default
-       FROM app.cash_register_sessions s
-       INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
-       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-       LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
-       WHERE s.admin_user_id = $1
-       ORDER BY s.opening_at DESC
-       LIMIT $2`,
-      [adminUserId, limit]
-    );
 
-    return result.rows.map((row) => mapSessionRow(row));
+    const sessions = await this.prisma.cash_register_sessions.findMany({
+      where: { admin_user_id: adminUserId },
+      include: {
+        cash_registers: {
+          include: {
+            warehouses: {
+              select: { id: true, code: true, name: true },
+            },
+          },
+        },
+      },
+      orderBy: { opening_at: "desc" },
+      take: limit,
+    });
+
+    return Promise.all(sessions.map(async (session) => {
+      if (!session.cash_registers || !session.cash_registers.warehouses) {
+        // Handle cases where related data might be missing (e.g., if warehouse was deleted)
+        return mapSessionToRecord({ ...session, is_default: false, cashRegister: { ...session.cash_registers, warehouses: { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } } });
+      }
+
+      const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
+        where: {
+          cash_register_id_admin_user_id: {
+            cash_register_id: session.cash_register_id,
+            admin_user_id: adminUserId,
+          },
+        },
+        select: { is_default: true },
+      });
+      return mapSessionToRecord({ ...session, is_default: cashRegisterUser?.is_default ?? false });
+    }));
   }
 
   async getCashRegisterSessionById(sessionId: number): Promise<CashRegisterSessionRecord | null> {
-    const result = await query<SessionDbRow>(
-      `SELECT
-         s.id,
-         s.status,
-         s.admin_user_id,
-         s.opening_amount,
-         s.opening_at,
-         s.opening_notes,
-         s.closing_amount,
-         s.closing_at,
-         s.closing_notes,
-         s.closing_user_id,
-         s.totals_snapshot,
-         cr.id AS cash_register_id,
-         cr.code AS cash_register_code,
-         cr.name AS cash_register_name,
-         cr.allow_manual_warehouse_override,
-         w.id AS warehouse_id,
-         w.code AS warehouse_code,
-         w.name AS warehouse_name,
-         cru.is_default
-       FROM app.cash_register_sessions s
-       INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
-       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-       LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
-       WHERE s.id = $1
-       LIMIT 1`,
-      [sessionId]
-    );
-    const row = result.rows[0];
-    return row ? mapSessionRow(row) : null;
+    const session = await this.prisma.cash_register_sessions.findUnique({
+      where: { id: BigInt(sessionId) },
+      include: {
+        cash_registers: {
+          include: {
+            warehouses: {
+              select: { id: true, code: true, name: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!session || !session.cash_registers || !session.cash_registers.warehouses) return null;
+
+    // Simulate is_default from cash_register_users for mapping
+    const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
+      where: {
+        cash_register_id_admin_user_id: {
+          cash_register_id: session.cash_register_id,
+          admin_user_id: session.admin_user_id,
+        },
+      },
+      select: { is_default: true },
+    });
+
+    return mapSessionToRecord({ ...session, is_default: cashRegisterUser?.is_default ?? false });
   }
 
   async openCashRegisterSession(params: {
@@ -645,122 +514,77 @@ export class CashRegisterRepository implements ICashRegisterRepository {
   }): Promise<CashRegisterSessionRecord> {
     const { adminUserId, cashRegisterCode, openingAmount, openingNotes, allowUnassigned = false } = params;
 
-    return withTransaction(async (client) => {
-      type RegisterRow = {
-        cash_register_id: number;
-        cash_register_code: string;
-        cash_register_name: string;
-        allow_manual_warehouse_override: boolean;
-        warehouse_id: number;
-        warehouse_code: string;
-        warehouse_name: string;
-        is_default: boolean;
-      };
-
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const normalizedCode = normalizeCode(cashRegisterCode);
-      let registerRow: RegisterRow | undefined;
+      let targetCashRegister: CashRegisterWithWarehouse | null = null;
+      let isDefaultAssignment = false;
 
       if (allowUnassigned) {
-        const registerResult = await client.query<{
-          cash_register_id: number;
-          cash_register_code: string;
-          cash_register_name: string;
-          allow_manual_warehouse_override: boolean;
-          warehouse_id: number;
-          warehouse_code: string;
-          warehouse_name: string;
-          is_default: boolean;
-        }>(
-          `SELECT
-             cr.id AS cash_register_id,
-             cr.code AS cash_register_code,
-             cr.name AS cash_register_name,
-             cr.allow_manual_warehouse_override,
-             cr.warehouse_id,
-             w.code AS warehouse_code,
-             w.name AS warehouse_name,
-             FALSE AS is_default
-           FROM app.cash_registers cr
-           INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
-           WHERE cr.is_active = TRUE AND UPPER(cr.code) = $1
-           LIMIT 1`,
-          [normalizedCode]
-        );
-        registerRow = registerResult.rows[0];
+        targetCashRegister = await tx.cash_registers.findFirst({
+          where: { code: normalizedCode, is_active: true },
+          include: {
+            warehouses: {
+              select: { id: true, code: true, name: true },
+            },
+          },
+        });
       } else {
-        const registerResult = await client.query<RegisterRow>(
-          `SELECT
-             cru.cash_register_id,
-             cr.code AS cash_register_code,
-             cr.name AS cash_register_name,
-             cr.allow_manual_warehouse_override,
-             cr.warehouse_id,
-             w.code AS warehouse_code,
-             w.name AS warehouse_name,
-             cru.is_default
-           FROM app.cash_register_users cru
-           INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
-           INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
-           WHERE cru.admin_user_id = $1 AND UPPER(cr.code) = $2
-           LIMIT 1`,
-          [adminUserId, normalizedCode]
-        );
-        registerRow = registerResult.rows[0];
+        const assignment = await tx.cash_register_users.findFirst({
+          where: { admin_user_id: adminUserId, cash_registers: { code: normalizedCode, is_active: true } },
+          include: {
+            cash_registers: {
+              select: { id: true, code: true, name: true, allow_manual_warehouse_override: true, warehouse_id: true },
+              include: {
+                warehouses: {
+                  select: { id: true, code: true, name: true },
+                },
+              },
+            },
+          },
+        });
+        if (assignment) {
+          targetCashRegister = assignment.cash_registers;
+          isDefaultAssignment = assignment.is_default;
+        }
       }
 
-      if (!registerRow) {
-        throw new Error(`No tienes permisos para operar la caja ${cashRegisterCode}`);
+      if (!targetCashRegister || !targetCashRegister.warehouses) {
+        throw new Error(`No tienes permisos para operar la caja ${cashRegisterCode} o no existe/está inactiva`);
       }
 
-      const openForUser = await client.query(
-        "SELECT 1 FROM app.cash_register_sessions WHERE admin_user_id = $1 AND status = 'OPEN' LIMIT 1",
-        [adminUserId]
-      );
-      if (openForUser.rowCount && openForUser.rowCount > 0) {
+      const openForUser = await tx.cash_register_sessions.findFirst({
+        where: { admin_user_id: adminUserId, status: "OPEN" },
+      });
+      if (openForUser) {
         throw new Error("Ya tienes una caja abierta. Debes cerrarla antes de abrir otra.");
       }
 
-      const openForRegister = await client.query(
-        "SELECT 1 FROM app.cash_register_sessions WHERE cash_register_id = $1 AND status = 'OPEN' LIMIT 1",
-        [registerRow.cash_register_id]
-      );
-      if (openForRegister.rowCount && openForRegister.rowCount > 0) {
+      const openForRegister = await tx.cash_register_sessions.findFirst({
+        where: { cash_register_id: targetCashRegister.id, status: "OPEN" },
+      });
+      if (openForRegister) {
         throw new Error("La caja seleccionada ya cuenta con una apertura activa.");
       }
 
-      const insertResult = await client.query(
-        `INSERT INTO app.cash_register_sessions (
-           cash_register_id,
-           admin_user_id,
-           opening_amount,
-           opening_notes
-         ) VALUES ($1, $2, $3, $4)
-         RETURNING id, status, opening_amount, opening_at, opening_notes, closing_amount, closing_at, closing_notes, closing_user_id, totals_snapshot`,
-        [registerRow.cash_register_id, adminUserId, openingAmount, openingNotes]
-      );
-
-      const sessionRow = insertResult.rows[0];
-      return mapSessionRow({
-        id: Number(sessionRow.id),
-        status: String(sessionRow.status),
-        admin_user_id: adminUserId,
-        opening_amount: Number(sessionRow.opening_amount ?? 0),
-        opening_at: sessionRow.opening_at,
-        opening_notes: sessionRow.opening_notes ?? null,
-        closing_amount: sessionRow.closing_amount ?? null,
-        closing_at: sessionRow.closing_at ?? null,
-        closing_notes: sessionRow.closing_notes ?? null,
-        closing_user_id: sessionRow.closing_user_id ?? null,
-        totals_snapshot: sessionRow.totals_snapshot ?? null,
-        cash_register_id: registerRow.cash_register_id,
-        cash_register_code: registerRow.cash_register_code,
-        cash_register_name: registerRow.cash_register_name,
-        allow_manual_warehouse_override: registerRow.allow_manual_warehouse_override,
-        warehouse_id: registerRow.warehouse_id,
-        warehouse_code: registerRow.warehouse_code,
-        warehouse_name: registerRow.warehouse_name,
-        is_default: registerRow.is_default,
+      const newSession = await tx.cash_register_sessions.create({
+        data: {
+          cash_register_id: targetCashRegister.id,
+          admin_user_id: adminUserId,
+          opening_amount: openingAmount,
+          opening_notes: openingNotes,
+        },
+        include: {
+          cash_registers: {
+            include: {
+              warehouses: {
+                select: { id: true, code: true, name: true },
+              },
+            },
+          },
+        },
       });
+
+      return mapSessionToRecord({ ...newSession, is_default: isDefaultAssignment });
     });
   }
 
@@ -774,90 +598,84 @@ export class CashRegisterRepository implements ICashRegisterRepository {
   }): Promise<CashRegisterClosureSummary> {
     const { adminUserId, sessionId, closingAmount, payments, closingNotes, allowDifferentUser = false } = params;
 
-    return withTransaction(async (client) => {
-      const sessionQuery = await client.query<SessionDbRow>(
-        `SELECT
-           s.id,
-           s.status,
-           s.admin_user_id,
-           s.opening_amount,
-           s.opening_at,
-           s.opening_notes,
-           s.closing_amount,
-           s.closing_at,
-           s.closing_notes,
-           s.closing_user_id,
-           s.totals_snapshot,
-           cr.id AS cash_register_id,
-           cr.code AS cash_register_code,
-           cr.name AS cash_register_name,
-           cr.allow_manual_warehouse_override,
-           w.id AS warehouse_id,
-           w.code AS warehouse_code,
-           w.name AS warehouse_name,
-           cru.is_default
-         FROM app.cash_register_sessions s
-         INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
-         INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-         LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
-         WHERE s.id = COALESCE($1, (
-           SELECT id FROM app.cash_register_sessions WHERE admin_user_id = $2 AND status = 'OPEN' ORDER BY opening_at DESC LIMIT 1
-         ))
-         LIMIT 1`,
-        [sessionId ?? null, adminUserId]
-      );
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      let sessionToClose: CashRegisterSessionWithRelations | null = null;
 
-      const row = sessionQuery.rows[0];
-      if (!row) {
+      if (sessionId) {
+        sessionToClose = await tx.cash_register_sessions.findUnique({
+          where: { id: BigInt(sessionId) },
+          include: {
+            cash_registers: {
+              include: {
+                warehouses: {
+                  select: { id: true, code: true, name: true },
+                },
+              },
+            },
+          },
+        });
+      } else {
+        sessionToClose = await tx.cash_register_sessions.findFirst({
+          where: { admin_user_id: adminUserId, status: "OPEN" },
+          include: {
+            cash_registers: {
+              include: {
+                warehouses: {
+                  select: { id: true, code: true, name: true },
+                },
+              },
+            },
+          },
+          orderBy: { opening_at: "desc" },
+        });
+      }
+
+      if (!sessionToClose || !sessionToClose.cash_registers || !sessionToClose.cash_registers.warehouses) {
         throw new Error("No se encontró una apertura de caja activa");
       }
-      if (row.status !== "OPEN") {
+      if (sessionToClose.status !== "OPEN") {
         throw new Error("La sesión indicada ya fue cerrada");
       }
-      const sessionOwnerId = Number(row.admin_user_id);
+      const sessionOwnerId = Number(sessionToClose.admin_user_id);
       if (sessionOwnerId !== adminUserId && !allowDifferentUser) {
         throw new Error("Solo el usuario que abrió la caja puede cerrarla");
       }
 
-      const session = mapSessionRow(row);
+      // Simulate is_default for mapping
+      const cashRegisterUser = await tx.cash_register_users.findUnique({
+        where: {
+          cash_register_id_admin_user_id: {
+            cash_register_id: sessionToClose.cash_register_id,
+            admin_user_id: sessionOwnerId,
+          },
+        },
+        select: { is_default: true },
+      });
+      const mappedSession = mapSessionToRecord({ ...sessionToClose, is_default: cashRegisterUser?.is_default ?? false });
 
-      const expectedPaymentsResult = await client.query<{
-        payment_method: string;
-        tx_count: number;
-        total_amount: number;
-      }>(
-        `WITH invoices AS (
-           SELECT id
-           FROM app.invoices
-           WHERE cash_register_session_id = $1
-         )
-         SELECT
-           p.payment_method,
-           COUNT(*)::int AS tx_count,
-           COALESCE(SUM(p.amount), 0) AS total_amount
-         FROM app.invoice_payments p
-         INNER JOIN invoices i ON i.id = p.invoice_id
-         GROUP BY p.payment_method`,
-        [session.id]
-      );
+      const expectedPaymentsResult = await tx.invoice_payments.groupBy({
+        by: ["payment_method"],
+        where: {
+          invoices: {
+            cash_register_session_id: sessionToClose.id,
+          },
+        },
+        _sum: { amount: true },
+        _count: { invoice_id: true },
+      });
 
-      const expectedPayments: ExpectedPayment[] = expectedPaymentsResult.rows.map((row) => ({
+      const expectedPayments: ExpectedPayment[] = expectedPaymentsResult.map((row: { payment_method: string; _sum: { amount: Prisma.Decimal | null }; _count: { invoice_id: number } }) => ({
         method: row.payment_method.trim().toUpperCase(),
-        amount: Number(row.total_amount ?? 0),
-        txCount: Number(row.tx_count ?? 0),
+        amount: Number(row._sum.amount ?? 0),
+        txCount: Number(row._count.invoice_id ?? 0),
       }));
 
-      const invoiceCountResult = await client.query<{ total_invoices: number }>(
-        `SELECT COUNT(*)::int AS total_invoices
-         FROM app.invoices
-         WHERE cash_register_session_id = $1`,
-        [session.id]
-      );
-
-      const totalInvoices = invoiceCountResult.rows[0]?.total_invoices ?? 0;
+      const totalInvoices = await tx.invoices.count({
+        where: { cash_register_session_id: sessionToClose.id },
+      });
 
       const summary = buildClosureSummary({
-        session,
+        session: mappedSession,
         closingUserId: adminUserId,
         closingAmount,
         closingAt: new Date(),
@@ -867,44 +685,43 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         totalInvoices,
       });
 
-      await client.query(
-        `UPDATE app.cash_register_sessions
-         SET closing_amount = $1,
-             closing_at = NOW(),
-             closing_notes = $2,
-             closing_user_id = $3,
-             status = 'CLOSED',
-             totals_snapshot = $4
-         WHERE id = $5`,
-        [summary.closingAmount, summary.closingNotes, adminUserId, JSON.stringify(summary), session.id]
-      );
+      await tx.cash_register_sessions.update({
+        where: { id: sessionToClose.id },
+        data: {
+          closing_amount: summary.closingAmount,
+          closing_at: summary.closingAt,
+          closing_notes: summary.closingNotes,
+          closing_user_id: adminUserId,
+          status: "CLOSED",
+          totals_snapshot: summary as any, // Prisma JSON type
+        },
+      });
 
+      // Upsert cash_register_session_payments
       for (const payment of summary.payments) {
-        await client.query(
-          `INSERT INTO app.cash_register_session_payments (
-             session_id,
-             payment_method,
-             expected_amount,
-             reported_amount,
-             difference_amount,
-             transaction_count
-           ) VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (session_id, payment_method)
-           DO UPDATE SET
-             expected_amount = EXCLUDED.expected_amount,
-             reported_amount = EXCLUDED.reported_amount,
-             difference_amount = EXCLUDED.difference_amount,
-             transaction_count = EXCLUDED.transaction_count,
-             updated_at = NOW()`,
-          [
-            summary.sessionId,
-            payment.method,
-            payment.expectedAmount,
-            payment.reportedAmount,
-            payment.differenceAmount,
-            payment.transactionCount,
-          ]
-        );
+        await tx.cash_register_session_payments.upsert({
+          where: {
+            session_id_payment_method: {
+              session_id: summary.sessionId,
+              payment_method: payment.method,
+            },
+          },
+          update: {
+            expected_amount: payment.expectedAmount,
+            reported_amount: payment.reportedAmount,
+            difference_amount: payment.differenceAmount,
+            transaction_count: payment.transactionCount,
+            updated_at: new Date(),
+          },
+          create: {
+            session_id: summary.sessionId,
+            payment_method: payment.method,
+            expected_amount: payment.expectedAmount,
+            reported_amount: payment.reportedAmount,
+            difference_amount: payment.differenceAmount,
+            transaction_count: payment.transactionCount,
+          },
+        });
       }
 
       return summary;
@@ -921,74 +738,60 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       return null;
     }
 
-    const paymentsResult = await query<{
-      payment_method: string;
-      tx_count: number;
-      total_amount: number;
-    }>(
-      `WITH invoices AS (
-         SELECT id
-         FROM app.invoices
-         WHERE cash_register_session_id = $1
-       )
-       SELECT
-         p.payment_method,
-         COUNT(*)::int AS tx_count,
-         COALESCE(SUM(p.amount), 0) AS total_amount
-       FROM app.invoice_payments p
-       INNER JOIN invoices i ON i.id = p.invoice_id
-       GROUP BY p.payment_method`,
-      [sessionId]
-    );
+    const expectedPaymentsResult = await this.prisma.invoice_payments.groupBy({
+      by: ["payment_method"],
+      where: {
+        invoices: {
+          cash_register_session_id: BigInt(sessionId),
+        },
+      },
+      _sum: { amount: true },
+      _count: { invoice_id: true },
+    });
 
-    const payments: ExpectedPayment[] = paymentsResult.rows.map((row) => ({
+    const payments: ExpectedPayment[] = expectedPaymentsResult.map((row: { payment_method: string; _sum: { amount: Prisma.Decimal | null }; _count: { invoice_id: number } }) => ({
       method: row.payment_method.trim().toUpperCase(),
-      amount: Number(row.total_amount ?? 0),
-      txCount: Number(row.tx_count ?? 0),
+      amount: Number(row._sum.amount ?? 0),
+      txCount: Number(row._count.invoice_id ?? 0),
     }));
 
-    const invoiceCountResult = await query<{ total_invoices: number }>(
-      `SELECT COUNT(*)::int AS total_invoices
-       FROM app.invoices
-       WHERE cash_register_session_id = $1`,
-      [sessionId]
-    );
-
-    const totalInvoices = invoiceCountResult.rows[0]?.total_invoices ?? 0;
+    const totalInvoices = await this.prisma.invoices.count({
+      where: { cash_register_session_id: BigInt(sessionId) },
+    });
 
     return { session, payments, totalInvoices };
   }
 
   async listActiveCashRegisterSessions(): Promise<CashRegisterSessionRecord[]> {
-    const result = await query<SessionDbRow>(
-      `SELECT
-         s.id,
-         s.status,
-         s.admin_user_id,
-         s.opening_amount,
-         s.opening_at,
-         s.opening_notes,
-         s.closing_amount,
-         s.closing_at,
-         s.closing_notes,
-         s.closing_user_id,
-         s.totals_snapshot,
-         cr.id AS cash_register_id,
-         cr.code AS cash_register_code,
-         cr.name AS cash_register_name,
-         cr.allow_manual_warehouse_override,
-         w.id AS warehouse_id,
-         w.code AS warehouse_code,
-         w.name AS warehouse_name,
-         cru.is_default
-       FROM app.cash_register_sessions s
-       INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
-       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-       LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
-       WHERE s.status = 'OPEN'
-       ORDER BY s.opening_at ASC`
-    );
+    const sessions = await this.prisma.cash_register_sessions.findMany({
+      where: { status: "OPEN" },
+      include: {
+        cash_registers: {
+          include: {
+            warehouses: {
+              select: { id: true, code: true, name: true },
+            },
+          },
+        },
+      },
+      orderBy: { opening_at: "asc" },
+    });
 
-    return result.rows.map((row) => mapSessionRow(row));
+    return Promise.all(sessions.map(async (session) => {
+      if (!session.cash_registers || !session.cash_registers.warehouses) {
+        return mapSessionToRecord({ ...session, is_default: false, cashRegister: { ...session.cash_registers, warehouses: { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } } });
+      }
+
+      const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
+        where: {
+          cash_register_id_admin_user_id: {
+            cash_register_id: session.cash_register_id,
+            admin_user_id: session.admin_user_id,
+          },
+        },
+        select: { is_default: true },
+      });
+      return mapSessionToRecord({ ...session, is_default: cashRegisterUser?.is_default ?? false });
+    }));
   }
 }

@@ -40,6 +40,7 @@ export interface InvoiceInsertInput {
 }
 
 export interface InvoiceItemPersistence {
+  article_code?: string | null; // Added article_code
   description: string;
   quantity: number;
   unit_price: number;

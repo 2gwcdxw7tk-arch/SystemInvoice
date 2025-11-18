@@ -1,8 +1,8 @@
-// No importar Article directamente desde @prisma/client
-// Definir una interfaz local para Article o usar el tipo generado por Prisma a través del cliente.
+import { Prisma } from "@prisma/client";
 
+// Definir una interfaz local para Article compatible con Prisma
 export interface Article {
-  id: number;
+  id: bigint;
   article_code: string;
   name: string;
   classification_full_code: string | null;
@@ -16,7 +16,7 @@ export interface Article {
   classification_level1_id?: number | null;
   classification_level2_id?: number | null;
   classification_level3_id?: number | null;
-  default_warehouse_id?: number | null;
+  default_warehouse_id: number | null | undefined;
   // Propiedades adicionales para getArticleByCode
   c1_full_code?: string | null;
   c2_full_code?: string | null;
@@ -36,15 +36,15 @@ export interface IArticleRepository {
     classification_level1_id?: number | null;
     classification_level2_id?: number | null;
     classification_level3_id?: number | null;
-  }): Promise<{ id: number }>;
-  
+  }): Promise<{ id: bigint }>;
+
   getArticles(params: {
     price_list_code?: string;
     unit?: "RETAIL" | "STORAGE";
     on_date?: string;
   }): Promise<Array<Article & { price: { unit: "RETAIL" | "STORAGE"; base_price: number | null; start_date: string | null; end_date: string | null } | null }>>;
 
-  getArticleByCode(article_code: string): Promise<Article | null>;
+  getArticleByCode(article_code: string, tx?: Prisma.TransactionClient): Promise<Article | null>;
 
   deleteArticle(article_code: string): Promise<{ deleted: boolean }>;
 }
