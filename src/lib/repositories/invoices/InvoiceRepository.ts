@@ -1,19 +1,40 @@
-import { PrismaClient } from "@/lib/db/prisma";
+import { PrismaClient, prisma } from "@/lib/db/prisma";
 import type { Prisma } from "@prisma/client"; // Type-only Prisma namespace for TransactionClient
 import { inventoryService } from "@/lib/services/InventoryService";
 import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
 import type { IInvoiceRepository, InvoiceInsertResult, InvoicePersistenceInput } from "@/lib/repositories/invoices/IInvoiceRepository";
 
 export class InvoiceRepository implements IInvoiceRepository {
-  constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
+  private readonly prisma: PrismaClient;
+
+  constructor(prismaClient?: PrismaClient) {
+    this.prisma = prismaClient ?? prisma;
+  }
 
   async createInvoice(data: InvoicePersistenceInput): Promise<InvoiceInsertResult> {
     const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      // Validar claves foráneas opcionales para evitar violaciones de FK
+      let tableCode: string | null = data.table_code?.trim() || null;
+      if (tableCode) {
+        const tableExists = await tx.tables.findUnique({ where: { id: tableCode } });
+        if (!tableExists) {
+          tableCode = null;
+        }
+      }
+
+      let waiterCode: string | null = data.waiter_code?.trim() || null;
+      if (waiterCode) {
+        const waiterExists = await tx.waiters.findUnique({ where: { code: waiterCode } });
+        if (!waiterExists) {
+          waiterCode = null;
+        }
+      }
+
       const invoice = await tx.invoices.create({
         data: {
           invoice_number: data.invoice_number,
-          table_code: data.table_code,
-          waiter_code: data.waiter_code,
+          table_code: tableCode,
+          waiter_code: waiterCode,
           invoice_date: data.invoiceDate,
           origin_order_id: data.originOrderId,
           subtotal: data.subtotal,
@@ -83,7 +104,7 @@ export class InvoiceRepository implements IInvoiceRepository {
           invoiceId,
           invoiceNumber: data.invoice_number,
           invoiceDate: data.invoiceDate,
-          tableCode: data.table_code ?? null,
+          tableCode: tableCode ?? null,
           customerName: data.customer_name ?? null,
           lines: movementLines,
         });

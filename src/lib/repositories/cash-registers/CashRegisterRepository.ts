@@ -1,4 +1,4 @@
-import { PrismaClient } from "@/lib/db/prisma";
+import { PrismaClient, prisma } from "@/lib/db/prisma";
 import type { Prisma } from "@prisma/client"; // Type-only Prisma for TransactionClient
 import type { Decimal, InputJsonValue } from "@prisma/client/runtime/library";
 import { buildClosureSummary } from "@/lib/services/cash-registers/summary";
@@ -113,7 +113,11 @@ function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_def
 }
 
 export class CashRegisterRepository implements ICashRegisterRepository {
-  constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
+  private readonly prisma: PrismaClient;
+
+  constructor(prismaClient?: PrismaClient) {
+    this.prisma = prismaClient ?? prisma;
+  }
 
   async listCashRegisters(options: { includeInactive?: boolean } = {}): Promise<CashRegisterRecord[]> {
     const { includeInactive = false } = options;

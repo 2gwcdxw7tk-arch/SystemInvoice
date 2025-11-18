@@ -4,6 +4,7 @@ import { requireAdministrator, requireSession } from "@/lib/auth/access";
 import { ArticleService } from "@/lib/services/ArticleService";
 import { ArticleRepository } from "@/lib/repositories/ArticleRepository";
 import { unitService } from "@/lib/services/UnitService"; // reemplaza helpers legacy
+import { inventoryService } from "@/lib/services/InventoryService";
 
 const articleService = new ArticleService(new ArticleRepository());
 
@@ -31,18 +32,37 @@ export async function GET(request: NextRequest) {
   const unit = (searchParams.get("unit") as "RETAIL" | "STORAGE" | null) || undefined;
   const on_date = searchParams.get("on_date") || undefined;
   const include_units = searchParams.get("include_units") === "1";
+  const search = searchParams.get("search") || undefined;
+  const warehouse_code = searchParams.get("warehouse_code")?.trim()?.toUpperCase() || undefined;
   try {
     if (article_code) {
       const item = await articleService.getArticleByCode(article_code);
       if (!item) return NextResponse.json({ success: false, message: "Artículo no encontrado" }, { status: 404 });
       return NextResponse.json({ item });
     }
-    const data = await articleService.getArticles({ price_list_code, unit, on_date });
+    const data = await articleService.getArticles({ price_list_code, unit, on_date, search });
+    let stockMap: Record<string, number> | undefined;
+    if (warehouse_code) {
+      try {
+        const stocks = await inventoryService.getStockSummary({ warehouse_code });
+        if (stocks.length > 0) {
+          stockMap = stocks.reduce<Record<string, number>>((acc, item) => {
+            const code = item.article_code?.toUpperCase();
+            if (code && Number.isFinite(item.available_retail)) {
+              acc[code] = item.available_retail;
+            }
+            return acc;
+          }, {});
+        }
+      } catch (error) {
+        console.error("GET /api/articulos stock lookup error", error);
+      }
+    }
     if (include_units) {
       const units = await unitService.listUnits();
-      return NextResponse.json({ items: data, units });
+      return NextResponse.json(stockMap ? { items: data, units, stock: stockMap } : { items: data, units });
     }
-    return NextResponse.json({ items: data });
+    return NextResponse.json(stockMap ? { items: data, stock: stockMap } : { items: data });
   } catch (error) {
     console.error("GET /api/articulos error", error);
     return NextResponse.json({ success: false, message: "No se pudo recuperar artículos" }, { status: 500 });

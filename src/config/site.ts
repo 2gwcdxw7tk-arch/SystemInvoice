@@ -1,5 +1,6 @@
 const rawCompanyName = process.env.NEXT_PUBLIC_COMPANY_NAME?.trim();
 const rawCompanyAcronym = process.env.NEXT_PUBLIC_COMPANY_ACRONYM?.trim();
+const rawCompanyLogo = process.env.NEXT_PUBLIC_CLIENT_LOGO_URL?.trim();
 
 const companyName = rawCompanyName && rawCompanyName.length > 0 ? rawCompanyName : "Facturador";
 const companyAcronym =
@@ -15,6 +16,7 @@ const companyAcronym =
 export const siteConfig = {
   name: companyName,
   acronym: companyAcronym,
+  logoUrl: rawCompanyLogo && rawCompanyLogo.length > 0 ? rawCompanyLogo : null,
   description: `${companyName} centraliza facturación electrónica, inventario y operaciones en una sola herramienta.`,
   links: {
     github: "https://github.com/your-org/facturador",

@@ -42,6 +42,7 @@ export interface IArticleRepository {
     price_list_code?: string;
     unit?: "RETAIL" | "STORAGE";
     on_date?: string;
+    search?: string;
   }): Promise<Array<Article & { price: { unit: "RETAIL" | "STORAGE"; base_price: number | null; start_date: string | null; end_date: string | null } | null }>>;
 
   getArticleByCode(article_code: string, tx?: Prisma.TransactionClient): Promise<Article | null>;

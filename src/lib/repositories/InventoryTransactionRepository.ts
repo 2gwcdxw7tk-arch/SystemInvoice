@@ -1,4 +1,4 @@
-import { PrismaClient } from "@/lib/db/prisma";
+import { PrismaClient, prisma } from "@/lib/db/prisma";
 import type { Prisma } from "@prisma/client";
 import type { Decimal } from "@prisma/client/runtime/library";
 import type {
@@ -10,7 +10,11 @@ import type {
 } from "./IInventoryTransactionRepository";
 
 export class InventoryTransactionRepository implements IInventoryTransactionRepository {
-  constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
+  private readonly prisma: PrismaClient;
+
+  constructor(prismaClient?: PrismaClient) {
+    this.prisma = prismaClient ?? prisma;
+  }
 
   async createTransaction(
     data: InventoryTransactionCreateInput,

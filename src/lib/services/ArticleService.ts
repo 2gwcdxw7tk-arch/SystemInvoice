@@ -92,11 +92,15 @@ export class ArticleService {
     price_list_code?: string;
     unit?: "RETAIL" | "STORAGE";
     on_date?: string;
+    search?: string;
   }): Promise<Array<Article & { price: { unit: "RETAIL" | "STORAGE"; base_price: number | null; start_date: string | null; end_date: string | null } | null }>> {
+    const { search, ...baseParams } = params;
+    const normalizedSearch = search?.trim().toLowerCase() ?? "";
+
     if (env.useMockData) {
-      const priceListCode = (params.price_list_code ? params.price_list_code : await resolveDefaultPriceListCode()).toUpperCase();
+      const priceListCode = (baseParams.price_list_code ? baseParams.price_list_code : await resolveDefaultPriceListCode()).toUpperCase();
       const today = params.on_date || new Date().toISOString().slice(0,10);
-      const preferUnit = params.unit || "RETAIL";
+      const preferUnit = baseParams.unit || "RETAIL";
 
       const pl = mockPriceLists.find(p => p.code.toUpperCase() === priceListCode);
       // Resolver nombres de unidades desde el catálogo de unidades
@@ -119,9 +123,24 @@ export class ArticleService {
         if (preferUnit === "STORAGE") price = price * a.conversion_factor;
         return { ...a, storage_unit: suName, retail_unit: ruName, price: { unit, base_price: price, start_date: base.start_date, end_date: base.end_date } };
       });
-      return out;
+      if (!normalizedSearch) {
+        return out;
+      }
+      return out.filter((item) => {
+        const code = item.article_code?.toLowerCase() ?? "";
+        const name = item.name?.toLowerCase() ?? "";
+        return code.includes(normalizedSearch) || name.includes(normalizedSearch);
+      });
     }
-    return this.articleRepository.getArticles(params);
+    const results = await this.articleRepository.getArticles({ ...baseParams, search });
+    if (!normalizedSearch) {
+      return results;
+    }
+    return results.filter((item) => {
+      const code = item.article_code?.toLowerCase() ?? "";
+      const name = item.name?.toLowerCase() ?? "";
+      return code.includes(normalizedSearch) || name.includes(normalizedSearch);
+    });
   }
 
   async getArticleByCode(article_code: string): Promise<Article | null> {

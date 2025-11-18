@@ -102,6 +102,7 @@ El endpoint `GET /api/health` valida la conectividad.
 | --- | --- | --- |
 | `NEXT_PUBLIC_COMPANY_NAME` | Nombre comercial mostrado en la interfaz y en tickets | `Facturador POS` |
 | `NEXT_PUBLIC_COMPANY_ACRONYM` | Sigla corta para badges y encabezados | `FAC` |
+| `NEXT_PUBLIC_CLIENT_LOGO_URL` | Ruta absoluta o relativa del logotipo mostrado en login y barra superior | `/logos/client.svg` |
 | `NEXT_APP_URL` | URL base usada en redirecciones, enlaces absolutos y correos | `http://localhost:3000` |
 | `NEXT_PUBLIC_LOCAL_CURRENCY_CODE` | Código ISO de la moneda principal | `MXN` |
 | `NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL` | Símbolo de moneda principal | `$` |
@@ -289,12 +290,12 @@ VALUES ('2025-11-10', 17.38, 'MXN', 'USD', 'Banco de prueba');
 - Tokens de diseño centralizados en `src/app/globals.css`.
 - Utilidades `cn` (`src/lib/utils.ts`) y componentes base shadcn en `src/components/ui`.
 - Provider de tema en `src/components/providers/theme-provider.tsx`.
-- Header y toggler de tema (`src/components/layout/site-header.tsx`, `src/components/theme-toggle.tsx`).
-- Pantalla de inicio de sesión con modo administrador (usuario/contraseña) y modo mesero (PIN) en `src/app/page.tsx`.
+- Header y toggler de tema (`src/components/layout/site-header.tsx`, `src/components/theme-toggle.tsx`) reutilizan el logotipo configurable cuando está disponible.
+- Pantalla de inicio de sesión con modo administrador (usuario/contraseña) y modo mesero (PIN) en `src/app/page.tsx`, mostrando el logotipo definido en `NEXT_PUBLIC_CLIENT_LOGO_URL` si se proporciona.
 - Dashboard administrativo en `/dashboard` con menú lateral colapsable, métricas táctiles de ventas y recomendaciones operativas.
 - Facturación en `/facturacion`: vista inicial con menú de flujos internos. Desde allí se accede a **Facturación sin pedido** (facturas manuales o asignadas a mesas disponibles), **Facturación con pedido** (mesas ocupadas listas para cobro) y **Listas de precio** (administración de listas, activaciones, predeterminadas y mantenimiento de artículos/precios mediante modales con buscador). Cada flujo mantiene el historial de la sesión y soporta múltiples formas de pago, IVA opcional y ticket térmico 3".
 - Menú de artículos en `/articulos`: distribuye el mantenimiento en tres submódulos — **Catálogo de artículos** (`/articulos/catalogo`) con listado filtrable y formularios modales, **Unidades de medida** (`/articulos/unidades`) para mantener códigos, factores y estados, y **Ensamble de kits** (`/articulos/ensamble`) con listado de kits y modal de componentes usando `KitBuilder`.
-- Inventario en `/inventario`: nuevo hub que agrupa Kardex, Existencias, Registro de compras, Registro de consumos y Traspasos dentro del módulo. Cada subpágina ofrece filtros básicos con datos mock listos para conectar a SQL, manteniendo navegación táctil y botón de regreso consistente.
+- Inventario en `/inventario`: nuevo hub que agrupa Kardex, Existencias, Registro de compras, Registro de consumos y Traspasos dentro del módulo. Cada subpágina ofrece filtros básicos con datos mock listos para conectar a SQL, manteniendo navegación táctil y botón de regreso consistente. Kardex y Existencias ahora incluyen filtros multiselección para artículos y bodegas (doble clic abre los modales) y admiten vista previa de impresión en orientación horizontal.
 - Módulos base para `/mesas` y `/meseros`: vistas listas para alojar el mantenimiento operativo (zonas, asignaciones, credenciales) con estructura responsive y accesible, mientras se integran los formularios definitivos.
 
 ## Catálogo de artículos y precios
@@ -369,6 +370,13 @@ npx shadcn-ui@latest add button
 ```
 
 El proyecto ya está configurado con Tailwind + `tailwindcss-animate` y alias `@/*`.
+
+## Asociaciones artículo-bodega
+
+- El servicio `ArticleWarehouseService` (y su repositorio) administra la relación entre `app.articles` y `app.article_warehouses`, manteniendo un `default_warehouse_id` actualizado y permitiendo mock mode con las mismas firmas de método.
+- La API `GET/POST/DELETE /api/articulos/{article_code}/almacenes` expone las asociaciones disponibles, realiza upsert de cada vínculo, permite marcar un almacén como principal y elimina entradas sin tocar directamente las tablas desde controladores.
+- La UI incorpora la página `/articulos/[article_code]/almacenes`, disponible al pulsar el nuevo botón "Administrar bodegas" en el modal del catálogo, donde se listan las bodegas activas/inactivas junto con acciones para asociar, desasociar o marcar como primaria.
+- Este mantenimiento facilita que `InventoryService` y los movimientos de venta siempre encuentren una bodega válida y evita errores como “no está asociado a una bodega”; además reduce el uso del `DEFAULT_SALES_WAREHOUSE_CODE` solo a casos de dato faltante extremo.
 
 ## Docker
 

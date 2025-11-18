@@ -9,7 +9,7 @@ const DEFAULT_HISTORY_LIMIT = 7;
 type ExchangeRateEntity = Awaited<ReturnType<typeof prisma.exchange_rates.findMany>>[number];
 
 export class ExchangeRateRepository implements IExchangeRateRepository {
-  constructor(private readonly client = prisma) {}
+  private readonly client = prisma;
 
   async listRates(limit = DEFAULT_HISTORY_LIMIT): Promise<ExchangeRateRow[]> {
     const normalizedLimit = this.normalizeLimit(limit);

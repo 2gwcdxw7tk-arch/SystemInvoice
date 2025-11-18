@@ -36,7 +36,7 @@ import { IInventoryTransactionRepository } from "@/lib/repositories/IInventoryTr
 import { InventoryTransactionRepository } from "@/lib/repositories/InventoryTransactionRepository";
 import { IWarehouseStockRepository } from "@/lib/repositories/IWarehouseStockRepository";
 import { WarehouseStockRepository } from "@/lib/repositories/WarehouseStockRepository";
-import { PrismaClient } from "@/lib/db/prisma"; // Import PrismaClient for transaction context
+import { PrismaClient, prisma } from "@/lib/db/prisma"; // Import PrismaClient y reutiliza instancia compartida para transacciones
 
 interface ArticleDetail {
   id: number;
@@ -93,6 +93,7 @@ function parseDateInput(value?: string): Date {
   if (Number.isNaN(date.getTime())) {
     throw new Error("Fecha inválida");
   }
+  date.setHours(0, 0, 0, 0);
   return date;
 }
 
@@ -101,14 +102,18 @@ function generateTransactionCode(prefix: string): string {
 }
 
 export class InventoryService {
+  private readonly prisma: PrismaClient;
+
   constructor(
     private readonly articleRepository: IArticleRepository = new ArticleRepository(),
     private readonly articleKitRepository: IArticleKitRepository = new ArticleKitRepository(),
     private readonly warehouseRepository: IWarehouseRepository = new WarehouseRepository(),
     private readonly inventoryTransactionRepository: IInventoryTransactionRepository = new InventoryTransactionRepository(),
     private readonly warehouseStockRepository: IWarehouseStockRepository = new WarehouseStockRepository(),
-    private readonly prisma: PrismaClient = new PrismaClient(), // Added for transaction context
-  ) {}
+    prismaClient?: PrismaClient,
+  ) {
+    this.prisma = prismaClient ?? prisma;
+  }
 
   private async computeMovement(
     line: InventoryLineInput,
@@ -975,15 +980,21 @@ export class InventoryService {
 
   async listKardex(_filters?: KardexFilter): Promise<KardexMovementRow[]> {
     const filters = _filters ?? {};
+    const articleCodes = (filters.articles ?? (filters.article ? [filters.article] : []))
+      .map((code) => code.trim().toUpperCase())
+      .filter((code) => code.length > 0);
+    const warehouseCodes = (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
+      .map((code) => code.trim().toUpperCase())
+      .filter((code) => code.length > 0);
     const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
     const toDate = filters.to ? parseDateInput(filters.to) : undefined;
 
     const rows = await this.prisma.inventory_movements.findMany({
       where: {
-        ...(filters.article
-          ? { articles_inventory_movements_article_idToarticles: { article_code: filters.article } }
+        ...(articleCodes.length > 0
+          ? { articles_inventory_movements_article_idToarticles: { article_code: { in: articleCodes } } }
           : {}),
-        ...(filters.warehouse_code ? { warehouses: { code: filters.warehouse_code } } : {}),
+        ...(warehouseCodes.length > 0 ? { warehouses: { code: { in: warehouseCodes } } } : {}),
         ...(fromDate || toDate
           ? {
               inventory_transactions: {
@@ -993,19 +1004,21 @@ export class InventoryService {
           : {}),
       },
       orderBy: [
-        { inventory_transactions: { occurred_at: "asc" } },
-        { id: "asc" },
+        { inventory_transactions: { created_at: "asc" } },
+        { created_at: "asc" },
       ],
       select: {
         id: true,
         direction: true,
         quantity_retail: true,
+        created_at: true,
         warehouses: { select: { code: true, name: true } },
         inventory_transactions: {
           select: {
             transaction_code: true,
             transaction_type: true,
             occurred_at: true,
+            created_at: true,
             reference: true,
             counterparty_name: true,
           },
@@ -1038,10 +1051,12 @@ export class InventoryService {
       const prev = balances.get(key) ?? 0;
       const next = prev + sign * qtyRetail;
       balances.set(key, next);
+      const createdAtSource = r.created_at ?? trx.created_at ?? trx.occurred_at;
 
       result.push({
         id: String(r.id),
         occurred_at: trx.occurred_at.toISOString(),
+        created_at: createdAtSource.toISOString(),
         transaction_type: trx.transaction_type as TransactionType,
         transaction_code: trx.transaction_code,
         article_code: art.article_code,
@@ -1066,14 +1081,46 @@ export class InventoryService {
 
   async getStockSummary(_filters?: StockFilter): Promise<StockSummaryRow[]> {
     const filters = _filters ?? {};
+    const articleCodes = Array.from(
+      new Set(
+        (filters.articles ?? (filters.article ? [filters.article] : []))
+          .map((code) => code?.toUpperCase?.() ?? "")
+          .filter((code) => code.length > 0)
+      )
+    );
+    const warehouseCodes = Array.from(
+      new Set(
+        (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
+          .map((code) => code?.toUpperCase?.() ?? "")
+          .filter((code) => code.length > 0)
+      )
+    );
+
+    const whereClauses: Prisma.warehouse_stockWhereInput[] = [];
+
+    if (articleCodes.length > 0) {
+      whereClauses.push({ articles: { article_code: { in: articleCodes } } });
+    } else if (filters.article && filters.article.trim().length > 0) {
+      const term = filters.article.trim();
+      whereClauses.push({
+        OR: [
+          { articles: { article_code: { contains: term, mode: "insensitive" } } },
+          { articles: { name: { contains: term, mode: "insensitive" } } },
+        ],
+      });
+    }
+
+    if (warehouseCodes.length > 0) {
+      whereClauses.push({ warehouses: { code: { in: warehouseCodes } } });
+    } else if (filters.warehouse_code && filters.warehouse_code.trim().length > 0) {
+      whereClauses.push({ warehouses: { code: filters.warehouse_code.trim().toUpperCase() } });
+    }
+
     const stocks = await this.prisma.warehouse_stock.findMany({
-      where: {
-        ...(filters.warehouse_code ? { warehouses: { code: filters.warehouse_code } } : {}),
-        ...(filters.article ? { articles: { article_code: filters.article } } : {}),
-      },
+      where: whereClauses.length > 0 ? { AND: whereClauses } : undefined,
       orderBy: [
-        { warehouses: { name: "asc" } },
-        { articles: { name: "asc" } },
+        { articles: { article_code: "asc" } },
+        { warehouses: { code: "asc" } },
       ],
       select: {
         quantity_retail: true,

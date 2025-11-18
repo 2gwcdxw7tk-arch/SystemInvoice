@@ -63,14 +63,18 @@ export interface RegisterInvoiceMovementsInput {
 
 export interface KardexFilter {
   article?: string;
+  articles?: string[];
   from?: string;
   to?: string;
   warehouse_code?: string;
+  warehouse_codes?: string[];
 }
 
 export interface StockFilter {
   article?: string;
+  articles?: string[];
   warehouse_code?: string;
+  warehouse_codes?: string[];
 }
 
 export interface PurchaseListFilter {
@@ -89,6 +93,7 @@ export interface ConsumptionListFilter {
 export interface KardexMovementRow {
   id: string;
   occurred_at: string;
+  created_at: string;
   transaction_type: TransactionType;
   transaction_code: string;
   article_code: string;

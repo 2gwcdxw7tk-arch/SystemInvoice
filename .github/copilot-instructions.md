@@ -26,7 +26,8 @@
 - **Authentication**: Use `adminUserService` and `waiterService`. Add new operations in services/repositories before modifying handlers.
 - **Tables**: Use `TableService` (`src/lib/services/TableService.ts`) to manage table catalog, reservations, waiter snapshots and table state. API routes under `/api/tables/**` y `/api/meseros/tables/**` must consume this service (no `db/tables`).
 - **Monetary Values**: Always use `getCurrencyFormatter` or `formatCurrency` to ensure consistent formatting.
-- **Environment Variables**: Read at the module level and memoize when reused (e.g., `NEXT_PUBLIC_VAT_RATE`, `DEFAULT_PRICE_LIST_CODE`).
+- **Article–Warehouse Associations**: Use `ArticleWarehouseService` for listing/associating/desasociating bodegas de un artículo y para marcar bodega primaria. Este servicio sincroniza `articles.default_warehouse_id` y lo consumen `InventoryService` y los movimientos de venta. Nunca acceder directamente a tablas desde handlers.
+- **Environment Variables**: Read at the module level and memoize when reused (e.g., `NEXT_PUBLIC_VAT_RATE`, `DEFAULT_PRICE_LIST_CODE`, `DEFAULT_SALES_WAREHOUSE_CODE`). `NEXT_PUBLIC_CLIENT_LOGO_URL` controla el logotipo mostrado en login y barra superior.
 
 ## Conventions
 - **Forms**: Use controlled forms with `useState` and light sanitization (`replace(/[^0-9.,]/g, "")`).
@@ -39,6 +40,7 @@
 ## Data & Integration
   - `/api/articulos`: Accepts `price_list_code` and `unit`. The UI expects `items[].price.base_price`.
   - `/api/inventario/traspasos`: Handles warehouse transfers with detailed payload validation.
+  - `/api/articulos/[article_code]/almacenes`: GET/POST/DELETE para gestionar asociaciones artículo-bodega (requiere admin). Mantiene coherencia con `ArticleWarehouseService` y actualiza la bodega primaria.
   - `/api/reportes/**`: Supports `format=html` for printing in addition to JSON by default. The page `/reportes` includes a "Print" button that opens a modal with the printable HTML (and optionally you can open the direct URL in a new tab). In `/caja`, opening/closure reports also use a print modal (iframe) for in-place printing.
   - `/api/tables`: Admin endpoints for table catalog and availability (backed by `TableService`).
   - `/api/meseros/tables`: Waiter endpoints for selecting and updating table orders (backed by `TableService`).

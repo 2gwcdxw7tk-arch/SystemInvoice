@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -84,6 +85,7 @@ export default function ArticulosCatalogoPage() {
   const [class1, setClass1] = useState<ClassificationOption[]>([]);
   const [class2, setClass2] = useState<ClassificationOption[]>([]);
   const [class3, setClass3] = useState<ClassificationOption[]>([]);
+  const router = useRouter();
 
   async function loadArticles() {
     setLoading(true);
@@ -348,11 +350,23 @@ export default function ArticulosCatalogoPage() {
               </select>
             </div>
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Button type="button" disabled={creating || !form.article_code || !form.name} onClick={async ()=>{ await handleCreate(); setArticleModalOpen(false); }} className="rounded-2xl">
               {creating ? "Guardando..." : editingCode ? "Actualizar" : "Guardar artículo"}
             </Button>
             <Button type="button" variant="outline" onClick={() => setArticleModalOpen(false)} className="rounded-2xl">Cerrar</Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (!editingCode) return;
+                router.push(`/articulos/${encodeURIComponent(editingCode)}/almacenes`);
+              }}
+              disabled={!editingCode}
+              className="rounded-2xl px-4"
+            >
+              {editingCode ? "Administrar bodegas" : "Guarda para asociar bodegas"}
+            </Button>
           </div>
         </div>
       </Modal>

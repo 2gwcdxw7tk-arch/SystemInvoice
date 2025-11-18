@@ -183,6 +183,8 @@ type KardexQueryRow = {
   transaction_code: string;
   transaction_type: TransactionType;
   occurred_at: Date | string;
+  movement_created_at: Date | string | null;
+  transaction_created_at: Date | string | null;
   direction: MovementDirection;
   quantity_retail: number;
   article_code: string;
@@ -457,6 +459,7 @@ function parseDateInput(value?: string): Date {
   if (Number.isNaN(date.getTime())) {
     throw new Error("Fecha inválida");
   }
+  date.setHours(0, 0, 0, 0);
   return date;
 }
 
@@ -1918,10 +1921,24 @@ function matchesLike(value: string | null | undefined, filter?: string): boolean
 export async function listKardex(filters: KardexFilter = {}): Promise<KardexMovementRow[]> {
   if (env.useMockData) {
     let rows = mockMovements.slice();
-    if (filters.article) {
+    const articleCodes = new Set(
+      (filters.articles ?? (filters.article ? [filters.article] : []))
+        .map((code) => code?.toUpperCase?.() ?? "")
+        .filter((code) => code.length > 0)
+    );
+    const warehouseCodes = new Set(
+      (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
+        .map((code) => code?.toUpperCase?.() ?? "")
+        .filter((code) => code.length > 0)
+    );
+    if (articleCodes.size > 0) {
+      rows = rows.filter((row) => articleCodes.has(row.article_code?.toUpperCase()));
+    } else if (filters.article) {
       rows = rows.filter((row) => matchesLike(row.article_code, filters.article) || matchesLike(row.article_name, filters.article) || matchesLike(row.source_kit_code, filters.article));
     }
-    if (filters.warehouse_code) {
+    if (warehouseCodes.size > 0) {
+      rows = rows.filter((row) => warehouseCodes.has(row.warehouse_code?.toUpperCase()));
+    } else if (filters.warehouse_code) {
       rows = rows.filter((row) => row.warehouse_code === filters.warehouse_code);
     }
     if (filters.from) {
@@ -1933,7 +1950,14 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
       const upper = new Date(to.getTime() + 24 * 60 * 60 * 1000).toISOString();
       rows = rows.filter((row) => row.occurred_at < upper);
     }
-    rows.sort((a, b) => (a.occurred_at === b.occurred_at ? a.id - b.id : a.occurred_at.localeCompare(b.occurred_at)));
+    rows.sort((a, b) => {
+      const createdA = a.created_at ?? a.occurred_at;
+      const createdB = b.created_at ?? b.occurred_at;
+      if (createdA === createdB) {
+        return a.id - b.id;
+      }
+      return createdA.localeCompare(createdB);
+    });
     const balances = new Map<string, number>();
     return rows.map((row) => {
       const key = `${row.article_code}:${row.warehouse_code}`;
@@ -1946,6 +1970,7 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
       return {
         id: `mock-${row.id}`,
         occurred_at: row.occurred_at,
+        created_at: row.created_at ?? row.occurred_at,
         transaction_type: row.transaction_type,
         transaction_code: row.transaction_code,
         article_code: row.article_code,
@@ -1969,7 +1994,18 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
   const params: unknown[] = [];
   const clauses: string[] = [];
 
-  if (filters.article) {
+  const articleCodes = (filters.articles ?? (filters.article ? [filters.article] : []))
+    .map((code) => code?.toUpperCase?.() ?? "")
+    .filter((code) => code.length > 0);
+  const warehouseCodes = (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
+    .map((code) => code?.toUpperCase?.() ?? "")
+    .filter((code) => code.length > 0);
+
+  if (articleCodes.length > 0) {
+    const placeholders = articleCodes.map((_, index) => `$${params.length + index + 1}`);
+    params.push(...articleCodes);
+    clauses.push(`UPPER(a.article_code) IN (${placeholders.join(", ")})`);
+  } else if (filters.article) {
     params.push(`%${filters.article.toUpperCase()}%`);
     const placeholder = `$${params.length}`;
     clauses.push(`(
@@ -1978,7 +2014,11 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
       OR UPPER(kit.article_code) LIKE ${placeholder}
     )`);
   }
-  if (filters.warehouse_code) {
+  if (warehouseCodes.length > 0) {
+    const placeholders = warehouseCodes.map((_, index) => `$${params.length + index + 1}`);
+    params.push(...warehouseCodes);
+    clauses.push(`UPPER(w.code) IN (${placeholders.join(", ")})`);
+  } else if (filters.warehouse_code) {
     params.push(filters.warehouse_code.toUpperCase());
     clauses.push(`UPPER(w.code) = $${params.length}`);
   }
@@ -1999,6 +2039,8 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
        t.transaction_code,
        t.transaction_type,
        t.occurred_at,
+      m.created_at AS movement_created_at,
+      t.created_at AS transaction_created_at,
        m.direction,
        m.quantity_retail,
        a.article_code,
@@ -2019,7 +2061,7 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
      LEFT JOIN app.units ru ON ru.id = a.retail_unit_id
      LEFT JOIN app.units su ON su.id = a.storage_unit_id
      ${whereClause}
-     ORDER BY t.occurred_at ASC, m.id ASC`,
+     ORDER BY t.created_at ASC, m.created_at ASC, m.id ASC`,
     params
   );
   const balances = new Map<string, number>();
@@ -2033,9 +2075,14 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
     const conversionFactor = Number(row.conversion_factor || 0);
     const quantityStorage = conversionFactor > 0 ? quantityRetail / conversionFactor : quantityRetail;
     const balanceStorage = conversionFactor > 0 ? next / conversionFactor : next;
+    const createdSource = row.movement_created_at ?? row.transaction_created_at ?? row.occurred_at;
     return {
       id: `sql-${row.id}`,
       occurred_at: row.occurred_at instanceof Date ? row.occurred_at.toISOString() : new Date(row.occurred_at).toISOString(),
+      created_at:
+        createdSource instanceof Date
+          ? createdSource.toISOString()
+          : new Date(createdSource).toISOString(),
       transaction_type: row.transaction_type as TransactionType,
       transaction_code: row.transaction_code,
       article_code: row.article_code,
@@ -2058,11 +2105,23 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
 
 export async function getStockSummary(filters: StockFilter = {}): Promise<StockSummaryRow[]> {
   if (env.useMockData) {
+    const articleCodes = new Set(
+      (filters.articles ?? (filters.article ? [filters.article] : []))
+        .map((code) => code?.toUpperCase?.() ?? "")
+        .filter((code) => code.length > 0)
+    );
+    const warehouseCodes = new Set(
+      (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
+        .map((code) => code?.toUpperCase?.() ?? "")
+        .filter((code) => code.length > 0)
+    );
     const aggregated = new Map<string, StockSummaryRow & { conversion_factor: number }>();
     for (const movement of mockMovements) {
       if (movement.transaction_type === "CONSUMPTION" && movement.direction === "IN") continue;
-      if (filters.article && !matchesLike(movement.article_code, filters.article) && !matchesLike(movement.article_name, filters.article)) continue;
-      if (filters.warehouse_code && movement.warehouse_code !== filters.warehouse_code) continue;
+      if (articleCodes.size > 0 && !articleCodes.has(movement.article_code.toUpperCase())) continue;
+      if (articleCodes.size === 0 && filters.article && !matchesLike(movement.article_code, filters.article) && !matchesLike(movement.article_name, filters.article)) continue;
+      if (warehouseCodes.size > 0 && !warehouseCodes.has(movement.warehouse_code.toUpperCase())) continue;
+      if (warehouseCodes.size === 0 && filters.warehouse_code && movement.warehouse_code.toUpperCase() !== filters.warehouse_code.toUpperCase()) continue;
       const key = `${movement.article_code}:${movement.warehouse_code}`;
       let entry = aggregated.get(key);
       if (!entry) {
@@ -2098,7 +2157,18 @@ export async function getStockSummary(filters: StockFilter = {}): Promise<StockS
   const params: unknown[] = [];
   const clauses: string[] = [];
 
-  if (filters.article) {
+  const articleCodes = (filters.articles ?? (filters.article ? [filters.article] : []))
+    .map((code) => code?.toUpperCase?.() ?? "")
+    .filter((code) => code.length > 0);
+  const warehouseCodes = (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
+    .map((code) => code?.toUpperCase?.() ?? "")
+    .filter((code) => code.length > 0);
+
+  if (articleCodes.length > 0) {
+    const placeholders = articleCodes.map((_, index) => `$${params.length + index + 1}`);
+    params.push(...articleCodes);
+    clauses.push(`UPPER(a.article_code) IN (${placeholders.join(", ")})`);
+  } else if (filters.article) {
     params.push(`%${filters.article.toUpperCase()}%`);
     const placeholder = `$${params.length}`;
     clauses.push(`(
@@ -2106,7 +2176,12 @@ export async function getStockSummary(filters: StockFilter = {}): Promise<StockS
       OR UPPER(a.name) LIKE ${placeholder}
     )`);
   }
-  if (filters.warehouse_code) {
+
+  if (warehouseCodes.length > 0) {
+    const placeholders = warehouseCodes.map((_, index) => `$${params.length + index + 1}`);
+    params.push(...warehouseCodes);
+    clauses.push(`UPPER(w.code) IN (${placeholders.join(", ")})`);
+  } else if (filters.warehouse_code) {
     params.push(filters.warehouse_code.toUpperCase());
     clauses.push(`UPPER(w.code) = $${params.length}`);
   }

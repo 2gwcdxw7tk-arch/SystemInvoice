@@ -116,6 +116,7 @@ export class ArticleRepository implements IArticleRepository {
     price_list_code?: string;
     unit?: "RETAIL" | "STORAGE";
     on_date?: string;
+    search?: string;
   }): Promise<Array<Article & { price: { unit: "RETAIL" | "STORAGE"; base_price: number | null; start_date: string | null; end_date: string | null } | null }>> {
     const resolvedCode = params.price_list_code ?? (await priceListRepository.getDefaultPriceListCode());
     if (!resolvedCode) {
@@ -125,9 +126,20 @@ export class ArticleRepository implements IArticleRepository {
     const priceListCode = resolvedCode.toUpperCase();
     const referenceDate = normalizeDateInput(params.on_date);
     const preferUnit = params.unit ?? "RETAIL";
+    const searchTerm = params.search?.trim();
 
     const articlesWithPrice = await prisma.articles.findMany({
-      where: { is_active: true },
+      where: {
+        is_active: true,
+        ...(searchTerm
+          ? {
+              OR: [
+                { article_code: { contains: searchTerm, mode: "insensitive" } },
+                { name: { contains: searchTerm, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
       select: {
         id: true,
         article_code: true,

@@ -20,6 +20,7 @@ const envSchema = z
     NEXT_PUBLIC_COMPANY_ACRONYM: z.string().trim().optional(),
     DB_CONNECTION_STRING: z.string().trim().optional(),
     MOCK_DATA: z.string().trim().optional(),
+    NEXT_PUBLIC_CLIENT_LOGO_URL: z.string().trim().optional(),
     NEXT_PUBLIC_LOCAL_CURRENCY_CODE: z.string().trim().optional(),
     NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL: z.string().trim().optional(),
     NEXT_PUBLIC_FOREIGN_CURRENCY_CODE: z.string().trim().optional(),
@@ -53,7 +54,7 @@ const envSchema = z
     };
 
     const localCurrencyCode = resolveCode(value.NEXT_PUBLIC_LOCAL_CURRENCY_CODE, "MXN");
-  const localCurrencySymbol = resolveSymbol(value.NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL, "$");
+    const localCurrencySymbol = resolveSymbol(value.NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL, "$");
     const foreignCurrencyCode = resolveCode(value.NEXT_PUBLIC_FOREIGN_CURRENCY_CODE, "USD");
     const foreignCurrencySymbol = resolveSymbol(value.NEXT_PUBLIC_FOREIGN_CURRENCY_SYMBOL, "$");
     const defaultSalesWarehouseCode = resolveCode(value.DEFAULT_SALES_WAREHOUSE_CODE, "");
@@ -92,6 +93,10 @@ const envSchema = z
                 .map((word) => word[0]?.toUpperCase() ?? "")
                 .join("")
                 .slice(0, 4) || value.NEXT_PUBLIC_COMPANY_NAME.slice(0, 4).toUpperCase(),
+        logoUrl:
+          value.NEXT_PUBLIC_CLIENT_LOGO_URL && value.NEXT_PUBLIC_CLIENT_LOGO_URL.length > 0
+            ? value.NEXT_PUBLIC_CLIENT_LOGO_URL
+            : null,
       },
       isProduction: value.NODE_ENV === "production",
     };

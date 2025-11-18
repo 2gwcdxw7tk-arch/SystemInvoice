@@ -1,4 +1,4 @@
-import { PrismaClient } from "@/lib/db/prisma";
+import { PrismaClient, prisma } from "@/lib/db/prisma";
 
 export type PriceListRow = {
   id: number;
@@ -29,7 +29,11 @@ export type PriceListItemRow = {
 };
 
 export class PriceListRepository {
-  constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
+  private readonly prisma: PrismaClient;
+
+  constructor(prismaClient?: PrismaClient) {
+    this.prisma = prismaClient ?? prisma;
+  }
 
   async getDefaultPriceListCode(): Promise<string | null> {
     const row = await this.prisma.price_lists.findFirst({

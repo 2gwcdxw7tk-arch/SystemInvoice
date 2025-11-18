@@ -41,6 +41,32 @@ const invoiceSchema = z.object({
   payments: z.array(paymentSchema).default([]),
 });
 
+function parseInvoiceDate(value: string): Date {
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error("Fecha vacía");
+  }
+
+  const dateOnlyMatch = /^\d{4}-\d{2}-\d{2}$/.test(normalized);
+  if (dateOnlyMatch) {
+    const [year, month, day] = normalized.split("-").map((part) => Number(part));
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+      throw new Error("Fecha inválida");
+    }
+    const date = new Date(year, month - 1, day, 12, 0, 0, 0);
+    if (Number.isNaN(date.getTime())) {
+      throw new Error("Fecha inválida");
+    }
+    return date;
+  }
+
+  const parsed = new Date(normalized.includes("T") ? normalized : `${normalized}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("Fecha inválida");
+  }
+  return parsed;
+}
+
 export async function POST(request: NextRequest) {
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   const session = await parseSessionCookie(rawSession);
@@ -76,11 +102,17 @@ export async function POST(request: NextRequest) {
 
   try {
     const payload = parsed.data;
+    let invoiceDate: Date;
+    try {
+      invoiceDate = parseInvoiceDate(payload.invoice_date);
+    } catch {
+      return NextResponse.json({ success: false, message: "Fecha de factura inválida" }, { status: 400 });
+    }
     const result = await invoiceService.createInvoice({
       invoice_number: payload.invoice_number,
       table_code: payload.table_code ?? null,
       waiter_code: payload.waiter_code ?? null,
-      invoiceDate: new Date(payload.invoice_date),
+      invoiceDate,
       originOrderId: payload.origin_order_id ?? null,
       subtotal: payload.subtotal,
       service_charge: payload.service_charge,

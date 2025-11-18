@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Route } from "next";
 import { FormEvent, useMemo, useState, useTransition } from "react";
@@ -20,6 +21,7 @@ export default function Home() {
   const searchParams = useSearchParams();
   const [mode, setMode] = useState<LoginMode>("admin");
   const { setSession } = useSessionActions();
+  const logoUrl = siteConfig.logoUrl;
   const redirectTarget = useMemo<Route | null>(() => {
     const value = searchParams?.get("redirect");
     if (!value) return null;
@@ -168,6 +170,20 @@ export default function Home() {
     <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-muted/20 py-10">
       <Card className="w-full max-w-2xl border-none shadow-2xl shadow-primary/15">
         <CardHeader className="space-y-6 text-center">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center overflow-hidden rounded-3xl border border-muted/60 bg-background/90">
+            {logoUrl ? (
+              <Image
+                src={logoUrl}
+                alt={`Logotipo de ${siteConfig.name}`}
+                width={64}
+                height={64}
+                className="h-16 w-16 object-contain"
+                priority
+              />
+            ) : (
+              <span className="text-2xl font-semibold text-primary">{siteConfig.acronym}</span>
+            )}
+          </div>
           <CardTitle className="text-3xl font-semibold tracking-tight">{siteConfig.name}</CardTitle>
           <CardDescription className="text-base">
             Opera el punto de venta con una interfaz táctil optimizada para equipos administrativos y de salón.

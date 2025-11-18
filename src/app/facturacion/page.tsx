@@ -1791,6 +1791,7 @@ function FacturacionWorkspace({
     name?: string | null;
     price?: { base_price?: number | string | null } | null;
     unit?: string | null;
+    available_stock?: number | null;
   };
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
@@ -1806,6 +1807,38 @@ function FacturacionWorkspace({
   const [quickCodeInput, setQuickCodeInput] = useState("");
   const [quickDescriptionInput, setQuickDescriptionInput] = useState("");
   const quickCodeInputRef = useRef<HTMLInputElement | null>(null);
+  const [printModalOpen, setPrintModalOpen] = useState(false);
+  const [printDocument, setPrintDocument] = useState<string | null>(null);
+  const [printTitle, setPrintTitle] = useState<string>("Ticket listo para imprimir");
+  const [printReady, setPrintReady] = useState(false);
+  const printFrameRef = useRef<HTMLIFrameElement | null>(null);
+
+  const closePrintModal = useCallback(() => {
+    setPrintModalOpen(false);
+    setPrintDocument(null);
+    setPrintReady(false);
+  }, []);
+
+  const handleModalPrint = useCallback(() => {
+    const frame = printFrameRef.current;
+    const contentWindow = frame?.contentWindow;
+    if (!contentWindow) {
+      toast({ variant: "warning", title: "Impresión", description: "La vista previa todavía no está lista." });
+      return;
+    }
+    contentWindow.focus();
+    contentWindow.print();
+  }, [toast]);
+
+  const handleOpenPrintInTab = useCallback(() => {
+    if (!printDocument) return;
+    const externalWindow = window.open("", "_blank", "width=420,height=640,noopener,noreferrer");
+    if (!externalWindow) return;
+    externalWindow.document.write(printDocument);
+    externalWindow.document.close();
+    externalWindow.focus();
+  }, [printDocument]);
+
 
   const orderSelectionKey = useCallback((order: TableOrder) => order.tableId ?? `__order_${order.orderId}`, []);
 
@@ -1953,16 +1986,38 @@ function FacturacionWorkspace({
       catalogRequestedRef.current = true;
       setCatalogLoading(true);
       try {
-        const res = await fetch(`/api/articulos?price_list_code=${encodeURIComponent(activePriceListCode)}&unit=RETAIL`);
+        const params = new URLSearchParams({
+          price_list_code: activePriceListCode,
+          unit: "RETAIL",
+        });
+
+        const activeWarehouseCode = cashSessionState.activeSession?.cashRegister.warehouseCode;
+        if (activeWarehouseCode) {
+          params.set("warehouse_code", activeWarehouseCode);
+        }
+
+        const res = await fetch(`/api/articulos?${params.toString()}`);
         if (!res.ok) {
           throw new Error(await res.text());
         }
         const data = await res.json();
         const items = Array.isArray(data.items) ? (data.items as CatalogEntry[]) : [];
-        setCatalog(items);
+        const stockMap = data?.stock && typeof data.stock === "object" ? (data.stock as Record<string, number>) : {};
+
+        const enrichedItems = items.map((item) => {
+          const rawCode = typeof item.article_code === "string" ? item.article_code : String(item.article_code ?? "");
+          const normalizedCode = rawCode.trim().toUpperCase();
+          const rawStock = stockMap[normalizedCode] ?? stockMap[rawCode] ?? null;
+          return {
+            ...item,
+            available_stock: typeof rawStock === "number" && Number.isFinite(rawStock) ? rawStock : null,
+          } satisfies CatalogEntry;
+        });
+
+        setCatalog(enrichedItems);
         catalogPriceListRef.current = activePriceListCode;
-        catalogMetaRef.current.hasItems = items.length > 0;
-        return items;
+        catalogMetaRef.current.hasItems = enrichedItems.length > 0;
+        return enrichedItems;
       } catch (error) {
         console.error("Error cargando catálogo", error);
         toast({ variant: "error", title: "Catálogo", description: "No fue posible cargar el catálogo de artículos." });
@@ -1974,7 +2029,7 @@ function FacturacionWorkspace({
         catalogRequestedRef.current = false;
       }
     },
-    [defaultPriceListCode, manualPriceListCode, mode, selectedTableId, toast]
+    [cashSessionState.activeSession?.cashRegister.warehouseCode, defaultPriceListCode, manualPriceListCode, mode, selectedTableId, toast]
   );
 
   useEffect(() => {
@@ -2515,8 +2570,8 @@ function FacturacionWorkspace({
   return { id: null, invoiceNumber: null };
     }
     const normalizedTableCode = isDraft
-      ? (draftInvoice.reference.trim() || "MANUAL")
-      : selectedOrder!.tableId ?? selectedOrder!.orderCode;
+      ? null
+      : (selectedOrder!.tableId ?? null);
     const normalizedWaiter = isDraft
       ? (draftInvoice.waiter.trim() || "CAJA")
       : selectedOrder!.waiterCode ?? selectedOrder!.waiter ?? null;
@@ -2630,13 +2685,12 @@ function FacturacionWorkspace({
         <p class="muted">¡Gracias por su visita!</p>
       </div>`;
 
-    const win = window.open("", "_blank", "width=420,height=640,noopener,noreferrer");
-    if (!win) return;
-  win.document.write(`<!DOCTYPE html><html lang='es'><head><meta charSet='utf-8'/><title>Ticket ${invoiceLabel}</title><style>@page{size:80mm auto;margin:6mm;}body{font-family:'Roboto Mono',monospace;font-size:12px;width:80mm;margin:0 auto;color:#111}.ticket{width:100%}.title{text-align:center;font-weight:700;text-transform:uppercase;margin-bottom:4px}.muted{text-align:center;color:#555;margin:2px 0}.row{display:flex;justify-content:space-between;margin:2px 0}.row.total{font-weight:700;border-top:1px dashed #999;padding-top:4px}.separator{border-top:1px dashed #999;margin:6px 0}.modifiers{margin-left:8px;color:#555;font-size:11px}</style></head><body>${html}</body></html>`);
-    win.document.close();
-    win.focus();
-    win.print();
-    win.close();
+    const documentHtml = `<!DOCTYPE html><html lang='es'><head><meta charSet='utf-8'/><title>Ticket ${invoiceLabel}</title><style>@page{size:80mm auto;margin:6mm;}body{font-family:'Roboto Mono',monospace;font-size:12px;width:80mm;margin:0 auto;color:#111}.ticket{width:100%}.title{text-align:center;font-weight:700;text-transform:uppercase;margin-bottom:4px}.muted{text-align:center;color:#555;margin:2px 0}.row{display:flex;justify-content:space-between;margin:2px 0}.row.total{font-weight:700;border-top:1px dashed #999;padding-top:4px}.separator{border-top:1px dashed #999;margin:6px 0}.modifiers{margin-left:8px;color:#555;font-size:11px}</style></head><body>${html}</body></html>`;
+
+    setPrintDocument(documentHtml);
+    setPrintTitle(`Ticket ${result.invoiceNumber ?? invoiceLabel}`);
+    setPrintReady(false);
+    setPrintModalOpen(true);
 
     if (manualFlowActive) {
       resetManualInvoice();
@@ -3097,6 +3151,48 @@ function FacturacionWorkspace({
       </section>
 
       <Modal
+        open={printModalOpen}
+        onClose={closePrintModal}
+        title={printTitle}
+        description="Revisa el ticket antes de imprimir."
+        contentClassName="max-w-3xl"
+      >
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-3xl border bg-muted/40">
+            {printDocument ? (
+              <iframe
+                ref={printFrameRef}
+                srcDoc={printDocument}
+                title="Vista previa del ticket"
+                className="h-[520px] w-full bg-white"
+                onLoad={() => setPrintReady(true)}
+              />
+            ) : (
+              <div className="flex h-[320px] items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Preparando ticket…
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="text-xs text-muted-foreground">
+              Si la impresora no responde, abre el ticket en una nueva pestaña.
+            </span>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="ghost" onClick={closePrintModal}>
+                Cerrar
+              </Button>
+              <Button type="button" variant="outline" onClick={handleOpenPrintInTab} disabled={!printDocument}>
+                Abrir en pestaña
+              </Button>
+              <Button type="button" onClick={handleModalPrint} disabled={!printReady}>
+                Imprimir
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+      <Modal
         open={cashWarningModalOpen}
         onClose={() => setCashWarningModalOpen(true)}
         title="Apertura de caja requerida"
@@ -3182,12 +3278,13 @@ function FacturacionWorkspace({
                   <th className="px-4 py-2 font-medium">Código</th>
                   <th className="px-4 py-2 font-medium">Nombre</th>
                   <th className="px-4 py-2 font-medium">Precio base</th>
+                  <th className="px-4 py-2 text-right font-medium">Existencia</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {catalogLoading ? (
                   <tr>
-                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
                       Cargando catálogo...
                     </td>
                   </tr>
@@ -3219,12 +3316,17 @@ function FacturacionWorkspace({
                           <span className="block text-sm font-medium text-foreground">{item.name}</span>
                         </td>
                         <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">{formatCurrency(Number(item.price?.base_price ?? 0), { currency: "local" })}</td>
+                        <td className="px-4 py-2 text-right font-mono text-xs text-muted-foreground">
+                          {typeof item.available_stock === "number"
+                            ? item.available_stock.toLocaleString("es-NI", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+                            : "—"}
+                        </td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
                       No se encontraron artículos con los filtros aplicados.
                     </td>
                   </tr>

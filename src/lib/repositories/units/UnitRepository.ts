@@ -1,8 +1,12 @@
-import { PrismaClient } from "@/lib/db/prisma";
+import { PrismaClient, prisma } from "@/lib/db/prisma";
 import type { IUnitRepository, UnitRow, UpsertUnitInput } from "@/lib/repositories/units/IUnitRepository";
 
 export class UnitRepository implements IUnitRepository {
-  constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
+  private readonly prisma: PrismaClient;
+
+  constructor(prismaClient?: PrismaClient) {
+    this.prisma = prismaClient ?? prisma;
+  }
 
   async listUnits(): Promise<UnitRow[]> {
     const rows = await this.prisma.units.findMany({

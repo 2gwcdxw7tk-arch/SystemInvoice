@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { LogOut } from "lucide-react";
@@ -91,13 +92,27 @@ export function SiteHeader() {
   return (
     <header className="sticky top-0 z-50 border-b bg-background/85 backdrop-blur">
       <div className="container flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
-        <div className="flex min-h-[44px] items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold">
-          <span className="rounded bg-primary px-2 py-0.5 text-xs uppercase tracking-widest text-primary-foreground">
-            {siteConfig.acronym}
-          </span>
-          <span className="hidden text-sm font-medium text-muted-foreground sm:inline-flex">
-            {siteConfig.name}
-          </span>
+        <div className="flex min-h-[44px] items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold">
+          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-muted/60 bg-background/90">
+            {siteConfig.logoUrl ? (
+              <Image
+                src={siteConfig.logoUrl}
+                alt={`Logotipo de ${siteConfig.name}`}
+                width={36}
+                height={36}
+                className="h-9 w-9 object-contain"
+                priority
+              />
+            ) : (
+              <span className="text-sm font-semibold text-primary">{siteConfig.acronym}</span>
+            )}
+          </div>
+          <div className="flex flex-col leading-tight">
+            <span className="text-sm font-semibold text-foreground">{siteConfig.name}</span>
+            <span className="hidden text-xs uppercase tracking-widest text-muted-foreground sm:inline-flex">
+              {siteConfig.acronym}
+            </span>
+          </div>
         </div>
         <nav className="flex items-center gap-3">
           {session ? (

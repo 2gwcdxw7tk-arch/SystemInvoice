@@ -1,5 +1,3 @@
-import { POST as LoginPOST } from '@/app/api/login/route';
-
 // Mock services used by login
 jest.mock('@/lib/services/AdminUserService', () => ({
   adminUserService: {
@@ -26,11 +24,13 @@ jest.mock('@/lib/services/WaiterService', () => ({
   }
 }));
 
-// Provide a deterministic cookie name
-jest.mock('@/lib/auth/session', () => {
-  const actual = jest.requireActual('@/lib/auth/session');
-  return { ...actual, SESSION_COOKIE_NAME: 'facturador_session' };
-});
+// Fully mock auth/session to avoid importing `jose` (ESM)
+jest.mock('@/lib/auth/session', () => ({
+  SESSION_COOKIE_NAME: 'facturador_session',
+  SESSION_DURATION_MS: 1000 * 60 * 60 * 12,
+  createSessionCookie: jest.fn(async () => ({ value: 'mock.jwt.token', expires: new Date(Date.now() + 3600000) })),
+  createEmptySessionCookie: jest.fn(() => ({ value: '', expires: new Date(0) })),
+}));
 
 function makeReq(url: string, body: any, headers: Record<string, string> = {}) {
   return {
@@ -43,6 +43,8 @@ function makeReq(url: string, body: any, headers: Record<string, string> = {}) {
 
 describe('POST /api/login', () => {
   const baseUrl = 'http://localhost/api/login';
+  // Import the route after mocks are set up
+  const { POST: LoginPOST } = require('@/app/api/login/route');
 
   it('admin: login exitoso y setea cookie', async () => {
     const req = makeReq(baseUrl, { role: 'admin', username: 'admin@demo.test', password: 'Secret!' }, { 'user-agent': 'jest' });
