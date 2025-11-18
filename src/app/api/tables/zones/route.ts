@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { createTableZone, listTableZones } from "@/lib/db/tables";
+import { createTableZone, listTableZones } from "@/lib/services/TableService";
 
 const createPayloadSchema = z.object({
   name: z.string().trim().min(1, "Ingresa el nombre de la zona"),

@@ -1,27 +1,34 @@
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+import type { Decimal, JsonValue } from "@prisma/client/runtime/library";
 
 import { IOrderRepository, OrderStatus } from "./IOrderRepository";
 import type { KitchenOrder, KitchenOrderStatus } from "@/lib/db/orders";
-import { setTableOrderStatus } from "@/lib/db/tables";
+import { setTableOrderStatus } from "@/lib/services/TableService";
 import { prisma } from "@/lib/db/prisma";
 
-type OrderWithItems = Prisma.ordersGetPayload<{
-  include: {
-    order_items: {
-      select: {
-        id: true;
-        order_id: true;
-        article_code: true;
-        description: true;
-        quantity: true;
-        unit_price: true;
-        modifiers: true;
-        notes: true;
-      };
-    };
-    tables: { select: { label: true } };
-  };
-}>;
+type OrderWithItems = {
+  id: bigint | number;
+  order_code: string;
+  table_id: string | null;
+  waiter_code: string | null;
+  waiter_name: string | null;
+  guests: number | null;
+  status: string;
+  opened_at: Date;
+  closed_at: Date | null;
+  notes: string | null;
+  order_items: Array<{
+    id: bigint | number;
+    order_id: bigint | number;
+    article_code: string;
+    description: string;
+    quantity: Decimal | number;
+    unit_price: Decimal | number;
+    modifiers: JsonValue | null;
+    notes: string | null;
+  }>;
+  tables: { label: string } | null;
+};
 
 type OrderItemRow = OrderWithItems["order_items"][number];
 
@@ -32,14 +39,14 @@ function toIsoString(value: Date | null | undefined): string | null {
   return value.toISOString();
 }
 
-function decimalToNumber(value: Prisma.Decimal | number | null | undefined): number {
+function decimalToNumber(value: Decimal | number | null | undefined): number {
   if (value === null || typeof value === "undefined") {
     return 0;
   }
   return Number(value);
 }
 
-function jsonToStringArray(value: Prisma.JsonValue | null | undefined): string[] {
+function jsonToStringArray(value: JsonValue | null | undefined): string[] {
   if (!value) {
     return [];
   }
@@ -127,7 +134,7 @@ async function syncTableState(orderId: number): Promise<void> {
     return;
   }
 
-  const orderLines = order.order_items.map((item) => ({
+  const orderLines = order.order_items.map((item: { article_code: string; description: string; quantity: Decimal | number; unit_price: Decimal | number; notes: string | null }) => ({
     articleCode: item.article_code,
     name: item.description,
     quantity: decimalToNumber(item.quantity),

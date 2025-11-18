@@ -2,13 +2,13 @@
 
 # Facturador
 
-Plataforma de facturación electrónica construida con Next.js 15 (App Router) y React 18. Utiliza PostgreSQL mediante un pool compartido, componentes accesibles usando TailwindCSS + Radix UI vía shadcn/ui y un flujo de construcción Docker multietapa listo para despliegue.
+Plataforma de facturación electrónica construida con Next.js 15 (App Router) y React 18. Utiliza PostgreSQL vía Prisma Client, componentes accesibles usando TailwindCSS + Radix UI vía shadcn/ui y un flujo de construcción Docker multietapa listo para despliegue.
 
 ## Stack principal
 
 - Next.js 15 (App Router) + React 18 + TypeScript.
 - TailwindCSS 3 + Radix UI (shadcn/ui) + Theme Provider con `next-themes`.
-- PostgreSQL con pool de conexiones reutilizable.
+- PostgreSQL con Prisma Client reutilizable.
 - Zod para validación de variables de entorno.
 - Dockerfile multietapa (`node:20-alpine`) y `.dockerignore` optimizado.
 
@@ -30,8 +30,9 @@ La migración de módulos legacy (`src/lib/db/*.ts`) a repositorios Prisma ya co
 - Alertas de inventario y notificaciones.
 - Facturación, órdenes y cajas.
 - Autenticación y directorio de administradores y meseros (nueva capa `WaiterService`).
+ - Mesas y zonas: `TableService` (Prisma + mock) reemplaza por completo `src/lib/db/tables.ts`.
 
-Los handlers de API dejaron de importar helpers de `src/lib/db/auth.ts` (archivo eliminado) y ahora dependen de los servicios registrados. Cualquier nuevo módulo debe seguir este patrón repositorio + servicio para garantizar consistencia y claridad en el manejo de transacciones y mock mode.
+Los handlers de API dependen de servicios (`InvoiceService`, `InventoryService`, `OrderService`, `TableService`, etc.) y ya no deben llamar helpers legacy de `src/lib/db/**`. Cualquier nuevo módulo debe seguir este patrón repositorio + servicio para garantizar consistencia y claridad en el manejo de transacciones y mock mode.
 
 ## Requisitos previos
 
@@ -55,13 +56,13 @@ Los handlers de API dejaron de importar helpers de `src/lib/db/auth.ts` (archivo
 
 ## Integración con PostgreSQL
 
-La conexión se maneja desde `src/lib/db/postgres.ts` usando un pool global.
+El acceso a datos se realiza principalmente con Prisma desde `src/lib/db/prisma.ts`. Este cliente configura `DATABASE_URL` a partir de `DB_CONNECTION_STRING` y se comparte de forma segura entre módulos.
 
 Consulta la sección **Variables de entorno** para conocer el propósito de cada ajuste y sus valores sugeridos.
 
 Para inicializar la base de datos desde cero, importa `database/schema_master.sql` en tu instancia de PostgreSQL (ejemplo: `psql -f database/schema_master.sql`).
 
-El endpoint `GET /api/health` ejecuta un `SELECT 1` para validar la conectividad.
+El endpoint `GET /api/health` valida la conectividad.
 
 ### Inicialización de base y primer administrador
 
@@ -230,12 +231,21 @@ La respuesta exitosa incluye `transaction_id` y `transaction_code`. Las validaci
 
 ## Flujo de comandas y mesas
 
-- Los meseros trabajan desde `/mesas`, donde cada envío consolida los productos servidos mediante `syncWaiterOrderForTable` (`src/lib/db/orders.ts`). La función crea o actualiza el registro en `app.orders`/`app.order_items` y sincroniza el estado táctil en `app.table_state`.
-- Las mesas cambian automáticamente entre `normal`, `facturado` y `anulado` usando `setTableOrderStatus` (`src/lib/db/tables.ts`), lo que mantiene alineados tablero, vista de meseros y facturación.
+- Los meseros trabajan desde `/mesas`, donde cada envío consolida los productos servidos mediante `OrderService.syncWaiterOrderForTable` (`src/lib/services/orders/OrderService.ts`). La función crea o actualiza el registro en `app.orders`/`app.order_items` y sincroniza el estado táctil en `app.table_state`.
+- Las mesas cambian automáticamente entre `normal`, `facturado` y `anulado` usando `setTableOrderStatus` de `TableService` (`src/lib/services/TableService.ts`), lo que mantiene alineados tablero, vista de meseros y facturación.
 - El módulo de facturación (`src/app/facturacion/page.tsx`) distingue flujos por `mode`: `mode=direct` para facturar sin pedido y `mode=order` para cobrar comandas abiertas. Esta diferenciación evita crear rutas nuevas y mantiene la navegación consistente.
-- Al generar una factura (`POST /api/invoices`), `markOrderAsInvoiced` marca la comanda como `INVOICED`, almacena la fecha de cierre y libera la mesa para nuevos turnos. El detalle se conserva como histórico para reimpresiones y reportes.
+- Al generar una factura (`POST /api/invoices`), `OrderService.markOrderAsInvoiced` marca la comanda como `INVOICED`, almacena la fecha de cierre y libera la mesa para nuevos turnos. El detalle se conserva como histórico para reimpresiones y reportes.
 - Las validaciones de front, back y base de datos están alineadas: cantidades positivas, IVA opcional, disponibilidad de mesa y, ahora, verificación de apertura de caja para el rol facturador. Puedes repasar `tests/api/invoices.test.md` para ejemplos de payload y escenarios de caja.
 - Cada factura genera un movimiento de inventario tipo consumo con referencia al folio. Los artículos `KIT` se descargan expandiendo sus componentes; si el kit no maneja stock propio, solo se afectan las existencias de cada componente en el almacén configurado (o en `DEFAULT_SALES_WAREHOUSE_CODE` cuando el artículo no define uno).
+
+## Reportes e impresión
+
+- Los endpoints de reportes soportan respuesta JSON (por defecto) y HTML para impresión agregando `format=html` al querystring.
+- Ejemplos rápidos:
+	- `/api/reportes/ventas/resumen?from=2025-11-01&to=2025-11-17&format=html`
+	- `/api/reportes/ventas/meseros?from=2025-11-01&to=2025-11-17&waiter_code=MES-01&format=html`
+	- `/api/reportes/articulos/top?from=2025-11-01&to=2025-11-17&limit=15&format=html`
+- En la UI de `/reportes` se añadió el botón "Imprimir" en cada tarjeta para abrir la versión HTML en una pestaña lista para impresión.
 
 ## Modo mock (datos en memoria)
 
@@ -270,7 +280,7 @@ INSERT INTO app.exchange_rates (rate_date, rate_value, base_currency_code, quote
 VALUES ('2025-11-10', 17.38, 'MXN', 'USD', 'Banco de prueba');
 ```
 
-- La capa `src/lib/db/exchange-rate.ts` expone funciones para recuperar el tipo de cambio vigente (`getCurrentExchangeRate`) y el histórico (`getExchangeRateHistory`). Estas funciones usan datos en memoria cuando `MOCK_DATA=true`.
+- El servicio `exchangeRateService` (`src/lib/services/ExchangeRateService.ts`) orquesta el acceso a Prisma mediante `ExchangeRateRepository` y mantiene mocks consistentes cuando `MOCK_DATA=true`. Expone `getExchangeRateHistory`, `getCurrentExchangeRate`, `getExchangeRateForDate` y `upsertExchangeRate`.
 
 ## UI y componentes reutilizables
 
@@ -389,6 +399,16 @@ src/lib/services/InvoiceService.ts # Capa de negocio para facturas y pagos múlt
 - Conecta el dashboard con datos reales vía servicios o vistas SQL y define umbrales dinámicos para las alertas sugeridas.
 - Añadir pruebas unitarias para `insertInvoice` en modo mock y con transacción SQL (cuando haya entorno de pruebas).
 - Agregar verificación opcional de que la suma de pagos cubre el total antes de permitir impresión (modo estricto configurable).
+
+## Actualización Continua
+
+Para garantizar que la documentación esté siempre alineada con el estado actual del proyecto, actualiza los siguientes archivos cada vez que realices cambios significativos:
+
+- `README.md`
+- `.github/copilot-instructions.md`
+- `.github/prompts/plan-sistemaFacturacion.prompt.md`
+
+Esto asegura que los desarrolladores y herramientas de soporte tengan acceso a información precisa y actualizada.
 
 ---
 

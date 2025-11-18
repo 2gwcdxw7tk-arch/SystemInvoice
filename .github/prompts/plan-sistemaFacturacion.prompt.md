@@ -1,14 +1,45 @@
-**Plan Migración PostgreSQL**
+# Plan del Sistema de Facturación
 
-- Ajusta infra: instala `pg` y `@types/pg`, retira `mssql`; documenta `DB_CONNECTION_STRING` estilo PostgreSQL en `.env.example` y `README.md`; habilita variable `MOCK_DATA` igual.
-- Refactoriza el helper a `src/lib/db/postgres.ts`: usa `Pool` de `pg`, replica cache global y `closePool`; expone helpers para transacciones y bind por nombre (`text`, `values`).
-- Actualiza módulos de datos (`src/lib/db/*.ts`) para que importen el nuevo helper y reescriban SQL a sintaxis PostgreSQL (uso de `INSERT ... ON CONFLICT`, `RETURNING`, `LIMIT 1`, fechas con `CURRENT_DATE`, etc.); elimina dependencias de `sql.Request`/tipos; revisa tipos `decimal`/`numeric`.
-- Migra procedimientos críticos por dominio: artículos (`articles.ts`, `articleKits.ts`, `classifications.ts`, `prices.ts`), inventario (`inventory.ts`, `warehouses.ts`), facturación (`invoices.ts`, `/api/invoices/route.ts`), autenticación (`auth.ts`), reportes (`reports.ts`), notificaciones/tablas (`notification-channels.ts`, `tables.ts`, endpoints `/api/**`).
-- Sincroniza esquema en `database/schema_master.sql`: convierte tipos a PostgreSQL (`NUMERIC`, `BOOLEAN`, `SERIAL`/secuencias), recreate constraints/índices, `app` schema; genera script de migración y plan de carga inicial (dump + `pg_restore`).
-- Ajusta capa API: cada `route.ts` que arma queries debe usar placeholders `$1`... y `await pool.query`; revisa parsing de resultados (`rows` en vez de `recordset`) y castea números.
-- Mantén mocks (`env.useMockData`) sin cambios funcionales; asegúrate que rutas devuelvan mismas formas de datos tras refactor.
-- Valida en conjunto: actualiza pruebas en `tests/api/*.md` con ejemplos Postgres, agrega tests nuevos si cambian invariantes; ejecuta `npm run lint` y `npm run typecheck`.
-- QA end-to-end: levanta Postgres local, carga datos base, corre `npm run dev`, verifica flujos clave (login, facturación manual, catálogos, reportes, inventario); prueba API `/api/health` conectando a `pg`.
-- Despliegue: adapta Dockerfile e `npm run build` para incluir libs nuevas; si hay pipelines CI/CD, añade servicio Postgres; documenta rollback (backup PostgreSQL), checklist de cutover y monitoreo.
+## Objetivo
+Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servicio, manteniendo modo mock consistente y API Handlers que dependan solo de servicios.
 
-Siguiente paso recomendado: crear `src/lib/db/postgres.ts` y migrar un módulo sencillo (por ejemplo `exchange-rate.ts`) para validar patrón antes del resto.
+## Línea base de arquitectura
+- Next.js 15 (App Router), React 18, TypeScript.
+- Acceso a datos centralizado con Prisma (`src/lib/db/prisma.ts`).
+- Capa de Repositorios (`src/lib/repositories/**`): adaptan Prisma ⇄ DTOs.
+- Capa de Servicios (`src/lib/services/**`): regla de negocio, mock mode (`MOCK_DATA=true`).
+- UI: shadcn/ui + Tailwind; utilidades en `src/lib/utils.ts`.
+
+## Estado actual
+- Precios: `PriceListService` + endpoints `/api/precios` y artículos resolviendo lista por servicio.
+- Inventario: `InventoryService` (traspasos, compras, consumos, existencias, kardex) y registro de consumos unificado desde `InvoiceService`.
+- Unidades: `UnitService` y endpoints `/api/unidades` y `/api/articulos` migrados.
+- Mesas y meseros: `TableService` (Prisma + mock) reemplaza legacy de tablas; rutas `/api/tables/**` y `/api/meseros/tables/**` dependen del servicio. `OrderService.syncWaiterOrderForTable` integra UI de meseros.
+- Documentación actualizada (`README.md` y `.github/copilot-instructions.md`).
+
+## Próximas tareas
+1) Reportes: consolidar en `ReportService` y migrar `/api/reportes/**`.
+2) Clasificaciones: `ArticleClassificationService` en API y UI.
+3) Revisión final de handlers para asegurar dependencia exclusiva de servicios.
+4) Ejecutar pruebas (unitarias y smoke) y estabilizar.
+
+## Contratos clave
+- `/api/articulos`: acepta `price_list_code`, `unit`; UI espera `items[].price.base_price`.
+- `/api/inventario/traspasos`: validación con Zod; persiste transacciones y movimientos.
+- `/api/tables` y `/api/meseros/tables`: siempre via `TableService`.
+- `/api/invoices`: valida caja abierta; registra consumos inventario.
+
+## Convenciones
+- Zod en handlers; toasts con `useToast()`; monetario con `getCurrencyFormatter`/`formatCurrency`.
+- `mode` en `src/app/facturacion/page.tsx` para flujos.
+- Evitar legacy `src/lib/db/**` en nuevos handlers; agregar operaciones a servicios y luego consumirlos.
+
+## Modo Mock
+- Servicios exponen memoria interna en `MOCK_DATA=true` con la misma interfaz pública.
+- Mantener paridad funcional en mocks para flujos críticos (facturación, cajas, mesas).
+
+## Checklist de definición de hecho
+- Tipado estricto sin `any` implícito en nuevas piezas.
+- `npm run lint` y `npm run typecheck` en verde.
+- Endpoints de salud y de negocio smoke-tested.
+- README e instrucciones de copilot actualizados.

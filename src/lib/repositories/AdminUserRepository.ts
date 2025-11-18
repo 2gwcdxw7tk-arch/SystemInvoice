@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db/prisma";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
@@ -18,30 +18,40 @@ import type {
   RoleDefinition,
 } from "@/lib/types/admin-users";
 
-const adminUserRelationsArgs = Prisma.validator<Prisma.admin_usersDefaultArgs>()({
-  include: {
-    user_roles: Prisma.validator<Prisma.admin_users$user_rolesArgs>()({
-      orderBy: { assigned_at: "asc" },
-      include: {
-        role: Prisma.validator<Prisma.RoleDefaultArgs>()({
-          include: {
-            role_permissions: Prisma.validator<Prisma.Role$role_permissionsArgs>()({
-              include: {
-                permission: {
-                  select: { code: true },
-                },
-              },
-            }),
+const adminUserInclude = {
+  user_roles: {
+    orderBy: { assigned_at: "asc" },
+    include: {
+      role: {
+        include: {
+          role_permissions: {
+            include: {
+              permission: { select: { code: true } },
+            },
           },
-        }),
+        },
       },
-    }),
+    },
   },
-});
+} as const;
 
-const adminUserInclude = adminUserRelationsArgs.include;
-
-type AdminUserWithRelations = Prisma.admin_usersGetPayload<typeof adminUserRelationsArgs>;
+type AdminUserWithRelations = {
+  id: number;
+  username: string;
+  password_hash: string;
+  display_name: string | null;
+  is_active: boolean;
+  last_login_at: Date | null;
+  created_at: Date;
+  updated_at: Date | null;
+  user_roles: Array<{
+    role: {
+      is_active: boolean;
+      code: string;
+      role_permissions: Array<{ permission: { code: string } }>;
+    } | null;
+  }>;
+};
 
 type LoginAuditParams = {
   loginType: "admin";
@@ -60,12 +70,12 @@ function mapAdminDirectoryEntry(record: AdminUserWithRelations): AdminDirectoryE
   const roles = dedupeUpper(
     record.user_roles
       .filter((link) => link.role?.is_active)
-      .map((link) => link.role.code)
+      .map((link) => (link.role as { code: string }).code)
   );
 
   const permissions = dedupePermissions(
     record.user_roles.flatMap((link) =>
-      link.role?.is_active ? link.role.role_permissions.map((rp) => rp.permission.code) : []
+      link.role?.is_active ? (link.role.role_permissions.map((rp) => rp.permission.code)) : []
     )
   );
 
@@ -98,7 +108,7 @@ export class AdminUserRepository implements IAdminUserRepository {
       },
     });
 
-    return roles.map((role) => ({
+    return roles.map((role: { id: number; code: string; name: string; description: string | null; is_active: boolean }) => ({
       id: role.id,
       code: role.code.toUpperCase(),
       name: role.name,
@@ -181,8 +191,8 @@ export class AdminUserRepository implements IAdminUserRepository {
       }),
     ]);
 
-    const normalizedRoles = dedupeUpper(roles.map((role) => role.code));
-    const normalizedPermissions = dedupePermissions(permissions.map((perm) => perm.permission.code));
+    const normalizedRoles = dedupeUpper(roles.map((role: { code: string }) => role.code));
+    const normalizedPermissions = dedupePermissions(permissions.map((perm: { permission: { code: string } }) => perm.permission.code));
 
     const cashRegisters = await cashRegisterService.listCashRegistersForAdmin(admin.id);
     const defaultCashRegister = cashRegisters.find((assignment) => assignment.isDefault) ?? cashRegisters[0] ?? null;
@@ -223,7 +233,7 @@ export class AdminUserRepository implements IAdminUserRepository {
     const isActive = params.isActive ?? true;
     const roleCodes = dedupeUpper(params.roleCodes ?? []);
 
-    const created = await prisma.$transaction(async (tx) => {
+    const created = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const admin = await tx.admin_users.create({
         data: {
           username,
@@ -252,8 +262,8 @@ export class AdminUserRepository implements IAdminUserRepository {
     const isActive = params.isActive;
     const roleCodes = params.roleCodes === undefined ? undefined : dedupeUpper(params.roleCodes ?? []);
 
-    const updated = await prisma.$transaction(async (tx) => {
-      const data: Prisma.admin_usersUpdateInput = {};
+    const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const data: Record<string, unknown> = {};
 
       if (typeof displayName !== "undefined") {
         data.display_name = displayName;
@@ -338,13 +348,15 @@ export class AdminUserRepository implements IAdminUserRepository {
       select: { id: true, code: true },
     });
 
-    const foundCodes = roles.map((role) => role.code.toUpperCase());
+    const foundCodes = roles.map((role: { code: string }) => role.code.toUpperCase());
     const missing = normalizedCodes.filter((code) => !foundCodes.includes(code));
     if (missing.length > 0) {
       throw new Error(`Los roles ${missing.join(", ")} no están disponibles`);
     }
 
-    const roleMap = new Map(roles.map((role) => [role.code.toUpperCase(), role] as const));
+    const roleMap: Map<string, { id: number; code: string }> = new Map(
+      roles.map((role: { id: number; code: string }) => [role.code.toUpperCase(), role] as const)
+    );
     const data = normalizedCodes.map((code, index) => {
       const role = roleMap.get(code);
       if (!role) {

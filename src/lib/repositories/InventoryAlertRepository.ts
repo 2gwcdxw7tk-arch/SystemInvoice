@@ -1,5 +1,6 @@
 import { IInventoryAlertRepository, InventoryAlertRow, UpsertInventoryAlertInput } from "./IInventoryAlertRepository";
 import { prisma } from "@/lib/db/prisma";
+import type { Decimal } from "@prisma/client/runtime/library";
 
 export class InventoryAlertRepository implements IInventoryAlertRepository {
   async listInventoryAlerts(): Promise<InventoryAlertRow[]> {
@@ -7,11 +8,11 @@ export class InventoryAlertRepository implements IInventoryAlertRepository {
       orderBy: { name: "asc" },
     });
 
-    return alerts.map((row) => ({
+    return alerts.map((row: { id: number; name: string; description: string | null; threshold: Decimal; unit_code: string | null; notify_channel: string | null; is_active: boolean; created_at: Date; updated_at: Date; }) => ({
       id: row.id,
       name: row.name,
       description: row.description,
-      threshold: Number(row.threshold ?? 0),
+      threshold: Number(row.threshold),
       unitCode: row.unit_code,
       notifyChannel: row.notify_channel,
       isActive: row.is_active,

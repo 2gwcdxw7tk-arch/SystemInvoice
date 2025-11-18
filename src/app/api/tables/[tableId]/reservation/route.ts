@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { releaseTableReservation, reserveTable } from "@/lib/db/tables";
+import { releaseTableReservation, reserveTable } from "@/lib/services/TableService";
 
 const reservationSchema = z.object({
   reserved_by: z.string().trim().min(1),

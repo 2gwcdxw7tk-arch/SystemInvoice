@@ -1,8 +1,8 @@
 import { env } from "@/lib/env";
 import { IArticleRepository, Article } from "@/lib/repositories/IArticleRepository";
 import { ArticleRepository } from "@/lib/repositories/ArticleRepository";
-import { listUnits } from "@/lib/db/units"; // Mantener por ahora para la lógica MOCK
-import { getDefaultPriceListCodeFromDb } from "@/lib/db/prices"; // Mantener por ahora para la lógica MOCK
+import { unitService } from "@/lib/services/UnitService"; // usar servicio para unidades en modo MOCK
+import { priceListService } from "@/lib/services/PriceListService"; // Reemplaza helper legacy (usado en resolver por defecto)
 
 // Mock stores (copia de src/lib/db/articles.ts para el modo MOCK)
 type MockArticle = Omit<Article, "storage_unit"|"retail_unit"> & {
@@ -24,7 +24,7 @@ async function resolveDefaultPriceListCode(): Promise<string> {
   if (env.useMockData) {
     return process.env.DEFAULT_PRICE_LIST_CODE || "BASE";
   }
-  const fromDb = await getDefaultPriceListCodeFromDb();
+  const fromDb = await priceListService.getDefaultCode();
   return fromDb ?? process.env.DEFAULT_PRICE_LIST_CODE ?? "BASE";
 }
 
@@ -100,7 +100,7 @@ export class ArticleService {
 
       const pl = mockPriceLists.find(p => p.code.toUpperCase() === priceListCode);
       // Resolver nombres de unidades desde el catálogo de unidades
-      const units = await listUnits();
+      const units = await unitService.listUnits();
       const out: Array<Article & { price: { unit: "RETAIL" | "STORAGE"; base_price: number | null; start_date: string | null; end_date: string | null } | null }> = mockArticles.map(a => {
         const suName = units.find(u => u.id === a.storage_unit_id)?.name ?? String(a.storage_unit_id);
         const ruName = units.find(u => u.id === a.retail_unit_id)?.name ?? String(a.retail_unit_id);
@@ -128,7 +128,7 @@ export class ArticleService {
     if (env.useMockData) {
       const row = mockArticles.find(a => a.article_code === article_code);
       if (!row) return null;
-      const units = await listUnits();
+      const units = await unitService.listUnits();
       const su = units.find(u => u.id === row.storage_unit_id)?.name || null;
       const ru = units.find(u => u.id === row.retail_unit_id)?.name || null;
       return {

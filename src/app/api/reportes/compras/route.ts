@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { getPurchasesReport } from "@/lib/db/reports";
+import { reportService } from "@/lib/services/ReportService";
 import { requireAdministrator } from "@/lib/auth/access";
 
 const purchaseStatusEnum = z.enum(["PENDIENTE", "PARCIAL", "PAGADA"]);
@@ -35,9 +35,15 @@ export async function GET(request: NextRequest) {
   }
 
   const { from, to, supplier, status } = parsed.data;
+  const url = new URL(request.url);
+  const format = (url.searchParams.get("format") || "json").toLowerCase();
 
   try {
-  const rows = await getPurchasesReport({ from, to, supplier, status: (status || "") as PurchaseStatusValue | "" });
+  const rows = await reportService.getPurchases({ from, to, supplier, status: (status || "") as PurchaseStatusValue | "" });
+    if (format === "html") {
+      const html = reportService.renderPurchasesHtml({ from, to, supplier, status: (status || "") as PurchaseStatusValue | "" }, rows);
+      return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
     return NextResponse.json({ success: true, rows });
   } catch (error) {
     console.error("GET /api/reportes/compras", error);

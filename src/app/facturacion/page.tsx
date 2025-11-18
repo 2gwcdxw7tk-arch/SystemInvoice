@@ -18,7 +18,7 @@ import { SERVICE_RATE, VAT_RATE } from "@/config/taxes";
 import { Printer, Plus, Minus, Loader2, Ban, ArrowLeft, ArrowRight, Receipt, UtensilsCrossed, Tags, History } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
-import { hasSessionPermission, isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
+import { hasSessionPermission, isSessionAdministrator } from "@/lib/auth/session-roles";
 
 /**
  * Página dedicada de Facturación.
@@ -1332,7 +1332,6 @@ export default function FacturacionPage() {
   const modeParam = (searchParams?.get("mode") as FacturacionMode | null) ?? null;
   const session = useSession();
   const isAdmin = isSessionAdministrator(session);
-  const isFacturadorOnly = isSessionFacturadorOnly(session);
   const canManagePriceLists = isAdmin;
   const canOpenCash = hasSessionPermission(session, "cash.register.open");
   const canCloseCash = hasSessionPermission(session, "cash.register.close");
@@ -3200,7 +3199,7 @@ function FacturacionWorkspace({
                         key={item.id}
                         tabIndex={0}
                         role="button"
-                        aria-selected={isSelected}
+                        aria-pressed={isSelected}
                         className={cn(
                           "cursor-pointer align-top border-l-2 border-transparent transition hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
                           isSelected ? "border-primary bg-primary/10" : ""

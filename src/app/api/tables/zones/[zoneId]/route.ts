@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { deleteTableZone, updateTableZone } from "@/lib/db/tables";
+import { deleteTableZone, updateTableZone } from "@/lib/services/TableService";
 
 const updatePayloadSchema = z.object({
   name: z.string().trim().min(1).optional(),

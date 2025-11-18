@@ -166,4 +166,13 @@ export interface TransferFilter {
   to?: string;
 }
 
-type NumericLike = number | string; // Re-defined here for local use
+export interface InventoryTransactionResult {
+  id: number;
+  transactionCode: string;
+  occurredAt: Date;
+  fromWarehouse: string;
+  toWarehouse: string;
+  lines: InventoryLineInput[];
+}
+
+export type NumericLike = number | string | bigint;

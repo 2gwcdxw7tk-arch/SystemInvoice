@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { claimWaiterTable, getWaiterTable } from "@/lib/db/tables";
-import { syncWaiterOrderForTable } from "@/lib/db/orders";
+import { claimWaiterTable, getWaiterTable } from "@/lib/services/TableService";
+import { OrderService } from "@/lib/services/orders/OrderService";
+import { OrderRepository } from "@/lib/repositories/orders/OrderRepository";
 import { waiterService } from "@/lib/services/WaiterService";
 
 const payloadSchema = z.object({
@@ -29,6 +30,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const orderService = new OrderService(new OrderRepository());
     const waiter = await waiterService.getWaiterById(waiterId);
     if (!waiter) {
       return NextResponse.json({ success: false, message: "Mesero no encontrado" }, { status: 404 });
@@ -38,12 +40,18 @@ export async function POST(request: NextRequest) {
       waiterId: waiter.id,
       waiterName: waiter.fullName,
     });
-    await syncWaiterOrderForTable({
+    await orderService.syncWaiterOrderForTable({
       tableId: table.id,
       waiterId: waiter.id,
       waiterCode: waiter.code,
       waiterName: waiter.fullName,
-      sentItems: table.order?.sent_items ?? [],
+      sentItems: (table.order?.sent_items ?? []).map((it) => ({
+        articleCode: it.articleCode,
+        name: it.name,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice ?? 0,
+        notes: it.notes ?? null,
+      })),
     });
     const refreshed = await getWaiterTable(table.id);
     return NextResponse.json({ success: true, table: refreshed ?? table });

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { env } from "@/lib/env";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 import type {
   MovementDirection,
@@ -8,10 +8,10 @@ import type {
   PurchaseStatus,
   InventoryUnit,
   InventoryLineInput,
+  NumericLike,
   RegisterPurchaseInput,
   RegisterConsumptionInput,
   RegisterTransferInput,
-  InvoiceConsumptionLineInput,
   RegisterInvoiceMovementsInput,
   KardexFilter,
   StockFilter,
@@ -38,10 +38,8 @@ import { IWarehouseStockRepository } from "@/lib/repositories/IWarehouseStockRep
 import { WarehouseStockRepository } from "@/lib/repositories/WarehouseStockRepository";
 import { PrismaClient } from "@/lib/db/prisma"; // Import PrismaClient for transaction context
 
-type NumericLike = number | string;
-
 interface ArticleDetail {
-  id: bigint;
+  id: number;
   article_code: string;
   name: string;
   conversion_factor: number; // Changed to number for compatibility with math operations
@@ -49,11 +47,6 @@ interface ArticleDetail {
   default_warehouse_id: number | null | undefined;
   retail_unit: string | null;
   storage_unit: string | null;
-}
-
-interface KitComponentDetail {
-  component_article_code: string;
-  component_qty_retail: Prisma.Decimal;
 }
 
 interface WarehouseContext {
@@ -101,10 +94,6 @@ function parseDateInput(value?: string): Date {
     throw new Error("Fecha inválida");
   }
   return date;
-}
-
-function iso(date: Date): string {
-  return date.toISOString();
 }
 
 function generateTransactionCode(prefix: string): string {
@@ -185,17 +174,17 @@ export class InventoryService {
     };
   }
 
-  private async getArticleIdByCode(articleCode: string, tx?: Prisma.TransactionClient): Promise<bigint> {
+  private async getArticleIdByCode(articleCode: string, tx?: Prisma.TransactionClient): Promise<number> {
     const article = await this.articleRepository.getArticleByCode(articleCode, tx);
     if (!article) {
       throw new Error(`Componente no registrado: ${articleCode}`);
     }
-    return article.id;
+    return Number(article.id);
   }
 
   private async applyStockDelta(
     params: {
-      articleId: bigint;
+      articleId: number;
       articleCode?: string;
       warehouse: WarehouseContext;
       deltaRetail: number;
@@ -233,7 +222,7 @@ export class InventoryService {
     );
   }
 
-  async registerPurchase(input: RegisterPurchaseInput): Promise<InventoryTransactionResult> {
+  async registerPurchase(input: RegisterPurchaseInput): Promise<{ id: number; transaction_code: string }> {
     if (!input || !Array.isArray(input.lines) || input.lines.length === 0) {
       throw new Error("Debes incluir al menos una línea en la compra");
     }
@@ -364,7 +353,7 @@ export class InventoryService {
     });
   }
 
-  async registerConsumption(input: RegisterConsumptionInput): Promise<InventoryTransactionResult> {
+  async registerConsumption(input: RegisterConsumptionInput): Promise<{ id: number; transaction_code: string }> {
     if (!input || !Array.isArray(input.lines) || input.lines.length === 0) {
       throw new Error("Debes incluir al menos un artículo en el consumo");
     }
@@ -492,7 +481,7 @@ export class InventoryService {
       const cacheById = new Map<number, WarehouseContext>();
       const cacheByCode = new Map<string, WarehouseContext>();
       const articleCache = new Map<string, ArticleDetail>();
-      const groups = new Map<number, { warehouse: WarehouseContext; entries: InvoiceConsumptionLineInput[] }>();
+      const groups = new Map<number, { warehouse: WarehouseContext; entries: Array<{ article_code: string; unit: InventoryUnit; quantity: number }> }>();
 
       for (const line of input.lines) {
         const rawCode = line.article_code?.trim();
@@ -897,89 +886,52 @@ export class InventoryService {
         }
       }
 
-      return { id: transactionId, transaction_code: transactionCode };
+      const resultSummary: InventoryTransactionResult = {
+        id: transactionId,
+        transactionCode,
+        occurredAt,
+        fromWarehouse: fromWarehouseContext.code,
+        toWarehouse: toWarehouseContext.code,
+        lines: input.lines.map((line) => ({
+          ...line,
+          unit: line.unit || 'RETAIL', // Default to 'RETAIL' if undefined
+          quantity: BigInt(line.quantity), // Convert to bigint
+        })),
+      };
+
+      return resultSummary;
     });
   }
 
-  async listTransfers(filters: TransferFilter = {}): Promise<TransferListItem[]> {
+  async listTransfers(_filters?: TransferFilter): Promise<TransferListItem[]> {
+    void _filters;
     // TODO: Implement with Prisma
     return [];
   }
 
-  async listKardex(filters: KardexFilter = {}): Promise<KardexMovementRow[]> {
+  async listKardex(_filters?: KardexFilter): Promise<KardexMovementRow[]> {
+    void _filters;
     // TODO: Implement with Prisma
     return [];
   }
 
-  async getStockSummary(filters: StockFilter = {}): Promise<StockSummaryRow[]> {
+  async getStockSummary(_filters?: StockFilter): Promise<StockSummaryRow[]> {
+    void _filters;
     // TODO: Implement with Prisma
     return [];
   }
 
-  async listPurchases(filters: PurchaseListFilter = {}): Promise<PurchaseListItem[]> {
+  async listPurchases(_filters?: PurchaseListFilter): Promise<PurchaseListItem[]> {
+    void _filters;
     // TODO: Implement with Prisma
     return [];
   }
 
-  async listConsumptions(filters: ConsumptionListFilter = {}): Promise<ConsumptionMovementRow[]> {
+  async listConsumptions(_filters?: ConsumptionListFilter): Promise<ConsumptionMovementRow[]> {
+    void _filters;
     // TODO: Implement with Prisma
     return [];
   }
 }
 
 export const inventoryService = new InventoryService();
-
-</final_file_content>
-
-IMPORTANT: For any future changes to this file, use the final_file_content shown above as your reference. This content reflects the current state of the file, including any auto-formatting (e.g., if you used single quotes but the formatter converted them to double quotes). Always base your SEARCH/REPLACE operations on this final version to ensure accuracy.
-
-
-
-New problems detected after saving the file:
-src/lib/repositories/cash-registers/CashRegisterRepository.ts
-- [ts Error] Line 461: Object literal may only specify known properties, but 'cashRegister' does not exist in type '{ cash_registers: { warehouses: { name: string; id: number; code: string; }; } & { notes: string | null; code: string; name: string; id: number; warehouse_id: number; allow_manual_warehouse_override: boolean; is_active: boolean; created_at: Date; updated_at: Date | null; }; } & { ...; } & { ...; }'. Did you mean to write 'cash_registers'?
-- [ts Error] Line 782: Object literal may only specify known properties, but 'cashRegister' does not exist in type '{ cash_registers: { warehouses: { name: string; id: number; code: string; }; } & { notes: string | null; code: string; name: string; id: number; warehouse_id: number; allow_manual_warehouse_override: boolean; is_active: boolean; created_at: Date; updated_at: Date | null; }; } & { ...; } & { ...; }'. Did you mean to write 'cash_registers'?
-
-src/lib/services/InventoryService.ts
-- [ts Error] Line 130: Expected 1 arguments, but got 2.
-- [ts Error] Line 145: Expected 1 arguments, but got 2.
-- [ts Error] Line 151: Expected 1 arguments, but got 2.
-- [ts Error] Line 153: Argument of type 'Article' is not assignable to parameter of type 'ArticleDetail'.
-  Types of property 'id' are incompatible.
-    Type 'number' is not assignable to type 'bigint'.
-- [ts Error] Line 154: Type 'Article' is not assignable to type 'ArticleDetail'.
-  Types of property 'id' are incompatible.
-    Type 'number' is not assignable to type 'bigint'.
-- [ts Error] Line 188: Expected 1 arguments, but got 2.
-- [ts Error] Line 192: Type 'number' is not assignable to type 'bigint'.
-- [ts Error] Line 668: Expected 1 arguments, but got 2.
-- [ts Error] Line 673: Property 'findWarehouseById' does not exist on type 'IWarehouseRepository'. Did you mean 'findWarehouseByCode'?
-- [ts Error] Line 678: Expected 1 arguments, but got 2.
-- [ts Error] Line 699: Expected 1 arguments, but got 2.
-- [ts Error] Line 701: Expected 1 arguments, but got 2.<environment_details>
-# Visual Studio Code Visible Files
-src/lib/services/InventoryService.ts
-
-# Visual Studio Code Open Tabs
-src/lib/db/prisma.ts
-src/lib/repositories/invoices/InvoiceRepository.ts
-src/lib/repositories/invoices/IInvoiceRepository.ts
-src/lib/repositories/cash-registers/CashRegisterRepository.ts
-jest.config.ts
-tests/services/InvoiceService.test.ts
-src/lib/repositories/IWarehouseStockRepository.ts
-src/lib/repositories/InventoryTransactionRepository.ts
-src/lib/repositories/WarehouseStockRepository.ts
-src/lib/repositories/IInventoryTransactionRepository.ts
-src/lib/services/InventoryService.ts
-src/lib/types/inventory.ts
-
-# Current Time
-11/17/2025, 6:34:35 PM (America/Guatemala, UTC-6:00)
-
-# Context Window Usage
-654,000 / 1,048.576K tokens used (62%)
-
-# Current Mode
-ACT MODE
-</environment_details>

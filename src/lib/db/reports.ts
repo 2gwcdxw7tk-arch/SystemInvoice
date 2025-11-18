@@ -2,7 +2,7 @@ import "server-only";
 
 import { env } from "@/lib/env";
 import { query } from "@/lib/db/postgres";
-import type { PurchaseStatus } from "@/lib/db/inventory";
+import type { PurchaseStatus } from "@/lib/types/inventory";
 
 export interface SalesSummaryFilters {
   from: string;

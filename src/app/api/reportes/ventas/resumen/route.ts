@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { getSalesSummaryReport } from "@/lib/db/reports";
+import { reportService } from "@/lib/services/ReportService";
 import { requireFacturacionAccess } from "@/lib/auth/access";
 
 const querySchema = z.object({
@@ -28,9 +28,11 @@ export async function GET(request: NextRequest) {
   }
 
   const { from, to, waiter_code, table_code, customer, payment_method, currency } = parsed.data;
+  const url = new URL(request.url);
+  const format = (url.searchParams.get("format") || "json").toLowerCase();
 
   try {
-    const report = await getSalesSummaryReport({
+    const report = await reportService.getSalesSummary({
       from,
       to,
       waiterCode: waiter_code,
@@ -39,6 +41,10 @@ export async function GET(request: NextRequest) {
       paymentMethod: payment_method,
       currency,
     });
+    if (format === "html") {
+      const html = reportService.renderSalesSummaryHtml({ from, to, waiterCode: waiter_code, tableCode: table_code, customer, paymentMethod: payment_method, currency }, report);
+      return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
     return NextResponse.json({ success: true, report });
   } catch (error) {
     console.error("GET /api/reportes/ventas/resumen", error);

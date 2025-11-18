@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { listTransfers, registerTransfer } from "@/lib/db/inventory";
+import { inventoryService } from "@/lib/services/InventoryService";
 import { requireAdministrator } from "@/lib/auth/access";
 
 const numericInput = z.union([z.number(), z.string().trim().min(1)]);
@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
   const to = searchParams.get("to") || undefined;
 
   try {
-    const items = await listTransfers({
+    const items = await inventoryService.listTransfers({
       article,
       from_warehouse_code: fromWarehouse,
       to_warehouse_code: toWarehouse,
@@ -82,8 +82,8 @@ export async function POST(request: NextRequest) {
     if (normalized.from_warehouse_code === normalized.to_warehouse_code) {
       return NextResponse.json({ success: false, message: "El almacén origen y destino deben ser distintos" }, { status: 400 });
     }
-    const result = await registerTransfer(normalized);
-    return NextResponse.json({ transaction_id: result.transaction_id, transaction_code: result.transaction_code }, { status: 201 });
+    const result = await inventoryService.registerTransfer(normalized);
+    return NextResponse.json({ transaction_id: result.id, transaction_code: result.transactionCode }, { status: 201 });
   } catch (error: unknown) {
     console.error("POST /api/inventario/traspasos error", error);
     const message = error instanceof Error ? error.message : "No se pudo registrar el traspaso";

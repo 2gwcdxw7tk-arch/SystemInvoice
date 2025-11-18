@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getStockSummary } from "@/lib/db/inventory";
+import { inventoryService } from "@/lib/services/InventoryService";
 import { requireAdministrator } from "@/lib/auth/access";
 
 export async function GET(request: NextRequest) {
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
   const warehouse_code = searchParams.get("warehouse_code") || undefined;
 
   try {
-    const items = await getStockSummary({ article, warehouse_code });
+    const items = await inventoryService.getStockSummary({ article, warehouse_code });
     return NextResponse.json({ items });
   } catch (error) {
     console.error("GET /api/inventario/existencias error", error);

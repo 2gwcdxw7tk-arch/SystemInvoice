@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { getInventoryMovementsReport } from "@/lib/db/reports";
+import { reportService } from "@/lib/services/ReportService";
 import { requireAdministrator } from "@/lib/auth/access";
 
 const querySchema = z.object({
@@ -26,9 +26,15 @@ export async function GET(request: NextRequest) {
   }
 
   const { from, to, article, warehouse, transaction_type } = parsed.data;
+  const url = new URL(request.url);
+  const format = (url.searchParams.get("format") || "json").toLowerCase();
 
   try {
-    const report = await getInventoryMovementsReport({ from, to, article, warehouse, transactionType: transaction_type });
+    const report = await reportService.getInventoryMovements({ from, to, article, warehouse, transactionType: transaction_type });
+    if (format === "html") {
+      const html = reportService.renderInventoryMovementsHtml({ from, to, article, warehouse, transactionType: transaction_type }, report);
+      return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
     return NextResponse.json({ success: true, report });
   } catch (error) {
     console.error("GET /api/reportes/inventario/movimientos", error);

@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import type { Decimal } from "@prisma/client/runtime/library";
 
 import { IArticleKitRepository, KitComponentInput, KitComponentRow } from "./IArticleKitRepository";
 import { prisma } from "@/lib/db/prisma";
@@ -32,7 +33,7 @@ export class ArticleKitRepository implements IArticleKitRepository {
       },
     });
 
-    return result.map((row) => ({
+    return result.map((row: { component_article_id: number | bigint; component_qty_retail: Decimal; articles_article_kits_component_article_idToarticles: { article_code: string; name: string } }) => ({
       component_article_id: Number(row.component_article_id),
       component_article_code: row.articles_article_kits_component_article_idToarticles.article_code,
       component_article_name: row.articles_article_kits_component_article_idToarticles.name,

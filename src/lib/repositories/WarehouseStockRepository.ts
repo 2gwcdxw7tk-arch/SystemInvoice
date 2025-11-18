@@ -1,19 +1,13 @@
 import { PrismaClient } from "@/lib/db/prisma";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+import type { Decimal } from "@prisma/client/runtime/library";
 import type { IWarehouseStockRepository, WarehouseStockRecord } from "./IWarehouseStockRepository";
-
-function normalizeQuantity(value: number, epsilon = 1e-6): number {
-  if (Math.abs(value) < epsilon) {
-    return 0;
-  }
-  return value;
-}
 
 export class WarehouseStockRepository implements IWarehouseStockRepository {
   constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
 
   async getArticleStock(
-    articleId: bigint,
+    articleId: number,
     warehouseId: number,
     tx?: Prisma.TransactionClient
   ): Promise<WarehouseStockRecord | null> {
@@ -21,7 +15,7 @@ export class WarehouseStockRepository implements IWarehouseStockRepository {
     const stock = await client.warehouse_stock.findUnique({
       where: {
         article_id_warehouse_id: {
-          article_id: articleId,
+          article_id: BigInt(articleId),
           warehouse_id: warehouseId,
         },
       },
@@ -30,7 +24,7 @@ export class WarehouseStockRepository implements IWarehouseStockRepository {
     if (!stock) return null;
 
     return {
-      article_id: stock.article_id,
+      article_id: Number(stock.article_id),
       warehouse_id: stock.warehouse_id,
       quantity_retail: Number(stock.quantity_retail),
       quantity_storage: Number(stock.quantity_storage),
@@ -40,10 +34,10 @@ export class WarehouseStockRepository implements IWarehouseStockRepository {
 
   async upsertArticleStock(
     data: {
-      article_id: bigint;
+      article_id: number;
       warehouse_id: number;
-      quantity_retail: Prisma.Decimal | number;
-      quantity_storage: Prisma.Decimal | number;
+      quantity_retail: Decimal | number;
+      quantity_storage: Decimal | number;
     },
     tx?: Prisma.TransactionClient
   ): Promise<WarehouseStockRecord> {
@@ -52,7 +46,7 @@ export class WarehouseStockRepository implements IWarehouseStockRepository {
     const upsertedStock = await client.warehouse_stock.upsert({
       where: {
         article_id_warehouse_id: {
-          article_id: data.article_id,
+          article_id: BigInt(data.article_id),
           warehouse_id: data.warehouse_id,
         },
       },
@@ -62,7 +56,7 @@ export class WarehouseStockRepository implements IWarehouseStockRepository {
         updated_at: new Date(),
       },
       create: {
-        article_id: data.article_id,
+        article_id: BigInt(data.article_id),
         warehouse_id: data.warehouse_id,
         quantity_retail: data.quantity_retail,
         quantity_storage: data.quantity_storage,
@@ -70,7 +64,7 @@ export class WarehouseStockRepository implements IWarehouseStockRepository {
     });
 
     return {
-      article_id: upsertedStock.article_id,
+      article_id: Number(upsertedStock.article_id),
       warehouse_id: upsertedStock.warehouse_id,
       quantity_retail: Number(upsertedStock.quantity_retail),
       quantity_storage: Number(upsertedStock.quantity_storage),
@@ -79,7 +73,7 @@ export class WarehouseStockRepository implements IWarehouseStockRepository {
   }
 
   async ensureArticleWarehouseAssociation(
-    articleId: bigint,
+    articleId: number,
     warehouseId: number,
     tx?: Prisma.TransactionClient
   ): Promise<void> {
@@ -87,7 +81,7 @@ export class WarehouseStockRepository implements IWarehouseStockRepository {
     const association = await client.article_warehouses.findUnique({
       where: {
         article_id_warehouse_id: {
-          article_id: articleId,
+          article_id: BigInt(articleId),
           warehouse_id: warehouseId,
         },
       },

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { getWaiterPerformanceReport } from "@/lib/db/reports";
+import { reportService } from "@/lib/services/ReportService";
 import { requireFacturacionAccess } from "@/lib/auth/access";
 
 const querySchema = z.object({
@@ -24,9 +24,15 @@ export async function GET(request: NextRequest) {
   }
 
   const { from, to, waiter_code } = parsed.data;
+  const url = new URL(request.url);
+  const format = (url.searchParams.get("format") || "json").toLowerCase();
 
   try {
-    const rows = await getWaiterPerformanceReport({ from, to, waiterCode: waiter_code });
+    const rows = await reportService.getWaiterPerformance({ from, to, waiterCode: waiter_code });
+    if (format === "html") {
+      const html = reportService.renderWaiterPerformanceHtml({ from, to, waiterCode: waiter_code }, rows);
+      return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
     return NextResponse.json({ success: true, rows });
   } catch (error) {
     console.error("GET /api/reportes/ventas/meseros", error);

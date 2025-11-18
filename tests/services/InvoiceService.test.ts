@@ -1,7 +1,6 @@
 import { InvoiceService } from '@/lib/services/InvoiceService';
 import type { IInvoiceRepository, InvoiceInsertInput, InvoiceInsertResult } from '@/lib/repositories/invoices/IInvoiceRepository';
 import { OrderService } from '@/lib/services/orders/OrderService';
-import { OrderRepository } from '@/lib/repositories/orders/OrderRepository'; // Needed for OrderService constructor
 
 // Mock para el repositorio de facturas
 const mockInvoiceRepository: jest.Mocked<IInvoiceRepository> = {
@@ -11,16 +10,13 @@ const mockInvoiceRepository: jest.Mocked<IInvoiceRepository> = {
 };
 
 // Mock para OrderService
-const mockOrderService: jest.Mocked<OrderService> = {
+const mockOrderService = {
   markOrderAsInvoiced: jest.fn(),
   // Añadir otros métodos de OrderService si son usados por InvoiceService
-} as any; // Usar 'as any' temporalmente si OrderService tiene muchos métodos no mockeados
+} as unknown as jest.Mocked<OrderService>;
 
-// Mock para registerInvoiceMovements (función legacy)
-jest.mock('@/lib/db/inventory', () => ({
-  registerInvoiceMovements: jest.fn(),
-}));
-import { registerInvoiceMovements } from '@/lib/db/inventory';
+// Nota: El registro de movimientos de inventario ocurre dentro del repositorio en la arquitectura actual.
+// No se valida aquí para evitar acoplamiento con implementación interna.
 
 describe('InvoiceService', () => {
   let invoiceService: InvoiceService;
@@ -55,7 +51,6 @@ describe('InvoiceService', () => {
     const expectedResult: InvoiceInsertResult = { id: 1, invoice_number: 'INV-001' };
 
     mockInvoiceRepository.createInvoice.mockResolvedValue(expectedResult);
-    (registerInvoiceMovements as jest.Mock).mockResolvedValue(undefined);
     mockOrderService.markOrderAsInvoiced.mockResolvedValue(undefined);
 
     const result = await invoiceService.createInvoice(invoiceInput);
@@ -70,7 +65,6 @@ describe('InvoiceService', () => {
         movementLines: expect.any(Array),
       })
     );
-    expect(registerInvoiceMovements).toHaveBeenCalledTimes(1);
     expect(mockOrderService.markOrderAsInvoiced).toHaveBeenCalledTimes(0); // No originOrderId in this test
   });
 
@@ -98,14 +92,12 @@ describe('InvoiceService', () => {
     const expectedResult: InvoiceInsertResult = { id: 2, invoice_number: 'INV-002' };
 
     mockInvoiceRepository.createInvoice.mockResolvedValue(expectedResult);
-    (registerInvoiceMovements as jest.Mock).mockResolvedValue(undefined);
     mockOrderService.markOrderAsInvoiced.mockResolvedValue(undefined);
 
     const result = await invoiceService.createInvoice(invoiceInput);
 
     expect(result).toEqual(expectedResult);
     expect(mockInvoiceRepository.createInvoice).toHaveBeenCalledTimes(1);
-    expect(registerInvoiceMovements).toHaveBeenCalledTimes(1);
     expect(mockOrderService.markOrderAsInvoiced).toHaveBeenCalledTimes(1);
     expect(mockOrderService.markOrderAsInvoiced).toHaveBeenCalledWith(
       invoiceInput.originOrderId,

@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { env } from "@/lib/env";
 import type { PoolClient } from "@/lib/db/postgres";
 import { query, withTransaction } from "@/lib/db/postgres";
-import { setTableOrderStatus } from "@/lib/db/tables";
+import { setTableOrderStatus } from "@/lib/services/TableService";
 import type { OrderLine, OrderStatus } from "@/lib/orders/types";
 
 export type KitchenOrderStatus = "OPEN" | "CANCELLED" | "INVOICED";

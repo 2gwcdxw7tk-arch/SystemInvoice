@@ -1,5 +1,6 @@
 import { env } from "@/lib/env";
-import { registerInvoiceMovements, type InvoiceConsumptionLineInput } from "@/lib/db/inventory";
+import { inventoryService } from "@/lib/services/InventoryService";
+import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
 import type {
   IInvoiceRepository,
@@ -133,7 +134,7 @@ export class InvoiceService {
     }
 
     if (preparedMovementLines.length > 0) {
-      await registerInvoiceMovements({
+      await inventoryService.registerInvoiceMovements({
         invoiceId: id,
         invoiceNumber: input.invoice_number,
         invoiceDate: input.invoiceDate,

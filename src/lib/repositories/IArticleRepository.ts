@@ -1,8 +1,8 @@
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 // Definir una interfaz local para Article compatible con Prisma
 export interface Article {
-  id: bigint;
+  id: number;
   article_code: string;
   name: string;
   classification_full_code: string | null;
@@ -36,7 +36,7 @@ export interface IArticleRepository {
     classification_level1_id?: number | null;
     classification_level2_id?: number | null;
     classification_level3_id?: number | null;
-  }): Promise<{ id: bigint }>;
+  }): Promise<{ id: number }>;
 
   getArticles(params: {
     price_list_code?: string;

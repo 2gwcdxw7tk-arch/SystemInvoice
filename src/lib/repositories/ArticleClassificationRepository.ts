@@ -1,5 +1,3 @@
-import type { Prisma } from "@prisma/client";
-
 import { prisma } from "@/lib/db/prisma";
 import {
   ArticleClassificationFilters,
@@ -36,7 +34,7 @@ function mapRow(row: {
 export class ArticleClassificationRepository implements IArticleClassificationRepository {
   async listClassifications(filters: ArticleClassificationFilters = {}): Promise<ArticleClassificationRow[]> {
     const includeInactive = filters.includeInactive ?? false;
-    const where: Prisma.article_classificationsWhereInput = {};
+    const where: Record<string, unknown> = {};
 
     if (!includeInactive) {
       where.is_active = true;

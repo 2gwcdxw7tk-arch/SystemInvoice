@@ -86,7 +86,7 @@ export function SiteHeader() {
     } finally {
       setIsLoggingOut(false);
     }
-  }, [isLoggingOut, router, toast]);
+  }, [isLoggingOut, router, toast, clearSession]);
 
   return (
     <header className="sticky top-0 z-50 border-b bg-background/85 backdrop-blur">

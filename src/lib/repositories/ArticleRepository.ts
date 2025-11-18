@@ -1,16 +1,37 @@
-import { Prisma } from "@prisma/client";
+import type { Decimal } from "@prisma/client/runtime/library";
 
 import { IArticleRepository, Article } from "./IArticleRepository";
-import { getDefaultPriceListCodeFromDb } from "@/lib/db/prices";
+import { priceListRepository } from "@/lib/repositories/prices/PriceListRepository";
 import { prisma } from "@/lib/db/prisma";
 
 type ArticlePriceEntry = {
-  price: Prisma.Decimal;
+  price: Decimal;
   start_date: Date;
   end_date: Date | null;
 };
 
-function mapPriceEntry(entry: ArticlePriceEntry | undefined, preferUnit: "RETAIL" | "STORAGE", conversionFactor: Prisma.Decimal): { unit: "RETAIL" | "STORAGE"; base_price: number | null; start_date: string | null; end_date: string | null } | null {
+type ArticleRow = {
+  id: number | bigint;
+  article_code: string;
+  name: string;
+  classification_full_code: string | null;
+  storage_unit: string | null;
+  retail_unit: string | null;
+  storage_unit_id: number | null;
+  retail_unit_id: number | null;
+  conversion_factor: Decimal;
+  is_active: boolean;
+  article_type: string | null;
+  classification_level1_id: number | null;
+  classification_level2_id: number | null;
+  classification_level3_id: number | null;
+  default_warehouse_id: number | null;
+  units_articles_storage_unit_idTounits: { name: string } | null;
+  units_articles_retail_unit_idTounits: { name: string } | null;
+  article_prices: ArticlePriceEntry[];
+};
+
+function mapPriceEntry(entry: ArticlePriceEntry | undefined, preferUnit: "RETAIL" | "STORAGE", conversionFactor: Decimal): { unit: "RETAIL" | "STORAGE"; base_price: number | null; start_date: string | null; end_date: string | null } | null {
   if (!entry) {
     return null;
   }
@@ -96,7 +117,7 @@ export class ArticleRepository implements IArticleRepository {
     unit?: "RETAIL" | "STORAGE";
     on_date?: string;
   }): Promise<Array<Article & { price: { unit: "RETAIL" | "STORAGE"; base_price: number | null; start_date: string | null; end_date: string | null } | null }>> {
-    const resolvedCode = params.price_list_code ?? (await getDefaultPriceListCodeFromDb());
+    const resolvedCode = params.price_list_code ?? (await priceListRepository.getDefaultPriceListCode());
     if (!resolvedCode) {
       throw new Error("No se encontró una lista de precios predeterminada");
     }
@@ -143,7 +164,7 @@ export class ArticleRepository implements IArticleRepository {
       },
     });
 
-    return articlesWithPrice.map((article) => {
+    return articlesWithPrice.map((article: ArticleRow) => {
       const priceEntry = article.article_prices[0];
       const price = mapPriceEntry(priceEntry, preferUnit, article.conversion_factor);
 

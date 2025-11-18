@@ -1,6 +1,7 @@
 import { PrismaClient } from "@/lib/db/prisma";
-import { Prisma } from "@prisma/client"; // Import Prisma namespace for TransactionClient type
-import { registerInvoiceMovements, type InvoiceConsumptionLineInput } from "@/lib/db/inventory";
+import type { Prisma } from "@prisma/client"; // Type-only Prisma namespace for TransactionClient
+import { inventoryService } from "@/lib/services/InventoryService";
+import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
 import type { IInvoiceRepository, InvoiceInsertResult, InvoicePersistenceInput } from "@/lib/repositories/invoices/IInvoiceRepository";
 
 export class InvoiceRepository implements IInvoiceRepository {
@@ -62,32 +63,29 @@ export class InvoiceRepository implements IInvoiceRepository {
           select: { article_code: true, quantity: true },
         });
         movementLines = orderItems
-          .map((row) => ({
+          .map((row: { article_code: string; quantity: import("@prisma/client/runtime/library").Decimal }) => ({
             article_code: row.article_code.trim().toUpperCase(),
             quantity: Number(row.quantity),
             unit: "RETAIL" as const,
           }))
-          .filter((line) => line.article_code.length > 0 && line.quantity > 0);
+          .filter((line: { article_code: string; quantity: number; unit: "RETAIL" }) => line.article_code.length > 0 && line.quantity > 0);
       }
 
       if (movementLines.length > 0 && defaultWarehouseCode) {
-        movementLines = movementLines.map((line) => ({
+        movementLines = movementLines.map((line: InvoiceConsumptionLineInput) => ({
           ...line,
           warehouse_code: line.warehouse_code ?? defaultWarehouseCode,
         }));
       }
 
       if (movementLines.length > 0) {
-        // NOTE: registerInvoiceMovements still uses direct SQL. This will be addressed in a later phase.
-        // For now, we pass the Prisma transaction client if it can be used, otherwise it will use its own connection.
-        await registerInvoiceMovements({
+        await inventoryService.registerInvoiceMovements({
           invoiceId,
           invoiceNumber: data.invoice_number,
           invoiceDate: data.invoiceDate,
           tableCode: data.table_code ?? null,
           customerName: data.customer_name ?? null,
           lines: movementLines,
-          // client: tx, // Assuming registerInvoiceMovements can accept a Prisma transaction client
         });
       }
 

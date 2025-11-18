@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { getInvoiceStatusReport } from "@/lib/db/reports";
+import { reportService } from "@/lib/services/ReportService";
 import { requireFacturacionAccess } from "@/lib/auth/access";
 
 const querySchema = z.object({
@@ -25,9 +25,15 @@ export async function GET(request: NextRequest) {
   }
 
   const { from, to, customer, waiter_code } = parsed.data;
+  const url = new URL(request.url);
+  const format = (url.searchParams.get("format") || "json").toLowerCase();
 
   try {
-    const report = await getInvoiceStatusReport({ from, to, customer, waiterCode: waiter_code });
+    const report = await reportService.getInvoiceStatus({ from, to, customer, waiterCode: waiter_code });
+    if (format === "html") {
+      const html = reportService.renderInvoiceStatusHtml({ from, to, customer, waiterCode: waiter_code }, report);
+      return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
     return NextResponse.json({ success: true, report });
   } catch (error) {
     console.error("GET /api/reportes/facturacion/estatus", error);

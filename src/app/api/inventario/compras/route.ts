@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { listPurchases, registerPurchase } from "@/lib/db/inventory";
+import { inventoryService } from "@/lib/services/InventoryService";
 import { requireAdministrator } from "@/lib/auth/access";
 
 const numericInput = z.union([z.number(), z.string().trim().min(1)]);
@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
   const status = normalizedStatus && ["PENDIENTE", "PARCIAL", "PAGADA"].includes(normalizedStatus) ? (normalizedStatus as "PENDIENTE" | "PARCIAL" | "PAGADA") : undefined;
 
   try {
-    const items = await listPurchases({ supplier, status, from, to });
+    const items = await inventoryService.listPurchases({ supplier, status, from, to });
     return NextResponse.json({ items });
   } catch (error) {
     console.error("GET /api/inventario/compras error", error);
@@ -62,8 +62,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
   }
   try {
-    const result = await registerPurchase(parsed.data);
-    return NextResponse.json({ transaction_id: result.transaction_id, transaction_code: result.transaction_code }, { status: 201 });
+    const result = await inventoryService.registerPurchase(parsed.data);
+    return NextResponse.json({ transaction_id: result.id, transaction_code: result.transaction_code }, { status: 201 });
   } catch (error: unknown) {
     console.error("POST /api/inventario/compras error", error);
     const message = error instanceof Error ? error.message : "No se pudo registrar la compra";

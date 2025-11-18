@@ -1,5 +1,6 @@
 import { PrismaClient } from "@/lib/db/prisma";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+import type { Decimal } from "@prisma/client/runtime/library";
 import type {
   IInventoryTransactionRepository,
   InventoryTransactionCreateInput,
@@ -35,18 +36,18 @@ export class InventoryTransactionRepository implements IInventoryTransactionRepo
         transaction_code: true,
       },
     });
-    return { id: transaction.id, transaction_code: transaction.transaction_code };
+    return { id: Number(transaction.id), transaction_code: transaction.transaction_code };
   }
 
   async createTransactionEntry(
     data: InventoryTransactionEntryCreateInput,
     tx?: Prisma.TransactionClient
-  ): Promise<{ id: bigint }> {
+  ): Promise<{ id: number }> {
     const client = tx ?? this.prisma;
     const entry = await client.inventory_transaction_entries.create({
       data: {
-        transaction_id: data.transaction_id,
-        article_id: data.article_id,
+        transaction_id: BigInt(data.transaction_id),
+        article_id: BigInt(data.article_id),
         quantity_entered: data.quantity_entered,
         entered_unit: data.entered_unit,
         direction: data.direction,
@@ -60,7 +61,7 @@ export class InventoryTransactionRepository implements IInventoryTransactionRepo
         id: true,
       },
     });
-    return { id: entry.id };
+    return { id: Number(entry.id) };
   }
 
   async createMovement(
@@ -70,9 +71,9 @@ export class InventoryTransactionRepository implements IInventoryTransactionRepo
     const client = tx ?? this.prisma;
     await client.inventory_movements.create({
       data: {
-        transaction_id: data.transaction_id,
-        entry_id: data.entry_id,
-        article_id: data.article_id,
+        transaction_id: BigInt(data.transaction_id),
+        entry_id: BigInt(data.entry_id),
+        article_id: BigInt(data.article_id),
         direction: data.direction,
         quantity_retail: data.quantity_retail,
         warehouse_id: data.warehouse_id,
@@ -82,13 +83,13 @@ export class InventoryTransactionRepository implements IInventoryTransactionRepo
   }
 
   async updateTransactionTotalAmount(
-    transactionId: bigint,
-    totalAmount: Prisma.Decimal | number,
+    transactionId: number,
+    totalAmount: Decimal | number,
     tx?: Prisma.TransactionClient
   ): Promise<void> {
     const client = tx ?? this.prisma;
     await client.inventory_transactions.update({
-      where: { id: transactionId },
+      where: { id: BigInt(transactionId) },
       data: { total_amount: totalAmount },
     });
   }

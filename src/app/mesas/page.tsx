@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-provider";
-import type { TableAdminSnapshot, TableZone } from "@/lib/db/tables";
+import type { TableAdminSnapshot, TableZone } from "@/lib/services/TableService";
 
 const DATETIME_FORMATTER = new Intl.DateTimeFormat("es-MX", { dateStyle: "short", timeStyle: "short" });
 

@@ -11,7 +11,7 @@ export class NotificationChannelRepository implements INotificationChannelReposi
       orderBy: { name: "asc" },
     });
 
-    return channels.map((row) => ({
+    return channels.map((row: { id: number | bigint; name: string; channel_type: string; target: string; preferences: string | null; is_active: boolean; created_at: Date; updated_at: Date; }) => ({
       id: Number(row.id),
       name: row.name,
       channelType: row.channel_type,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { getTopItemsReport } from "@/lib/db/reports";
+import { reportService } from "@/lib/services/ReportService";
 import { requireFacturacionAccess } from "@/lib/auth/access";
 
 const querySchema = z.object({
@@ -32,9 +32,15 @@ export async function GET(request: NextRequest) {
   }
 
   const { from, to, search, limit } = parsed.data;
+  const url = new URL(request.url);
+  const format = (url.searchParams.get("format") || "json").toLowerCase();
 
   try {
-    const rows = await getTopItemsReport({ from, to, search, limit });
+    const rows = await reportService.getTopItems({ from, to, search, limit });
+    if (format === "html") {
+      const html = reportService.renderTopItemsHtml({ from, to, search, limit }, rows);
+      return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
     return NextResponse.json({ success: true, rows });
   } catch (error) {
     console.error("GET /api/reportes/articulos/top", error);

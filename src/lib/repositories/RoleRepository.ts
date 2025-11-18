@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db/prisma";
 import { dedupePermissions, sanitizeNullable } from "@/lib/utils/auth";
@@ -10,28 +10,25 @@ import type {
   UpdateRoleParams,
 } from "@/lib/types/roles";
 
-const rolePermissionsArgs = Prisma.validator<Prisma.Role$role_permissionsArgs>()({
-  include: {
-    permission: {
-      select: { code: true },
+const roleInclude = {
+  role_permissions: {
+    include: {
+      permission: { select: { code: true } },
     },
+    orderBy: [{ permission: { code: "asc" } }],
   },
-  orderBy: [
-    {
-      permission: { code: "asc" },
-    },
-  ],
-});
+} satisfies Prisma.RoleInclude;
 
-const roleWithRelationsArgs = Prisma.validator<Prisma.RoleDefaultArgs>()({
-  include: {
-    role_permissions: rolePermissionsArgs,
-  },
-});
-
-const roleInclude = roleWithRelationsArgs.include;
-
-type RoleWithRelations = Prisma.RoleGetPayload<typeof roleWithRelationsArgs>;
+type RoleWithRelations = {
+  id: number;
+  code: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  created_at: Date;
+  updated_at: Date | null;
+  role_permissions: Array<{ permission: { code: string } }>;
+};
 
 type PermissionRecord = {
   id: number;
@@ -85,7 +82,7 @@ async function resolvePermissionIds(
     select: { id: true, code: true },
   });
 
-  const foundCodes = new Set(permissions.map((permission) => permission.code.toLowerCase()));
+  const foundCodes = new Set(permissions.map((permission: PermissionRecord) => permission.code.toLowerCase()));
   const missing = codes.filter((code) => !foundCodes.has(code));
   if (missing.length > 0) {
     throw new Error(`Los permisos ${missing.join(", ")} no existen`);
@@ -102,8 +99,7 @@ export class RoleRepository implements IRoleRepository {
       orderBy: { name: "asc" },
       include: roleInclude,
     });
-
-    return records.map(mapRole);
+    return records.map((r) => mapRole(r as unknown as RoleWithRelations));
   }
 
   async getRoleById(roleId: number): Promise<RoleSummary | null> {
@@ -111,8 +107,7 @@ export class RoleRepository implements IRoleRepository {
       where: { id: roleId },
       include: roleInclude,
     });
-
-    return record ? mapRole(record) : null;
+    return record ? mapRole(record as unknown as RoleWithRelations) : null;
   }
 
   async getRoleByCode(code: string): Promise<RoleSummary | null> {
@@ -120,8 +115,7 @@ export class RoleRepository implements IRoleRepository {
       where: { code: normalizeRoleCode(code) },
       include: roleInclude,
     });
-
-    return record ? mapRole(record) : null;
+    return record ? mapRole(record as unknown as RoleWithRelations) : null;
   }
 
   async createRole(params: CreateRoleParams): Promise<RoleSummary> {
@@ -173,10 +167,10 @@ export class RoleRepository implements IRoleRepository {
         throw new Error("No se pudo cargar el rol creado");
       }
 
-      return full;
+      return full as unknown as RoleWithRelations;
     });
 
-    return mapRole(record);
+    return mapRole(record as unknown as RoleWithRelations);
   }
 
   async updateRole(roleId: number, params: UpdateRoleParams): Promise<RoleSummary> {
@@ -240,10 +234,10 @@ export class RoleRepository implements IRoleRepository {
         throw new Error("No se pudo cargar el rol actualizado");
       }
 
-      return full;
+      return full as unknown as RoleWithRelations;
     });
 
-    return mapRole(record);
+    return mapRole(record as unknown as RoleWithRelations);
   }
 
   async deleteRole(roleId: number): Promise<void> {
@@ -273,7 +267,7 @@ export class RoleRepository implements IRoleRepository {
       },
     });
 
-    return permissions.map((permission) => ({
+    return permissions.map((permission: { code: string; name: string; description: string | null }) => ({
       code: permission.code.trim(),
       name: permission.name,
       description: permission.description,

@@ -2,7 +2,7 @@ import { env } from "@/lib/env";
 import { IOrderRepository, OrderStatus } from "@/lib/repositories/orders/IOrderRepository";
 import { OrderRepository } from "@/lib/repositories/orders/OrderRepository";
 import { KitchenOrder, KitchenOrderItem, KitchenOrderStatus } from "@/lib/db/orders"; // Reutilizar tipos existentes
-import { setTableOrderStatus } from "@/lib/db/tables"; // Mantener por ahora para la lógica MOCK
+import { setTableOrderStatus } from "@/lib/services/TableService"; // Mantener por ahora para la lógica MOCK
 
 // Definir OrderLine localmente
 type OrderLine = {

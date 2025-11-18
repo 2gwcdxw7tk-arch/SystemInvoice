@@ -1,5 +1,6 @@
 import { PrismaClient } from "@/lib/db/prisma";
-import { Prisma } from "@prisma/client"; // Import Prisma namespace for TransactionClient type
+import type { Prisma } from "@prisma/client"; // Type-only Prisma for TransactionClient
+import type { Decimal, InputJsonValue } from "@prisma/client/runtime/library";
 import { buildClosureSummary } from "@/lib/services/cash-registers/summary";
 import {
   CashRegisterAssignment,
@@ -15,29 +16,55 @@ import {
 import type { ICashRegisterRepository } from "./ICashRegisterRepository";
 
 // Tipos para los payloads de Prisma con las relaciones incluidas
-type CashRegisterWithWarehouse = Prisma.cash_registersGetPayload<{
-  include: { warehouses: { select: { id: true, code: true, name: true } } };
-}>;
+type CashRegisterWithWarehouse = {
+  id: number | bigint;
+  code: string;
+  name: string;
+  warehouse_id: number;
+  allow_manual_warehouse_override: boolean;
+  is_active: boolean;
+  notes: string | null;
+  created_at: Date;
+  updated_at: Date | null;
+  warehouses: { id: number; code: string; name: string };
+};
 
-type CashRegisterUserWithRelations = Prisma.cash_register_usersGetPayload<{
-  include: {
-    cash_registers: {
-      include: {
-        warehouses: { select: { id: true, code: true, name: true } };
-      };
-    };
+type CashRegisterUserWithRelations = {
+  admin_user_id: number;
+  cash_register_id: number;
+  is_default: boolean;
+  cash_registers: {
+    id: number | bigint;
+    code: string;
+    name: string;
+    allow_manual_warehouse_override: boolean;
+    warehouses: { id: number; code: string; name: string } | null;
   };
-}>;
+};
 
-type CashRegisterSessionWithRelations = Prisma.cash_register_sessionsGetPayload<{
-  include: {
-    cash_registers: {
-      include: {
-        warehouses: { select: { id: true, code: true, name: true } };
-      };
-    };
-  };
-}>;
+type CashRegisterSessionWithRelations = {
+  id: number | bigint;
+  cash_register_id: number;
+  admin_user_id: number;
+  opening_amount: number | Decimal;
+  opening_at: Date;
+  opening_notes: string | null;
+  closing_amount: number | Decimal | null;
+  closing_at: Date | null;
+  closing_notes: string | null;
+  status: string;
+  closing_user_id: number | null;
+  totals_snapshot: unknown;
+  created_at: Date;
+  updated_at: Date | null;
+  cash_registers: {
+    id: number | bigint;
+    code: string;
+    name: string;
+    allow_manual_warehouse_override: boolean;
+    warehouses: { id: number; code: string; name: string } | null;
+  } | null;
+};
 
 function normalizeCode(value: string): string {
   return value.trim().toUpperCase();
@@ -62,7 +89,7 @@ function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterR
 function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_default?: boolean }): CashRegisterSessionRecord {
   return {
     id: Number(session.id),
-    status: session.status,
+    status: session.status as "OPEN" | "CLOSED" | "CANCELLED",
     adminUserId: Number(session.admin_user_id),
     openingAmount: Number(session.opening_amount),
     openingAt: session.opening_at.toISOString(),
@@ -73,13 +100,13 @@ function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_def
     closingUserId: session.closing_user_id != null ? Number(session.closing_user_id) : null,
     totalsSnapshot: session.totals_snapshot ?? null,
     cashRegister: {
-      cashRegisterId: Number(session.cash_registers.id),
-      cashRegisterCode: session.cash_registers.code,
-      cashRegisterName: session.cash_registers.name,
-      allowManualWarehouseOverride: session.cash_registers.allow_manual_warehouse_override,
-      warehouseId: Number(session.cash_registers.warehouses.id),
-      warehouseCode: session.cash_registers.warehouses.code,
-      warehouseName: session.cash_registers.warehouses.name,
+      cashRegisterId: Number(session.cash_registers!.id),
+      cashRegisterCode: session.cash_registers!.code,
+      cashRegisterName: session.cash_registers!.name,
+      allowManualWarehouseOverride: session.cash_registers!.allow_manual_warehouse_override,
+      warehouseId: Number(session.cash_registers!.warehouses!.id),
+      warehouseCode: session.cash_registers!.warehouses!.code,
+      warehouseName: session.cash_registers!.warehouses!.name,
       isDefault: !!session.is_default,
     },
   } satisfies CashRegisterSessionRecord;
@@ -109,7 +136,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       },
     });
 
-    return registers.map((register) => mapRegisterToRecord(register));
+    return registers.map((register: CashRegisterWithWarehouse) => mapRegisterToRecord(register));
   }
 
   async createCashRegister(input: CreateCashRegisterInput): Promise<CashRegisterRecord> {
@@ -227,15 +254,15 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     });
 
     return assignments
-      .filter((a) => a.cash_registers !== null && a.cash_registers.warehouses !== null)
+      .filter((a: CashRegisterUserWithRelations) => a.cash_registers !== null && a.cash_registers.warehouses !== null)
       .map((assignment: CashRegisterUserWithRelations) => ({
-        cashRegisterId: Number(assignment.cash_registers.id),
-        cashRegisterCode: assignment.cash_registers.code,
-        cashRegisterName: assignment.cash_registers.name,
-        allowManualWarehouseOverride: assignment.cash_registers.allow_manual_warehouse_override,
-        warehouseId: Number(assignment.cash_registers.warehouses.id),
-        warehouseCode: assignment.cash_registers.warehouses.code,
-        warehouseName: assignment.cash_registers.warehouses.name,
+        cashRegisterId: Number(assignment.cash_registers!.id),
+        cashRegisterCode: assignment.cash_registers!.code,
+        cashRegisterName: assignment.cash_registers!.name,
+        allowManualWarehouseOverride: assignment.cash_registers!.allow_manual_warehouse_override,
+        warehouseId: Number(assignment.cash_registers!.warehouses!.id),
+        warehouseCode: assignment.cash_registers!.warehouses!.code,
+        warehouseName: assignment.cash_registers!.warehouses!.name,
         isDefault: assignment.is_default,
       }));
   }
@@ -243,7 +270,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
   async listCashRegisterAssignments(options: { adminUserIds?: number[] } = {}): Promise<CashRegisterAssignmentGroup[]> {
     const { adminUserIds } = options;
 
-    const whereClause: Prisma.cash_register_usersWhereInput = {};
+    const whereClause: Record<string, unknown> = {};
     if (Array.isArray(adminUserIds) && adminUserIds.length > 0) {
       whereClause.admin_user_id = { in: adminUserIds.map((id) => Number(id)) };
     }
@@ -455,10 +482,10 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       take: limit,
     });
 
-    return Promise.all(sessions.map(async (session) => {
+    return Promise.all(sessions.map(async (session: CashRegisterSessionWithRelations) => {
       if (!session.cash_registers || !session.cash_registers.warehouses) {
         // Handle cases where related data might be missing (e.g., if warehouse was deleted)
-        return mapSessionToRecord({ ...session, is_default: false, cashRegister: { ...session.cash_registers, warehouses: { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } } });
+        return mapSessionToRecord({ ...session, is_default: false, cash_registers: { ...session.cash_registers!, warehouses: { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } } });
       }
 
       const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
@@ -560,7 +587,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       }
 
       const openForRegister = await tx.cash_register_sessions.findFirst({
-        where: { cash_register_id: targetCashRegister.id, status: "OPEN" },
+        where: { cash_register_id: Number(targetCashRegister.id), status: "OPEN" },
       });
       if (openForRegister) {
         throw new Error("La caja seleccionada ya cuenta con una apertura activa.");
@@ -568,7 +595,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
 
       const newSession = await tx.cash_register_sessions.create({
         data: {
-          cash_register_id: targetCashRegister.id,
+          cash_register_id: Number(targetCashRegister.id),
           admin_user_id: adminUserId,
           opening_amount: openingAmount,
           opening_notes: openingNotes,
@@ -584,7 +611,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         },
       });
 
-      return mapSessionToRecord({ ...newSession, is_default: isDefaultAssignment });
+      return mapSessionToRecord({ ...(newSession as unknown as CashRegisterSessionWithRelations), is_default: isDefaultAssignment });
     });
   }
 
@@ -664,7 +691,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         _count: { invoice_id: true },
       });
 
-      const expectedPayments: ExpectedPayment[] = expectedPaymentsResult.map((row: { payment_method: string; _sum: { amount: Prisma.Decimal | null }; _count: { invoice_id: number } }) => ({
+      const expectedPayments: ExpectedPayment[] = expectedPaymentsResult.map((row: { payment_method: string; _sum: { amount: Decimal | null }; _count: { invoice_id: number } }) => ({
         method: row.payment_method.trim().toUpperCase(),
         amount: Number(row._sum.amount ?? 0),
         txCount: Number(row._count.invoice_id ?? 0),
@@ -693,7 +720,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           closing_notes: summary.closingNotes,
           closing_user_id: adminUserId,
           status: "CLOSED",
-          totals_snapshot: summary as any, // Prisma JSON type
+          totals_snapshot: summary as InputJsonValue, // Prisma JSON type
         },
       });
 
@@ -749,7 +776,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       _count: { invoice_id: true },
     });
 
-    const payments: ExpectedPayment[] = expectedPaymentsResult.map((row: { payment_method: string; _sum: { amount: Prisma.Decimal | null }; _count: { invoice_id: number } }) => ({
+    const payments: ExpectedPayment[] = expectedPaymentsResult.map((row: { payment_method: string; _sum: { amount: Decimal | null }; _count: { invoice_id: number } }) => ({
       method: row.payment_method.trim().toUpperCase(),
       amount: Number(row._sum.amount ?? 0),
       txCount: Number(row._count.invoice_id ?? 0),
@@ -777,9 +804,9 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       orderBy: { opening_at: "asc" },
     });
 
-    return Promise.all(sessions.map(async (session) => {
+    return Promise.all(sessions.map(async (session: CashRegisterSessionWithRelations) => {
       if (!session.cash_registers || !session.cash_registers.warehouses) {
-        return mapSessionToRecord({ ...session, is_default: false, cashRegister: { ...session.cash_registers, warehouses: { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } } });
+        return mapSessionToRecord({ ...session, is_default: false, cash_registers: { ...session.cash_registers!, warehouses: { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } } });
       }
 
       const cashRegisterUser = await this.prisma.cash_register_users.findUnique({

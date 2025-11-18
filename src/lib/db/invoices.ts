@@ -3,7 +3,8 @@ import "server-only";
 // test comment
 
 import { env } from "@/lib/env";
-import { registerInvoiceMovements, type InvoiceConsumptionLineInput } from "@/lib/db/inventory";
+import { inventoryService } from "@/lib/services/InventoryService";
+import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
 import { query, withTransaction } from "@/lib/db/postgres";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
 
@@ -93,7 +94,7 @@ export async function insertInvoice(data: InvoiceInsertInput): Promise<InvoiceIn
       }));
     }
     if (movementLines.length > 0) {
-      await registerInvoiceMovements({
+      await inventoryService.registerInvoiceMovements({
         invoiceId: id,
         invoiceNumber: data.invoice_number,
         invoiceDate: data.invoiceDate,
@@ -202,14 +203,13 @@ export async function insertInvoice(data: InvoiceInsertInput): Promise<InvoiceIn
     }
 
     if (movementLines.length > 0) {
-      await registerInvoiceMovements({
+      await inventoryService.registerInvoiceMovements({
         invoiceId,
         invoiceNumber: data.invoice_number,
         invoiceDate: data.invoiceDate,
         tableCode: data.table_code ?? null,
         customerName: data.customer_name ?? null,
         lines: movementLines,
-        client,
       });
     }
 

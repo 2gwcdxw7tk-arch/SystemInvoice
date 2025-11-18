@@ -1,6 +1,4 @@
-import type { Role } from "@prisma/client";
-
-type RolePayload = Role;
+type RolePayload = unknown;
 
 const role: RolePayload | null = null;
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { listKardex } from "@/lib/db/inventory";
+import { inventoryService } from "@/lib/services/InventoryService";
 import { requireAdministrator } from "@/lib/auth/access";
 
 export async function GET(request: NextRequest) {
@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   const warehouse_code = searchParams.get("warehouse_code") || undefined;
 
   try {
-    const items = await listKardex({ article, from, to, warehouse_code });
+    const items = await inventoryService.listKardex({ article, from, to, warehouse_code });
     return NextResponse.json({ items });
   } catch (error) {
     console.error("GET /api/inventario/kardex error", error);

@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { getWaiterTable, storeWaiterTableOrder } from "@/lib/db/tables";
-import { syncWaiterOrderForTable } from "@/lib/db/orders";
+import { getWaiterTable, storeWaiterTableOrder } from "@/lib/services/TableService";
+import { OrderService } from "@/lib/services/orders/OrderService";
+import { OrderRepository } from "@/lib/repositories/orders/OrderRepository";
 import { waiterService } from "@/lib/services/WaiterService";
 
 const orderLineSchema = z.object({
@@ -67,6 +68,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ t
   }
 
   try {
+    const orderService = new OrderService(new OrderRepository());
     const previous = await getWaiterTable(tableId);
     const waiter = await waiterService.getWaiterById(waiterId);
     if (!waiter) {
@@ -84,12 +86,18 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ t
 
     let responseTable = table;
     if (previousSentSignature !== currentSentSignature) {
-      await syncWaiterOrderForTable({
+      await orderService.syncWaiterOrderForTable({
         tableId,
         waiterId: waiter.id,
         waiterCode: waiter.code,
         waiterName: waiter.fullName,
-        sentItems: table.order?.sent_items ?? [],
+        sentItems: (table.order?.sent_items ?? []).map((it) => ({
+          articleCode: it.articleCode,
+          name: it.name,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice ?? 0,
+          notes: it.notes ?? null,
+        })),
       });
       const refreshed = await getWaiterTable(tableId);
       if (refreshed) {

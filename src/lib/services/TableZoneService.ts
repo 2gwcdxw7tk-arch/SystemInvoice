@@ -3,7 +3,7 @@ import {
   createTableZone as createTableZoneMock,
   listTableZones as listTableZonesMock,
   updateTableZone as updateTableZoneMock,
-} from "@/lib/db/tables";
+} from "@/lib/services/TableService";
 import {
   CreateTableZoneInput,
   ITableZoneRepository,

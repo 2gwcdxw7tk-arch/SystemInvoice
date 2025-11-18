@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { listWaiterTables } from "@/lib/db/tables";
+import { listWaiterTables } from "@/lib/services/TableService";
 
 export async function GET(request: NextRequest) {
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;

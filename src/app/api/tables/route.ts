@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { createTableDefinition, listAvailableTables, listTableAdminSnapshots } from "@/lib/db/tables";
+import { createTableDefinition, listAvailableTables, listTableAdminSnapshots } from "@/lib/services/TableService";
 
 const createPayloadSchema = z.object({
   id: z.string().trim().min(1),

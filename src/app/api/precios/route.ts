@@ -1,16 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  getPriceListByCode,
-  listPriceListItems,
-  listPriceLists,
-  removeArticleFromPriceList,
-  setArticlePrice,
-  setArticlePriceActive,
-  setPriceListActiveState,
-  setPriceListAsDefault,
-  upsertPriceList,
-} from "@/lib/db/prices";
+import { priceListService } from "@/lib/services/PriceListService";
 import { forbiddenResponse, requireAdministrator, requireSession, isAdministrator, isFacturador, hasPermission } from "@/lib/auth/access";
 
 const priceListSchema = z.object({
@@ -77,15 +67,15 @@ export async function GET(request: NextRequest) {
       .includes("items");
 
     if (code) {
-      const list = await getPriceListByCode(code);
+      const list = await priceListService.getByCode(code);
       if (!list) {
         return NextResponse.json({ success: false, message: "Lista no encontrada" }, { status: 404 });
       }
-      const items = includeItems ? await listPriceListItems(code) : undefined;
+      const items = includeItems ? await priceListService.listItems(code) : undefined;
       return NextResponse.json({ list, items });
     }
 
-    const lists = await listPriceLists();
+    const lists = await priceListService.list();
     return NextResponse.json({ lists });
   } catch (error) {
     console.error("GET /api/precios error", error);
@@ -103,41 +93,41 @@ export async function POST(request: NextRequest) {
     if (body.action === "price-list") {
       const parsed = priceListSchema.safeParse(body.payload);
       if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
-      const res = await upsertPriceList(parsed.data);
+      const res = await priceListService.upsert(parsed.data);
       return NextResponse.json({ success: true, id: res.id });
     }
 
     if (body.action === "toggle-active") {
       const parsed = togglePriceListSchema.safeParse(body.payload);
       if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
-      await setPriceListActiveState(parsed.data.code, parsed.data.is_active);
+      await priceListService.setActive(parsed.data.code, parsed.data.is_active);
       return NextResponse.json({ success: true });
     }
 
     if (body.action === "set-default") {
       const parsed = setDefaultSchema.safeParse(body.payload);
       if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
-      await setPriceListAsDefault(parsed.data.code);
+      await priceListService.setDefault(parsed.data.code);
       return NextResponse.json({ success: true });
     }
     if (body.action === "set-price") {
       const parsed = setPriceSchema.safeParse(body.payload);
       if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
-      await setArticlePrice(parsed.data);
+      await priceListService.setArticlePrice(parsed.data);
       return NextResponse.json({ success: true });
     }
 
     if (body.action === "toggle-article") {
       const parsed = toggleArticleSchema.safeParse(body.payload);
       if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
-      await setArticlePriceActive(parsed.data);
+      await priceListService.setArticleActive(parsed.data);
       return NextResponse.json({ success: true });
     }
 
     if (body.action === "delete-article") {
       const parsed = deleteArticleSchema.safeParse(body.payload);
       if (!parsed.success) return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
-      await removeArticleFromPriceList(parsed.data);
+      await priceListService.removeArticle(parsed.data);
       return NextResponse.json({ success: true });
     }
     return NextResponse.json({ success: false, message: "Acción no soportada" }, { status: 400 });

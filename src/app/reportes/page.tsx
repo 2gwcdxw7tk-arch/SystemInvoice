@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FileBarChart, Loader2, RefreshCw, Search, ShieldQuestion, Table2, TrendingUp, Users } from "lucide-react";
+import { FileBarChart, Loader2, RefreshCw, Search, ShieldQuestion, Table2, TrendingUp, Users, Printer } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -541,6 +541,96 @@ export default function ReportesPage() {
 
   const hasFetchedActiveReport = initialFetchMap[activeReport];
 
+  const openPrintWindow = useCallback(
+    (report: ReportId) => {
+      let base = "";
+      let query = "";
+      switch (report) {
+        case "sales": {
+          base = "/api/reportes/ventas/resumen";
+          query = buildQuery({
+            from: salesFilters.from,
+            to: salesFilters.to,
+            waiter_code: salesFilters.waiterCode || undefined,
+            table_code: salesFilters.tableCode || undefined,
+            customer: salesFilters.customer || undefined,
+            payment_method: mapPaymentMethodToQuery(salesFilters.paymentMethod),
+            currency: salesFilters.currency || undefined,
+            format: "html",
+          });
+          break;
+        }
+        case "waiters": {
+          base = "/api/reportes/ventas/meseros";
+          query = buildQuery({
+            from: waitersFilters.from,
+            to: waitersFilters.to,
+            waiter_code: waitersFilters.waiterCode || undefined,
+            format: "html",
+          });
+          break;
+        }
+        case "topItems": {
+          base = "/api/reportes/articulos/top";
+          query = buildQuery({
+            from: topItemsFilters.from,
+            to: topItemsFilters.to,
+            search: topItemsFilters.search || undefined,
+            limit: topItemsFilters.limit || undefined,
+            format: "html",
+          });
+          break;
+        }
+        case "inventory": {
+          base = "/api/reportes/inventario/movimientos";
+          query = buildQuery({
+            from: inventoryFilters.from,
+            to: inventoryFilters.to,
+            article: inventoryFilters.article || undefined,
+            warehouse: inventoryFilters.warehouse || undefined,
+            transaction_type: inventoryFilters.transactionType || undefined,
+            format: "html",
+          });
+          break;
+        }
+        case "purchases": {
+          base = "/api/reportes/compras";
+          query = buildQuery({
+            from: purchasesFilters.from,
+            to: purchasesFilters.to,
+            supplier: purchasesFilters.supplier || undefined,
+            status: purchasesFilters.status || undefined,
+            format: "html",
+          });
+          break;
+        }
+        case "invoiceStatus": {
+          base = "/api/reportes/facturacion/estatus";
+          query = buildQuery({
+            from: invoiceStatusFilters.from,
+            to: invoiceStatusFilters.to,
+            customer: invoiceStatusFilters.customer || undefined,
+            waiter_code: invoiceStatusFilters.waiterCode || undefined,
+            format: "html",
+          });
+          break;
+        }
+        default:
+          return;
+      }
+      const url = `${base}?${query}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+    },
+    [
+      salesFilters,
+      waitersFilters,
+      topItemsFilters,
+      inventoryFilters,
+      purchasesFilters,
+      invoiceStatusFilters,
+    ]
+  );
+
   useEffect(() => {
     if (hasFetchedActiveReport) return;
     setInitialFetchMap((prev) => ({ ...prev, [activeReport]: true }));
@@ -754,6 +844,9 @@ export default function ReportesPage() {
               {salesState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
             </Button>
+            <Button type="button" variant="secondary" className="rounded-2xl" onClick={() => openPrintWindow("sales") }>
+              <Printer className="mr-2 h-4 w-4" /> Imprimir
+            </Button>
             <Input
               value={salesFilters.currency}
               onChange={(event) => setSalesFilters((prev) => ({ ...prev, currency: event.target.value.toUpperCase() }))}
@@ -897,6 +990,9 @@ export default function ReportesPage() {
                 {waitersState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Consultar
               </Button>
+              <Button type="button" variant="secondary" className="mt-2 w-full rounded-2xl md:mt-0" onClick={() => openPrintWindow("waiters")}>
+                <Printer className="mr-2 h-4 w-4" /> Imprimir
+              </Button>
             </div>
           </div>
 
@@ -1010,6 +1106,9 @@ export default function ReportesPage() {
             <Button type="button" className="rounded-2xl" onClick={() => void fetchTopItems()} disabled={topItemsState.loading}>
               {topItemsState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
+            </Button>
+            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintWindow("topItems") }>
+              <Printer className="mr-2 h-4 w-4" /> Imprimir
             </Button>
           </div>
 
@@ -1137,6 +1236,9 @@ export default function ReportesPage() {
             <Button type="button" className="rounded-2xl" onClick={() => void fetchInventory()} disabled={inventoryState.loading}>
               {inventoryState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
+            </Button>
+            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintWindow("inventory") }>
+              <Printer className="mr-2 h-4 w-4" /> Imprimir
             </Button>
           </div>
 
@@ -1314,6 +1416,9 @@ export default function ReportesPage() {
               {purchasesState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
             </Button>
+            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintWindow("purchases") }>
+              <Printer className="mr-2 h-4 w-4" /> Imprimir
+            </Button>
           </div>
 
           {purchasesState.data ? (
@@ -1397,6 +1502,9 @@ export default function ReportesPage() {
             <Button type="button" className="rounded-2xl" onClick={() => void fetchInvoiceStatus()} disabled={invoiceStatusState.loading}>
               {invoiceStatusState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
+            </Button>
+            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintWindow("invoiceStatus") }>
+              <Printer className="mr-2 h-4 w-4" /> Imprimir
             </Button>
           </div>
 

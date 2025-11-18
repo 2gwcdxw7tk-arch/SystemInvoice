@@ -1,49 +1,61 @@
 # Copilot Instructions
 
 ## Architecture
-- Next.js 15 App Router project; route segments and API handlers viven bajo `src/app/**` (ej. `src/app/facturacion/page.tsx`, `src/app/api/invoices/route.ts`).
-- Acceso a PostgreSQL centralizado en `src/lib/db/prisma.ts`; las operaciones de datos se encapsulan en repositorios (`src/lib/repositories/**`) consumidos por servicios (`src/lib/services/**`). Siempre úsalo en lugar de helpers legacy.
-- Los servicios exponen modo MOCK consistente; cuando `MOCK_DATA=true` delegan a stores en memoria manteniendo la misma interfaz pública.
-- Utilidades UI compartidas (shadcn/ui, tokens Tailwind) residen en `src/components/ui` y `src/lib/utils.ts`; recicla estos componentes y helpers para conservar el diseño.
+- **Framework**: Next.js 15 (App Router) with React 18 and TypeScript.
+- **Data Layer**: Centralized PostgreSQL access via Prisma (`src/lib/db/prisma.ts`). Data operations are encapsulated in repositories (`src/lib/repositories/**`) consumed by services (`src/lib/services/**`). Always use these layers instead of legacy helpers.
+- **Mock Mode**: Services expose a consistent mock mode. When `MOCK_DATA=true`, they delegate to in-memory stores while maintaining the same public interface.
+- **UI Utilities**: Shared components (shadcn/ui, Tailwind tokens) reside in `src/components/ui` and `src/lib/utils.ts`. Reuse these components to maintain design consistency.
 
 ## Key Workflows
-- Instala dependencias con `npm install`; ejecuta en local mediante `npm run dev`. El build productivo usa `npm run build && npm run start` (igual al Dockerfile).
-- Calidad obligatoria: `npm run lint` y `npm run typecheck` antes de publicar cambios.
-- Cuando toques persistencia, haz smoke test a `GET /api/health` y `POST /api/invoices` con los payloads del README.
-- Si agregas endpoints nuevos, publica la interfaz en el README o en `docs/` junto con ejemplos de curl para mantener la documentación viva.
+- **Setup**:
+  - Install dependencies: `npm install`
+  - Run development server: `npm run dev`
+  - Build for production: `npm run build && npm run start`
+- **Quality Checks**:
+  - Linting: `npm run lint`
+  - Type checking: `npm run typecheck`
+- **Testing**:
+  - Smoke test endpoints: `GET /api/health` and `POST /api/invoices` using payloads from the README.
+- **Documentation**:
+  - Update `README.md`, `.github/copilot-instructions.md`, and `.github/prompts/plan-sistemaFacturacion.prompt.md` with every significant change.
 
 ## Domain Patterns
-- Facturación (`src/app/facturacion/page.tsx`) separa flujos por `mode`; reutiliza el switch existente en vez de abrir rutas nuevas.
-- Mantenimiento de listas de precio usa caches `useRef` (`catalogRequestedRef`, `articlesRequestedRef`); extiende esos guards, no dupliques lógica de fetch.
-- Autenticación y directorios consumen `adminUserService` y `waiterService`; si necesitas nuevas operaciones crea métodos en servicios/repositorios antes de tocar handlers.
-- Valores monetarios siempre pasan por `getCurrencyFormatter` o `formatCurrency`; evita `toLocaleString` directo para no romper formatos.
-- Configuración con `process.env` (ej. `NEXT_PUBLIC_VAT_RATE`, `DEFAULT_PRICE_LIST_CODE`) se lee a nivel de módulo y se memoiza cuando se reutiliza.
+- **Facturación**: Flows are separated by `mode` in `src/app/facturacion/page.tsx`. Extend the existing switch instead of creating new routes.
+- **Price Lists**: Use `useRef` caches (`catalogRequestedRef`, `articlesRequestedRef`) to manage fetch guards. Extend these guards instead of duplicating fetch logic.
+- **Authentication**: Use `adminUserService` and `waiterService`. Add new operations in services/repositories before modifying handlers.
+- **Tables**: Use `TableService` (`src/lib/services/TableService.ts`) to manage table catalog, reservations, waiter snapshots and table state. API routes under `/api/tables/**` y `/api/meseros/tables/**` must consume this service (no `db/tables`).
+- **Monetary Values**: Always use `getCurrencyFormatter` or `formatCurrency` to ensure consistent formatting.
+- **Environment Variables**: Read at the module level and memoize when reused (e.g., `NEXT_PUBLIC_VAT_RATE`, `DEFAULT_PRICE_LIST_CODE`).
 
 ## Conventions
-- Formularios controlados con `useState` y sanitizado ligero (`replace(/[^0-9.,]/g, "")`); mantén esa pauta para evitar sorpresas de locales.
-- Toasts usan `useToast()` de `@/components/ui/use-toast`; comunica success/warning/error de forma consistente al mutar estado.
-- Nuevas tablas o modales deben seguir las composiciones `Card`/`Modal` existentes (bordes `rounded-2xl/3xl`, subtítulos descriptivos).
-- Handlers API siempre validan con Zod (ver `src/app/api/inventario/traspasos/route.ts`). Crea schemas primero y reutiliza utilidades de error.
-- Todos los handlers deben depender de servicios (`adminUserService`, `waiterService`, etc.) y nunca llamar repositorios directamente desde la capa HTTP.
+- **Forms**: Use controlled forms with `useState` and light sanitization (`replace(/[^0-9.,]/g, "")`).
+- **Toasts**: Use `useToast()` from `@/components/ui/use-toast` for consistent success/warning/error messages.
+- **UI Components**: Follow existing `Card`/`Modal` compositions (e.g., `rounded-2xl/3xl` borders, descriptive subtitles).
+- **API Handlers**: Validate inputs with Zod schemas (see `src/app/api/inventario/traspasos/route.ts`). Create schemas first and reuse error utilities.
+- **Service Dependency**: API handlers must depend on services (`adminUserService`, `waiterService`, etc.) and never call repositories directly.
+  - For tables: depend on `TableService` methods like `listTableAdminSnapshots`, `listAvailableTables`, `reserveTable`, `releaseTableReservation`, `listWaiterTables`, etc.
 
 ## Data & Integration
-- `/api/articulos` acepta `price_list_code` y `unit`; la UI espera `items[].price.base_price`. Si cambias estructura ajusta respuesta y mapeos juntos.
-- Migraciones SQL residen en `database/schema_master.sql`; mantén ahí cualquier alteración de esquema antes de tocar código.
-- Build Docker usa output standalone; declara dependencias runtime en `package.json` o se purgarán en producción.
-- Cuando agregues repositorios nuevos, registra sus mocks equivalentes en el servicio correspondiente para respetar `MOCK_DATA`.
+  - `/api/articulos`: Accepts `price_list_code` and `unit`. The UI expects `items[].price.base_price`.
+  - `/api/inventario/traspasos`: Handles warehouse transfers with detailed payload validation.
+  - `/api/reportes/**`: Supports `format=html` for printing in addition to JSON by default. The page `/reportes` includes a "Print" button that opens the HTML in a new tab.
+  - `/api/tables`: Admin endpoints for table catalog and availability (backed by `TableService`).
+  - `/api/meseros/tables`: Waiter endpoints for selecting and updating table orders (backed by `TableService`).
+- **Docker**: The production build uses a standalone output. Declare runtime dependencies in `package.json` to avoid purging during production.
+- **Mocks**: Register equivalent mocks for new repositories in their corresponding services to respect `MOCK_DATA`.
 
 ## Collaboration Tips
-- Extiende estados existentes (`priceListItems`, `recentInvoices`) en lugar de abrir stores paralelos; hay selectores que dependen de memoización.
-- Documenta variables de entorno nuevas en `.env.example` y en el README.
-- Si modificas helpers compartidos o componentes UI, ejecuta `npm run lint` y revisa usos con búsqueda global para detectar efectos colaterales.
-- Cuando cierres una migración o cambio transversal, actualiza README o `docs/` con la arquitectura vigente.
+- Extend existing states (e.g., `priceListItems`, `recentInvoices`) instead of creating parallel stores.
+- Document new environment variables in `.env.example` and the README.
+- When modifying shared helpers or UI components, run `npm run lint` and perform a global search to detect side effects.
+- Update the README or `docs/` with the current architecture after completing migrations or cross-cutting changes.
 
+## Continuous Updates
+- Always update the following files with significant changes:
+  - `README.md`
+  - `.github/copilot-instructions.md`
+  - `.github/prompts/plan-sistemaFacturacion.prompt.md`
+- This ensures all documentation remains aligned and accessible for developers and AI tools.
 
-Siempre constesta y presenta lo que debas en español.## Instrucciones para Copilot
-
-Siempre usa los controles que tenemos previamente creados para que todo mantenga el mismo diseño homogéneo.
-
-Siempre revisa el código y corrige antes de terminar,para evitar errores de sintaxis o de lógica.
-
-Puedes usar herramientas MCP como perplexity para consultar mejores prácticas de desarrollo en TypeScript y Next.js.
-para corrección de código y lo que consideres necesario.
+## Recommended
+- Siempre responde en español.

@@ -3,8 +3,8 @@ import "server-only";
 import { env } from "@/lib/env";
 import { query } from "@/lib/db/postgres";
 import { getSalesSummaryReport, getTopItemsReport, getWaiterPerformanceReport } from "@/lib/db/reports";
-import { getStockSummary } from "@/lib/db/inventory";
-import { listTableAdminSnapshots } from "@/lib/db/tables";
+import { inventoryService } from "@/lib/services/InventoryService";
+import { listTableAdminSnapshots } from "@/lib/services/TableService";
 
 export interface DashboardSummaryData {
   totalSales: number;
@@ -110,7 +110,7 @@ export async function getDashboardSnapshot(forDate: string): Promise<DashboardSn
     ).then((result) => result.rows),
     getTopItemsReport({ from: forDate, to: forDate, limit: 10 }),
     getWaiterPerformanceReport({ from: forDate, to: forDate }),
-    getStockSummary(),
+    inventoryService.getStockSummary(),
     listTableAdminSnapshots(),
   ]);
 

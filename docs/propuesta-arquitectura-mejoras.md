@@ -5,8 +5,8 @@ _Fase 3 · Noviembre 2025_
 ## 0. Estado actual (15 nov 2025)
 - **Prisma ya inicializado**: existe `prisma/schema.prisma` alineado con `database/schema_master.sql`, `@prisma/client` está instalado y ahora se expone mediante `src/lib/db/prisma.ts`, reutilizado por `ArticleRepository`, `ArticleKitRepository`, `OrderRepository` e `InventoryAlertRepository`.
 - **Flujo de facturación migrado**: `InvoiceRepository` + `InvoiceService` reemplazan al módulo legado, `/api/invoices` delega en la nueva capa y `src/lib/db/invoices.ts` se eliminó.
-- **Repositorios y servicios parcialmente migrados**: `src/lib/repositories/**` y `src/lib/services/**` cubren artículos, kits, alertas, órdenes e usuarios administradores. Permanecen en `src/lib/db` los módulos de cajas, inventario, auth, precios, reportes, mesas, unidades, bodegas y auxiliares.
-- **Endpoints ya delegando a servicios**: flujos como `/api/articulos` y `/api/preferencias/alertas` ya consumen servicios. Otros endpoints estratégicos (`/api/cajas`, `/api/inventario/**`, `/api/waiters/**`) siguen acoplados a funciones SQL.
+- **Repositorios y servicios parcialmente migrados**: `src/lib/repositories/**` y `src/lib/services/**` cubren artículos, kits, alertas, órdenes, cajas e usuarios administradores. Permanecen en `src/lib/db` los módulos de inventario, auth, precios, reportes, mesas, unidades, bodegas y auxiliares.
+- **Endpoints ya delegando a servicios**: flujos como `/api/articulos`, `/api/cajas` y `/api/preferencias/alertas` ya consumen servicios. Otros endpoints estratégicos (`/api/inventario/**`, `/api/waiters/**`) siguen acoplados a funciones SQL.
 - **Modo MOCK documentado pero no desacoplado**: `MOCK_DATA` ya vive en `.env.example` y `README.md`, y varias funciones tienen ramas condicionales. Falta la fábrica de repositorios que permita intercambiar implementaciones sin ramificaciones dispersas.
 
 ## 1. Resumen ejecutivo
@@ -63,7 +63,7 @@ src/lib/services/
 | Semana | Entrega | Estado actual | Acciones siguientes |
 | --- | --- | --- | --- |
 | 1 | Configuración Prisma | ✅ `schema.prisma`, `@prisma/client`, singleton `src/lib/db/prisma.ts` y script `prepare` (`prisma generate`) ya disponibles. | Ajustar pipeline CI (GitHub Actions u otra) para ejecutar `npm run prisma:generate` antes de `next build` y documentar flujo de migraciones. |
-| 2 | Repositorios base | ⚠️ Parcial: Articles, Kits, Orders, Inventory Alerts, Admin Users e Invoices ya usan Prisma. | Migrar repos faltantes (`cash-registers`, `inventory`, `auth`, `exchange-rate`, `tables`, `reports`, `prices`) y publicar interfaces comunes. |
+| 2 | Repositorios base | ⚠️ Parcial: Articles, Kits, Orders, Inventory Alerts, Admin Users e Invoices ya usan Prisma. | Migrar repos faltantes (`inventory`, `auth`, `tables`, `reports`, `prices`) y publicar interfaces comunes. |
 | 3 | Servicios | ⚠️ Parcial: `ArticleService`, `OrderService`, `InventoryAlertService`, etc. operativos. | Extraer lógica pendiente de `src/lib/db/*.ts` hacia servicios nuevos (`InvoiceService`, `CashRegisterService`, `InventoryService`). |
 | 4 | Endpoints/Server Actions | ⚠️ Parcial: `/api/articulos` ya delega a servicios. | Refactorizar `/api/invoices`, `/api/inventario/**` y `/api/waiters/**`; evaluar Server Actions para flujos internos del App Router. |
 | 5 | Mock Layer | ⏳ No iniciado: ramas condicionales dispersas. | Implementar `RepositoryFactory` que lea `env.useMockData`, crear repos mock espejo y mover los stores in-memory existentes allí. |
@@ -82,30 +82,27 @@ src/lib/services/
 
 ## 8. Próximos pasos inmediatos
 1. **Inventariar y priorizar módulos pendientes**: documentar el estado de cada archivo en `src/lib/db` (cajas, inventario, auth, precios, reportes, mesas, unidades, bodegas, etc.) para definir el orden de migración.
-2. **Migrar el módulo de cajas**: crear `CashRegisterRepository`/`CashRegisterService`, extraer la lógica de sesiones y cierres, y actualizar `/api/cajas/**` + `/api/invoices` para usar la nueva capa.
+2. **Consolidar listas de precios**: crear `PriceListRepository`/servicio, normalizar lectura de precios vigentes y preparar UI en `/precios`.
 3. **Portar inventario y dependencias**: mover `inventory.ts`, `warehouses.ts`, `articles.ts` y `articleKits.ts` hacia repositorios/servicios especializados, asegurando que `InvoiceService` y `/api/inventario/**` queden desacoplados de SQL crudo.
 4. **Implementar RepositoryFactory y pruebas**: exponer `getRepositories(env.useMockData)` que devuelva implementaciones Prisma o Mock, mover los stores en memoria existentes y añadir suites unitarias para los servicios migrados (`npm run lint`, `npm run typecheck`, `npm run test:services`).
 
-## 9. Inventario de módulos `src/lib/db` (15 nov 2025)
-| Archivo | Dominio | ¿Quién lo usa hoy? | Estado | Próximo paso |
-| --- | --- | --- | --- | --- |
-| `alerts.ts` | Alertas de inventario | Reemplazado por `InventoryAlertService` | ✅ Eliminado | N/A |
-| `articleKits.ts` | Componentes de kits | `inventory.ts` para descomponer kits | ⚠️ Legacy (solo inventario) | Migrar junto con `InventoryRepository` |
-| `articles.ts` | Catálogo de artículos | `inventory.ts` y APIs de inventario | ⚠️ Legacy | Reutilizar `ArticleRepository` y exponer adaptadores para inventario |
-| `auth.ts` | Admins y meseros (login, PIN, roles) | `/api/login`, `/api/admin-users`, `/api/waiters`, `/api/meseros/**` | ⏳ Sin migrar | Crear `AuthRepository`/`AuthService`, definir hashing y dependencias con cajas |
-| `cash-registers.ts` | Aperturas/cierres de caja, sesiones | `/api/cajas/**`, `/api/invoices`, `AdminUserService` | ⏳ Sin migrar | Diseñar `CashRegisterRepository` + mocks dedicados |
-| `classifications.ts` | Clasificaciones de artículos | `/api/clasificaciones` | ⏳ Sin migrar | Candidato rápido para Prisma por bajo alcance |
-| `dashboard.ts` | Snapshot tablero | `src/app/dashboard/page.tsx` | ⚠️ Depende de módulos legacy (`reports`, `tables`) | Migrar después de `reports` y `tables` |
-| `exchange-rate.ts` | Tipos de cambio | Solo documentado en `README` (no hay endpoint activo) | ⏳ Sin migrar | Buen candidato sencillo para validar patrón mock/Prisma |
-| `inventory.ts` | Movimientos, compras, consumos, kardex | `/api/inventario/**`, `InvoiceService` | ⏳ Crítico y voluminoso | Partir en sub-repos (movements, transfers, stock) y servicios |
-| `notification-channels.ts` | Preferencias de notificación | `/api/preferencias/notificaciones` | ✅ Migrado (NotificationChannelService + Prisma) | Limpiar referencias residuales si aparecen nuevas dependencias |
-| `orders.ts` | Comandas, sincronización con mesas | `/api/meseros/**`, tipos compartidos | ⚠️ Parcial: `OrderRepository` usa Prisma pero endpoints siguen importando helpers legacy | Completar repositorio + mover helpers a `OrderService` |
-| `postgres.ts` | Pool y helpers SQL | Todos los módulos legacy | ⚠️ Infraestructura | Se eliminará cuando todo use Prisma |
-| `prices.ts` | Listas de precios | `/api/precios`, `ArticleService`, `ArticleRepository` | ⏳ Sin migrar | Crear `PriceListRepository` y centralizar `getDefaultPriceListCode` |
-| `prisma.ts` | PrismaClient singleton | Repositorios nuevos | ✅ Vigente | Mantener monitoreo de conexiones |
-| `reports.ts` | Reportes (ventas, compras, inventario) | `/api/reportes/**`, Dashboard | ⏳ Sin migrar | Crear repos específicos por tipo de reporte |
-| `tables.ts` | Administración de mesas y zonas | `/api/tables/**`, `/api/meseros/**`, Dashboard | ⏳ Sin migrar | Diseñar `TableRepository`/`TableService`, coordinar con órdenes |
-| `units.ts` | Catálogo de unidades | `/api/unidades`, `/api/articulos` | ⏳ Sin migrar | Crear repo simple; migrar antes de `articles.ts` |
-| `warehouses.ts` | Catálogo de bodegas | `/api/inventario/warehouses`, `inventory.ts` | ⏳ Sin migrar | Crear repo reutilizable y preparar seeds Prisma |
+## 9. Inventario de módulos `src/lib/db` (17 nov 2025)
+
+| Módulo               | Descripción                          | Estado            | Próximos pasos |
+|----------------------|--------------------------------------|-------------------|----------------|
+| `articles.ts`        | Artículos y catálogo de precios      | ✅ Migrado        | N/A            |
+| `kits.ts`            | Kits de artículos                   | ✅ Migrado        | N/A            |
+| `inventory-alerts.ts`| Alertas de inventario               | ✅ Migrado        | N/A            |
+| `invoices.ts`        | Facturación                         | ✅ Migrado        | N/A            |
+| `auth.ts`            | Autenticación y roles               | ⏳ Sin migrar     | Crear `AuthRepository` y `AuthService`. |
+| `cash-registers.ts`  | Cajas y sesiones                    | ✅ Migrado        | N/A |
+| `orders.ts`          | Órdenes y comandas                  | ⚠️ Parcial        | Completar repositorio y eliminar helpers legacy. |
+| `inventory.ts`       | Inventario                          | ⚠️ Parcial        | Dividir en sub-repositorios especializados. |
+| `exchange-rate.ts`   | Tipos de cambio                     | ✅ Migrado        | Sustituido por `ExchangeRateRepository` + `ExchangeRateService`. |
+| `reports.ts`         | Reportes                            | ⏳ Sin migrar     | Crear repositorios específicos. |
+| `tables.ts`          | Mesas y zonas                       | ⏳ Sin migrar     | Diseñar `TableRepository` y `TableService`. |
+| `prices.ts`          | Listas de precios                   | ⏳ Sin migrar     | Crear `PriceListRepository`. |
+
+Este inventario refleja el estado actual de la migración a Prisma y los pasos necesarios para completar el proceso.
 
 Con esta propuesta completamos la Fase 3 (Diseño) y dejamos listo el backlog para ejecutar Fases 4 (Implementación) y 5 (Optimización continua).

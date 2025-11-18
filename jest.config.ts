@@ -6,6 +6,7 @@ const config: Config = {
   roots: ['<rootDir>/src/', '<rootDir>/tests/'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    '^server-only$': '<rootDir>/tests/__mocks__/server-only.ts',
   },
   transform: {
     '^.+\\.tsx?$': 'ts-jest',
@@ -14,6 +15,7 @@ const config: Config = {
   collectCoverage: true,
   coverageDirectory: 'coverage',
   coverageReporters: ['json', 'lcov', 'text', 'clover'],
+  setupFiles: ['<rootDir>/tests/setup-env.ts'],
   setupFilesAfterEnv: [],
 };
 

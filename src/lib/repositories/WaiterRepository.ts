@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { Prisma } from "@prisma/client";
+import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 
 import { prisma } from "@/lib/db/prisma";
 import { computePinSignature, sanitizeNullable } from "@/lib/utils/auth";
@@ -31,23 +31,21 @@ function toIsoString(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
 }
 
-type WaiterRecord = Prisma.waitersGetPayload<{
-  select: {
-    id: true;
-    code: true;
-    full_name: true;
-    phone: true;
-    email: true;
-    is_active: true;
-    last_login_at: true;
-    created_at: true;
-    updated_at: true;
-  };
-}>;
+type WaiterRecord = {
+  id: number | bigint;
+  code: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  is_active: boolean;
+  last_login_at: Date | null;
+  created_at: Date;
+  updated_at: Date | null;
+};
 
 function mapWaiter(record: WaiterRecord): WaiterDirectoryEntry {
   return {
-    id: record.id,
+    id: Number(record.id),
     code: record.code,
     fullName: record.full_name,
     phone: record.phone ?? null,
@@ -210,7 +208,7 @@ export class WaiterRepository implements IWaiterRepository {
 
       return mapWaiter(waiter);
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      if (error instanceof PrismaClientKnownRequestError && error.code === "P2002") {
         throw new Error(UNIQUE_CONSTRAINT_ERROR);
       }
       throw error;
@@ -221,7 +219,7 @@ export class WaiterRepository implements IWaiterRepository {
     waiterId: number,
     params: UpdateWaiterParams
   ): Promise<WaiterDirectoryEntry> {
-    const data: Prisma.waitersUpdateInput = {};
+    const data: Record<string, unknown> = {};
 
     if (typeof params.code !== "undefined") {
       data.code = normalizeWaiterCode(params.code);
@@ -265,10 +263,10 @@ export class WaiterRepository implements IWaiterRepository {
 
       return mapWaiter(waiter);
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      if (error instanceof PrismaClientKnownRequestError && error.code === "P2002") {
         throw new Error(UNIQUE_CONSTRAINT_ERROR);
       }
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      if (error instanceof PrismaClientKnownRequestError && error.code === "P2025") {
         throw new Error("Mesero no encontrado");
       }
       throw error;
@@ -302,7 +300,7 @@ export class WaiterRepository implements IWaiterRepository {
 
       return mapWaiter(waiter);
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      if (error instanceof PrismaClientKnownRequestError && error.code === "P2025") {
         throw new Error("Mesero no encontrado");
       }
       throw error;

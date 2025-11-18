@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireAdministrator, requireSession } from "@/lib/auth/access";
 import { ArticleService } from "@/lib/services/ArticleService";
 import { ArticleRepository } from "@/lib/repositories/ArticleRepository";
-import { listUnits } from "@/lib/db/units"; // Mantener por ahora para la lógica MOCK
+import { unitService } from "@/lib/services/UnitService"; // reemplaza helpers legacy
 
 const articleService = new ArticleService(new ArticleRepository());
 
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     }
     const data = await articleService.getArticles({ price_list_code, unit, on_date });
     if (include_units) {
-      const units = await listUnits(); // Mantener por ahora para la lógica MOCK
+      const units = await unitService.listUnits();
       return NextResponse.json({ items: data, units });
     }
     return NextResponse.json({ items: data });

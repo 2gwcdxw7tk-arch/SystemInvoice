@@ -1,4 +1,4 @@
-import type { InvoiceConsumptionLineInput } from "@/lib/db/inventory";
+import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
 
 export type InvoiceUnit = "RETAIL" | "STORAGE";
 
