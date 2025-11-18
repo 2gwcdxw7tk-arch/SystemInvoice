@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
+    "test": "jest --passWithNoTests",
     "prisma:generate": "prisma generate",
     "prepare": "prisma generate"
   },

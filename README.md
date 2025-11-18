@@ -53,6 +53,7 @@ Los handlers de API dependen de servicios (`InvoiceService`, `InventoryService`,
 - `npm run start` – inicia el servidor en modo producción.
 - `npm run lint` – ejecuta `eslint . --max-warnings=0`.
 - `npm run typecheck` – valida los tipos con TypeScript.
+ - `npm test` – ejecuta la suite de pruebas con Jest.
 
 ## Integración con PostgreSQL
 
@@ -241,11 +242,12 @@ La respuesta exitosa incluye `transaction_id` y `transaction_code`. Las validaci
 ## Reportes e impresión
 
 - Los endpoints de reportes soportan respuesta JSON (por defecto) y HTML para impresión agregando `format=html` al querystring.
-- Ejemplos rápidos:
+- En la UI de `/reportes` cada tarjeta incluye un botón "Imprimir" que abre un modal con la vista HTML lista para imprimir sin salir de la página. También puedes abrir la URL directa si prefieres una pestaña nueva.
+ - En `/caja`, los reportes de apertura y cierre también se muestran en un modal (iframe) listo para imprimir; además se ofrece el enlace para abrir en una pestaña nueva.
+- Ejemplos rápidos de URLs HTML:
 	- `/api/reportes/ventas/resumen?from=2025-11-01&to=2025-11-17&format=html`
 	- `/api/reportes/ventas/meseros?from=2025-11-01&to=2025-11-17&waiter_code=MES-01&format=html`
 	- `/api/reportes/articulos/top?from=2025-11-01&to=2025-11-17&limit=15&format=html`
-- En la UI de `/reportes` se añadió el botón "Imprimir" en cada tarjeta para abrir la versión HTML en una pestaña lista para impresión.
 
 ## Modo mock (datos en memoria)
 
@@ -396,6 +398,7 @@ src/lib/services/InvoiceService.ts # Capa de negocio para facturas y pagos múlt
 - Ajusta reglas de ESLint según tus estándares.
 - Añade pruebas end-to-end con Playwright o Cypress según sea necesario.
 - Configura pipelines CI/CD para ejecutar `lint`, `typecheck`, `test` y build Docker.
+- Requisito: toda nueva funcionalidad debe incluir pruebas (unitarias y/o API) bajo `tests/**`. Asegúrate de que `npm test` pase en local y CI.
 - Conecta el dashboard con datos reales vía servicios o vistas SQL y define umbrales dinámicos para las alertas sugeridas.
 - Añadir pruebas unitarias para `insertInvoice` en modo mock y con transacción SQL (cuando haya entorno de pruebas).
 - Agregar verificación opcional de que la suma de pagos cubre el total antes de permitir impresión (modo estricto configurable).

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileBarChart, Loader2, RefreshCw, Search, ShieldQuestion, Table2, TrendingUp, Users, Printer } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -541,7 +541,19 @@ export default function ReportesPage() {
 
   const hasFetchedActiveReport = initialFetchMap[activeReport];
 
-  const openPrintWindow = useCallback(
+  // Modal de impresión
+  const [printOpen, setPrintOpen] = useState(false);
+  const [printUrl, setPrintUrl] = useState<string>("");
+  const printFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const [printReady, setPrintReady] = useState(false);
+
+  const closePrintModal = useCallback(() => {
+    setPrintOpen(false);
+    setPrintUrl("");
+    setPrintReady(false);
+  }, []);
+
+  const openPrintModal = useCallback(
     (report: ReportId) => {
       let base = "";
       let query = "";
@@ -619,7 +631,8 @@ export default function ReportesPage() {
           return;
       }
       const url = `${base}?${query}`;
-      window.open(url, "_blank", "noopener,noreferrer");
+      setPrintUrl(url);
+      setPrintOpen(true);
     },
     [
       salesFilters,
@@ -630,6 +643,19 @@ export default function ReportesPage() {
       invoiceStatusFilters,
     ]
   );
+
+  const handleModalPrint = useCallback(() => {
+    const win = printFrameRef.current?.contentWindow;
+    if (win) {
+      try {
+        win.focus();
+        win.print();
+      } catch {
+        // fallback: abrir pestaña
+        if (printUrl) window.open(printUrl, "_blank", "noopener,noreferrer");
+      }
+    }
+  }, [printUrl]);
 
   useEffect(() => {
     if (hasFetchedActiveReport) return;
@@ -844,7 +870,7 @@ export default function ReportesPage() {
               {salesState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
             </Button>
-            <Button type="button" variant="secondary" className="rounded-2xl" onClick={() => openPrintWindow("sales") }>
+            <Button type="button" variant="secondary" className="rounded-2xl" onClick={() => openPrintModal("sales") }>
               <Printer className="mr-2 h-4 w-4" /> Imprimir
             </Button>
             <Input
@@ -990,7 +1016,7 @@ export default function ReportesPage() {
                 {waitersState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Consultar
               </Button>
-              <Button type="button" variant="secondary" className="mt-2 w-full rounded-2xl md:mt-0" onClick={() => openPrintWindow("waiters")}>
+              <Button type="button" variant="secondary" className="mt-2 w-full rounded-2xl md:mt-0" onClick={() => openPrintModal("waiters")}>
                 <Printer className="mr-2 h-4 w-4" /> Imprimir
               </Button>
             </div>
@@ -1107,7 +1133,7 @@ export default function ReportesPage() {
               {topItemsState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
             </Button>
-            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintWindow("topItems") }>
+            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintModal("topItems") }>
               <Printer className="mr-2 h-4 w-4" /> Imprimir
             </Button>
           </div>
@@ -1237,7 +1263,7 @@ export default function ReportesPage() {
               {inventoryState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
             </Button>
-            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintWindow("inventory") }>
+            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintModal("inventory") }>
               <Printer className="mr-2 h-4 w-4" /> Imprimir
             </Button>
           </div>
@@ -1416,7 +1442,7 @@ export default function ReportesPage() {
               {purchasesState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
             </Button>
-            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintWindow("purchases") }>
+            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintModal("purchases") }>
               <Printer className="mr-2 h-4 w-4" /> Imprimir
             </Button>
           </div>
@@ -1503,7 +1529,7 @@ export default function ReportesPage() {
               {invoiceStatusState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Consultar
             </Button>
-            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintWindow("invoiceStatus") }>
+            <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintModal("invoiceStatus") }>
               <Printer className="mr-2 h-4 w-4" /> Imprimir
             </Button>
           </div>
@@ -1662,6 +1688,35 @@ export default function ReportesPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={printOpen}
+        onClose={closePrintModal}
+        title="Vista de impresión"
+        description="Revisa el contenido y pulsa Imprimir para enviar a tu impresora."
+      >
+        <div className="space-y-3">
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="secondary" className="rounded-2xl" onClick={() => printUrl && window.open(printUrl, "_blank", "noopener,noreferrer") }>
+              Abrir en pestaña
+            </Button>
+            <Button type="button" className="rounded-2xl" disabled={!printReady} onClick={handleModalPrint}>
+              <Printer className="mr-2 h-4 w-4" /> Imprimir
+            </Button>
+          </div>
+          <div className="rounded-2xl border">
+            {printUrl ? (
+              <iframe
+                ref={printFrameRef}
+                src={printUrl}
+                className="h-[70vh] w-full rounded-2xl"
+                onLoad={() => setPrintReady(true)}
+                title="Vista de impresión"
+              />
+            ) : null}
           </div>
         </div>
       </Modal>

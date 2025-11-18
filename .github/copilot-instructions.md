@@ -16,6 +16,7 @@
   - Type checking: `npm run typecheck`
 - **Testing**:
   - Smoke test endpoints: `GET /api/health` and `POST /api/invoices` using payloads from the README.
+  - New features MUST include tests (unit and/or API). Add/update cases under `tests/**` and ensure `npm test` passes.
 - **Documentation**:
   - Update `README.md`, `.github/copilot-instructions.md`, and `.github/prompts/plan-sistemaFacturacion.prompt.md` with every significant change.
 
@@ -38,7 +39,7 @@
 ## Data & Integration
   - `/api/articulos`: Accepts `price_list_code` and `unit`. The UI expects `items[].price.base_price`.
   - `/api/inventario/traspasos`: Handles warehouse transfers with detailed payload validation.
-  - `/api/reportes/**`: Supports `format=html` for printing in addition to JSON by default. The page `/reportes` includes a "Print" button that opens the HTML in a new tab.
+  - `/api/reportes/**`: Supports `format=html` for printing in addition to JSON by default. The page `/reportes` includes a "Print" button that opens a modal with the printable HTML (and optionally you can open the direct URL in a new tab). In `/caja`, opening/closure reports also use a print modal (iframe) for in-place printing.
   - `/api/tables`: Admin endpoints for table catalog and availability (backed by `TableService`).
   - `/api/meseros/tables`: Waiter endpoints for selecting and updating table orders (backed by `TableService`).
 - **Docker**: The production build uses a standalone output. Declare runtime dependencies in `package.json` to avoid purging during production.

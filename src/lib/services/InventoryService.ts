@@ -904,33 +904,312 @@ export class InventoryService {
   }
 
   async listTransfers(_filters?: TransferFilter): Promise<TransferListItem[]> {
-    void _filters;
-    // TODO: Implement with Prisma
-    return [];
+    const filters = _filters ?? {};
+    const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
+    const toDate = filters.to ? parseDateInput(filters.to) : undefined;
+
+    const txs = await this.prisma.inventory_transactions.findMany({
+      where: {
+        transaction_type: "TRANSFER",
+        ...(fromDate || toDate
+          ? { occurred_at: { gte: fromDate ?? undefined, lte: toDate ?? undefined } }
+          : {}),
+        ...(filters.article
+          ? {
+              inventory_movements: {
+                some: {
+                  articles_inventory_movements_article_idToarticles: { article_code: filters.article },
+                },
+              },
+            }
+          : {}),
+        ...(filters.from_warehouse_code
+          ? { warehouses: { code: filters.from_warehouse_code } }
+          : {}),
+        ...(filters.to_warehouse_code
+          ? {
+              inventory_movements: {
+                some: {
+                  direction: "IN",
+                  warehouses: { code: filters.to_warehouse_code },
+                },
+              },
+            }
+          : {}),
+      },
+      orderBy: { occurred_at: "desc" },
+      select: {
+        id: true,
+        transaction_code: true,
+        occurred_at: true,
+        notes: true,
+        authorized_by: true,
+        warehouses: { select: { code: true, name: true } },
+        inventory_transaction_entries: { select: { id: true, direction: true } },
+        inventory_movements: {
+          select: {
+            direction: true,
+            warehouses: { select: { code: true, name: true } },
+          },
+        },
+      },
+    });
+
+    return txs.map((t) => {
+      const toWh = t.inventory_movements.find((m) => m.direction === "IN")?.warehouses;
+      const linesCount = t.inventory_transaction_entries.filter((e) => e.direction === "OUT").length;
+      return {
+        id: String(t.id),
+        transaction_code: t.transaction_code,
+        occurred_at: t.occurred_at.toISOString(),
+        from_warehouse_code: t.warehouses.code,
+        from_warehouse_name: t.warehouses.name,
+        to_warehouse_code: toWh?.code ?? "",
+        to_warehouse_name: toWh?.name ?? "",
+        lines_count: linesCount,
+        notes: t.notes ?? null,
+        authorized_by: t.authorized_by ?? null,
+      } satisfies TransferListItem;
+    });
   }
 
   async listKardex(_filters?: KardexFilter): Promise<KardexMovementRow[]> {
-    void _filters;
-    // TODO: Implement with Prisma
-    return [];
+    const filters = _filters ?? {};
+    const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
+    const toDate = filters.to ? parseDateInput(filters.to) : undefined;
+
+    const rows = await this.prisma.inventory_movements.findMany({
+      where: {
+        ...(filters.article
+          ? { articles_inventory_movements_article_idToarticles: { article_code: filters.article } }
+          : {}),
+        ...(filters.warehouse_code ? { warehouses: { code: filters.warehouse_code } } : {}),
+        ...(fromDate || toDate
+          ? {
+              inventory_transactions: {
+                occurred_at: { gte: fromDate ?? undefined, lte: toDate ?? undefined },
+              },
+            }
+          : {}),
+      },
+      orderBy: [
+        { inventory_transactions: { occurred_at: "asc" } },
+        { id: "asc" },
+      ],
+      select: {
+        id: true,
+        direction: true,
+        quantity_retail: true,
+        warehouses: { select: { code: true, name: true } },
+        inventory_transactions: {
+          select: {
+            transaction_code: true,
+            transaction_type: true,
+            occurred_at: true,
+            reference: true,
+            counterparty_name: true,
+          },
+        },
+        articles_inventory_movements_article_idToarticles: {
+          select: {
+            article_code: true,
+            name: true,
+            conversion_factor: true,
+            units_articles_retail_unit_idTounits: { select: { name: true } },
+            units_articles_storage_unit_idTounits: { select: { name: true } },
+          },
+        },
+        articles_inventory_movements_source_kit_article_idToarticles: {
+          select: { article_code: true },
+        },
+      },
+    });
+
+    const balances = new Map<string, number>();
+    const result: KardexMovementRow[] = [];
+    for (const r of rows) {
+      const trx = r.inventory_transactions;
+      const art = r.articles_inventory_movements_article_idToarticles;
+      const wh = r.warehouses;
+      const key = `${art.article_code}__${wh.code}`;
+      const conv = Number(art.conversion_factor || 1);
+      const qtyRetail = Number(r.quantity_retail);
+      const sign = r.direction === "IN" ? 1 : -1;
+      const prev = balances.get(key) ?? 0;
+      const next = prev + sign * qtyRetail;
+      balances.set(key, next);
+
+      result.push({
+        id: String(r.id),
+        occurred_at: trx.occurred_at.toISOString(),
+        transaction_type: trx.transaction_type as TransactionType,
+        transaction_code: trx.transaction_code,
+        article_code: art.article_code,
+        article_name: art.name,
+        direction: r.direction as MovementDirection,
+        quantity_retail: qtyRetail,
+        quantity_storage: conv > 0 ? qtyRetail / conv : 0,
+        retail_unit: art.units_articles_retail_unit_idTounits?.name ?? null,
+        storage_unit: art.units_articles_storage_unit_idTounits?.name ?? null,
+        reference: trx.reference ?? null,
+        counterparty_name: trx.counterparty_name ?? null,
+        warehouse_code: wh.code,
+        warehouse_name: wh.name,
+        source_kit_code: r.articles_inventory_movements_source_kit_article_idToarticles?.article_code ?? null,
+        balance_retail: next,
+        balance_storage: conv > 0 ? next / conv : 0,
+      });
+    }
+
+    return result;
   }
 
   async getStockSummary(_filters?: StockFilter): Promise<StockSummaryRow[]> {
-    void _filters;
-    // TODO: Implement with Prisma
-    return [];
+    const filters = _filters ?? {};
+    const stocks = await this.prisma.warehouse_stock.findMany({
+      where: {
+        ...(filters.warehouse_code ? { warehouses: { code: filters.warehouse_code } } : {}),
+        ...(filters.article ? { articles: { article_code: filters.article } } : {}),
+      },
+      orderBy: [
+        { warehouses: { name: "asc" } },
+        { articles: { name: "asc" } },
+      ],
+      select: {
+        quantity_retail: true,
+        quantity_storage: true,
+        warehouses: { select: { code: true, name: true } },
+        articles: {
+          select: {
+            article_code: true,
+            name: true,
+            units_articles_retail_unit_idTounits: { select: { name: true } },
+            units_articles_storage_unit_idTounits: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    return stocks.map((s) => ({
+      article_code: s.articles.article_code,
+      article_name: s.articles.name,
+      warehouse_code: s.warehouses.code,
+      warehouse_name: s.warehouses.name,
+      available_retail: Number(s.quantity_retail),
+      available_storage: Number(s.quantity_storage),
+      retail_unit: s.articles.units_articles_retail_unit_idTounits?.name ?? null,
+      storage_unit: s.articles.units_articles_storage_unit_idTounits?.name ?? null,
+    }));
   }
 
   async listPurchases(_filters?: PurchaseListFilter): Promise<PurchaseListItem[]> {
-    void _filters;
-    // TODO: Implement with Prisma
-    return [];
+    const filters = _filters ?? {};
+    const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
+    const toDate = filters.to ? parseDateInput(filters.to) : undefined;
+
+    const txs = await this.prisma.inventory_transactions.findMany({
+      where: {
+        transaction_type: "PURCHASE",
+        ...(filters.status ? { status: filters.status } : {}),
+        ...(filters.supplier ? { counterparty_name: { contains: filters.supplier, mode: "insensitive" } } : {}),
+        ...(fromDate || toDate
+          ? { occurred_at: { gte: fromDate ?? undefined, lte: toDate ?? undefined } }
+          : {}),
+      },
+      orderBy: { occurred_at: "desc" },
+      select: {
+        id: true,
+        transaction_code: true,
+        reference: true,
+        counterparty_name: true,
+        occurred_at: true,
+        status: true,
+        total_amount: true,
+        warehouses: { select: { name: true } },
+      },
+    });
+
+    return txs.map((t) => ({
+      id: String(t.id),
+      transaction_code: t.transaction_code,
+      document_number: t.reference ?? null,
+      supplier_name: t.counterparty_name ?? null,
+      occurred_at: t.occurred_at.toISOString(),
+      status: t.status as PurchaseStatus,
+      total_amount: Number(t.total_amount ?? 0),
+      warehouse_name: t.warehouses.name,
+    }));
   }
 
   async listConsumptions(_filters?: ConsumptionListFilter): Promise<ConsumptionMovementRow[]> {
-    void _filters;
-    // TODO: Implement with Prisma
-    return [];
+    const filters = _filters ?? {};
+    const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
+    const toDate = filters.to ? parseDateInput(filters.to) : undefined;
+
+    const rows = await this.prisma.inventory_movements.findMany({
+      where: {
+        inventory_transactions: {
+          transaction_type: "CONSUMPTION",
+          ...(fromDate || toDate
+            ? { occurred_at: { gte: fromDate ?? undefined, lte: toDate ?? undefined } }
+            : {}),
+        },
+        ...(filters.article
+          ? { articles_inventory_movements_article_idToarticles: { article_code: filters.article } }
+          : {}),
+      },
+      orderBy: [
+        { inventory_transactions: { occurred_at: "desc" } },
+        { id: "asc" },
+      ],
+      select: {
+        id: true,
+        direction: true,
+        quantity_retail: true,
+        inventory_transactions: {
+          select: {
+            occurred_at: true,
+            reference: true,
+            authorized_by: true,
+            counterparty_name: true,
+          },
+        },
+        articles_inventory_movements_article_idToarticles: {
+          select: {
+            article_code: true,
+            name: true,
+            conversion_factor: true,
+            units_articles_retail_unit_idTounits: { select: { name: true } },
+            units_articles_storage_unit_idTounits: { select: { name: true } },
+          },
+        },
+        articles_inventory_movements_source_kit_article_idToarticles: {
+          select: { article_code: true },
+        },
+      },
+    });
+
+    return rows.map((r) => {
+      const trx = r.inventory_transactions;
+      const art = r.articles_inventory_movements_article_idToarticles;
+      const conv = Number(art.conversion_factor || 1);
+      const qtyRetail = Number(r.quantity_retail);
+      return {
+        id: String(r.id),
+        occurred_at: trx.occurred_at.toISOString(),
+        article_code: art.article_code,
+        article_name: art.name,
+        reason: trx.reference ?? null,
+        authorized_by: trx.authorized_by ?? null,
+        area: trx.counterparty_name ?? null,
+        direction: r.direction as MovementDirection,
+        quantity_retail: qtyRetail,
+        quantity_storage: conv > 0 ? qtyRetail / conv : 0,
+        retail_unit: art.units_articles_retail_unit_idTounits?.name ?? null,
+        storage_unit: art.units_articles_storage_unit_idTounits?.name ?? null,
+        source_kit_code: r.articles_inventory_movements_source_kit_article_idToarticles?.article_code ?? null,
+      } satisfies ConsumptionMovementRow;
+    });
   }
 }
 

@@ -9,30 +9,37 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
 - Capa de Repositorios (`src/lib/repositories/**`): adaptan Prisma ⇄ DTOs.
 - Capa de Servicios (`src/lib/services/**`): regla de negocio, mock mode (`MOCK_DATA=true`).
 - UI: shadcn/ui + Tailwind; utilidades en `src/lib/utils.ts`.
+ - Reportes con salida HTML (`format=html`) y UI de impresión en modal (iframe) para `/reportes` y `/caja` (aperturas/cierres).
 
 ## Estado actual
-- Precios: `PriceListService` + endpoints `/api/precios` y artículos resolviendo lista por servicio.
-- Inventario: `InventoryService` (traspasos, compras, consumos, existencias, kardex) y registro de consumos unificado desde `InvoiceService`.
-- Unidades: `UnitService` y endpoints `/api/unidades` y `/api/articulos` migrados.
-- Mesas y meseros: `TableService` (Prisma + mock) reemplaza legacy de tablas; rutas `/api/tables/**` y `/api/meseros/tables/**` dependen del servicio. `OrderService.syncWaiterOrderForTable` integra UI de meseros.
-- Documentación actualizada (`README.md` y `.github/copilot-instructions.md`).
+- Reportes: `ReportService` consolidado; endpoints `/api/reportes/**` soportan JSON y `format=html` (impresión).
+- Precios: `PriceListService` operativo; `/api/precios` y `/api/articulos` consumen servicio.
+- Inventario: `InventoryService` con existencias/kardex; traspasos/consumos en consolidación.
+- Unidades: `UnitService` y endpoints `/api/unidades` migrados.
+- Mesas/Zonas/Meseros: `TableService` y `WaiterService`; `/api/tables/**` y `/api/meseros/**` dependen de servicios. `OrderService.syncWaiterOrderForTable` integra UI de meseros.
+- Cajas: `CashRegisterService` migrado, reportes de apertura/cierre con HTML y modal de impresión en UI.
+- Documentación actualizada (`README.md`, `.github/copilot-instructions.md`, `docs/propuesta-arquitectura-mejoras.md`).
+- QA: suites Jest amplias (134 tests en verde); `npm run lint` y `npm run typecheck` obligatorios.
 
 ## Próximas tareas
-1) Reportes: consolidar en `ReportService` y migrar `/api/reportes/**`.
+1) Completar inventario y listas de precios (bordes pendientes) en repos/servicios.
 2) Clasificaciones: `ArticleClassificationService` en API y UI.
-3) Revisión final de handlers para asegurar dependencia exclusiva de servicios.
-4) Ejecutar pruebas (unitarias y smoke) y estabilizar.
+3) Revisión continua para asegurar dependencia exclusiva de servicios en handlers.
+4) Métricas de performance (p95) en logs y seguimiento en reportes críticos.
 
 ## Contratos clave
 - `/api/articulos`: acepta `price_list_code`, `unit`; UI espera `items[].price.base_price`.
 - `/api/inventario/traspasos`: validación con Zod; persiste transacciones y movimientos.
 - `/api/tables` y `/api/meseros/tables`: siempre via `TableService`.
 - `/api/invoices`: valida caja abierta; registra consumos inventario.
+- `/api/reportes/**`: `format=html` entrega documento imprimible; JSON por defecto.
+- `/api/cajas/aperturas|cierres/{sessionId}/reporte`: HTML imprimible protegido (token/cookies Next).
 
 ## Convenciones
 - Zod en handlers; toasts con `useToast()`; monetario con `getCurrencyFormatter`/`formatCurrency`.
 - `mode` en `src/app/facturacion/page.tsx` para flujos.
 - Evitar legacy `src/lib/db/**` en nuevos handlers; agregar operaciones a servicios y luego consumirlos.
+- Política de calidad: toda nueva funcionalidad debe incluir tests (unitarias y/o API) bajo `tests/**`.
 
 ## Modo Mock
 - Servicios exponen memoria interna en `MOCK_DATA=true` con la misma interfaz pública.
@@ -41,5 +48,5 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
 ## Checklist de definición de hecho
 - Tipado estricto sin `any` implícito en nuevas piezas.
 - `npm run lint` y `npm run typecheck` en verde.
-- Endpoints de salud y de negocio smoke-tested.
-- README e instrucciones de copilot actualizados.
+- Pruebas de endpoints clave y servicios cubiertas (Jest) y en verde.
+- README, instrucciones de copilot y doc de arquitectura actualizados.

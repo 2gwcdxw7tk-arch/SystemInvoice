@@ -2,12 +2,14 @@
 
 _Fase 3 · Noviembre 2025_
 
-## 0. Estado actual (15 nov 2025)
-- **Prisma ya inicializado**: existe `prisma/schema.prisma` alineado con `database/schema_master.sql`, `@prisma/client` está instalado y ahora se expone mediante `src/lib/db/prisma.ts`, reutilizado por `ArticleRepository`, `ArticleKitRepository`, `OrderRepository` e `InventoryAlertRepository`.
-- **Flujo de facturación migrado**: `InvoiceRepository` + `InvoiceService` reemplazan al módulo legado, `/api/invoices` delega en la nueva capa y `src/lib/db/invoices.ts` se eliminó.
-- **Repositorios y servicios parcialmente migrados**: `src/lib/repositories/**` y `src/lib/services/**` cubren artículos, kits, alertas, órdenes, cajas e usuarios administradores. Permanecen en `src/lib/db` los módulos de inventario, auth, precios, reportes, mesas, unidades, bodegas y auxiliares.
-- **Endpoints ya delegando a servicios**: flujos como `/api/articulos`, `/api/cajas` y `/api/preferencias/alertas` ya consumen servicios. Otros endpoints estratégicos (`/api/inventario/**`, `/api/waiters/**`) siguen acoplados a funciones SQL.
-- **Modo MOCK documentado pero no desacoplado**: `MOCK_DATA` ya vive en `.env.example` y `README.md`, y varias funciones tienen ramas condicionales. Falta la fábrica de repositorios que permita intercambiar implementaciones sin ramificaciones dispersas.
+## 0. Estado actual (17 nov 2025)
+- **Prisma centralizado**: `prisma/schema.prisma` alineado con `database/schema_master.sql`. Cliente expuesto en `src/lib/db/prisma.ts` y usado por repositorios (artículos, kits, órdenes, alertas, cajas, roles, zonas de mesas, etc.).
+- **Flujo de facturación migrado**: `InvoiceRepository` + `InvoiceService` activos; `/api/invoices` delega a servicios.
+- **Repositorios y servicios migrados**: `src/lib/repositories/**` y `src/lib/services/**` cubren artículos, kits, órdenes, cajas, roles, zonas/mesas y reportes. Inventario ya expone listados completos (compras, consumos, traspasos, kardex y existencias) mediante Prisma; listas de precios en consolidación.
+- **Endpoints delegando a servicios**: `/api/articulos`, `/api/precios`, `/api/unidades`, `/api/roles/**`, `/api/tables/**`, `/api/meseros/**`, `/api/cajas/**`, `/api/reportes/**` consumen servicios. Inventario avanza con endpoints clave desacoplados.
+- **Modo MOCK operativo**: `RepositoryFactory` decide implementaciones Prisma/Mock a partir de `MOCK_DATA`. Los servicios mantienen el mismo contrato en ambos modos.
+- **Reportes con impresión HTML**: `/api/reportes/**` y reportes de caja soportan `format=html`. En UI se imprime mediante modal con iframe tanto en `/reportes` como en `/caja` (aperturas/cierres).
+- **Calidad automatizada**: Lint (`npm run lint`), typecheck (`npm run typecheck`) y suites Jest ampliadas (134 tests) cubren endpoints y servicios principales. Política: toda nueva funcionalidad debe incluir tests.
 
 ## 1. Resumen ejecutivo
 - Sustituiremos el acceso SQL manual por Prisma para obtener un modelo de datos tipado y centralizado.
@@ -15,7 +17,7 @@ _Fase 3 · Noviembre 2025_
 - Los endpoints se reducirán a capas delgadas o Server Actions, mejorando la coherencia con Next.js 15.
 - La estrategia MOCK se convertirá en implementaciones intercambiables, simplificando QA y entornos desconectados.
 
-## 2. Hallazgos clave (Fases 1 y 2)
+## 2. Hallazgos clave (Fases 1–3)
 | Aspecto | Situación actual | Impacto |
 | --- | --- | --- |
 | Acceso a datos | Sentencias SQL embebidas en `src/lib/db/*.ts` | Riesgos de inyección, baja reutilización |
@@ -54,20 +56,25 @@ src/lib/services/
 - Cuando un flujo sea usado solo por componentes del App Router, se expondrá como Server Action (`"use server"`) dentro del segmento correspondiente.
 - **Extras**: normalizar respuestas (`NextResponse.json`) y centralizar manejo de errores (middleware que traduzca excepciones de servicio).
 
+### 4.3.1 Reportes con salida HTML y UI de impresión
+- Endpoints de reportes aceptan `format=html` para devolver un documento imprimible.
+- En `/reportes` y `/caja` la impresión se realiza en un modal con iframe (accesible, con `title`).
+- Las rutas de apertura y cierre de caja generan HTML independiente, validando sesión/cookies de Next.
+
 ### 4.4 Gestión del modo MOCK
-- `src/lib/repositories/factory.ts` seleccionará entre `prisma` y `mock` según `process.env.MOCK_DATA`.
-- `mock` replicará la interfaz de cada repositorio y trabajará con stores en memoria (o fixtures JSON).
-- El flag se documentará en `.env.example` y `README.md`.
+- `RepositoryFactory` ya selecciona entre Prisma y Mock según `process.env.MOCK_DATA`.
+- Las implementaciones Mock replican interfaces y trabajan con stores en memoria.
+- El flag está documentado en `.env.example` y `README.md`.
 
 ## 5. Plan de implementación (Fase 3)
 | Semana | Entrega | Estado actual | Acciones siguientes |
 | --- | --- | --- | --- |
-| 1 | Configuración Prisma | ✅ `schema.prisma`, `@prisma/client`, singleton `src/lib/db/prisma.ts` y script `prepare` (`prisma generate`) ya disponibles. | Ajustar pipeline CI (GitHub Actions u otra) para ejecutar `npm run prisma:generate` antes de `next build` y documentar flujo de migraciones. |
-| 2 | Repositorios base | ⚠️ Parcial: Articles, Kits, Orders, Inventory Alerts, Admin Users e Invoices ya usan Prisma. | Migrar repos faltantes (`inventory`, `auth`, `tables`, `reports`, `prices`) y publicar interfaces comunes. |
-| 3 | Servicios | ⚠️ Parcial: `ArticleService`, `OrderService`, `InventoryAlertService`, etc. operativos. | Extraer lógica pendiente de `src/lib/db/*.ts` hacia servicios nuevos (`InvoiceService`, `CashRegisterService`, `InventoryService`). |
-| 4 | Endpoints/Server Actions | ⚠️ Parcial: `/api/articulos` ya delega a servicios. | Refactorizar `/api/invoices`, `/api/inventario/**` y `/api/waiters/**`; evaluar Server Actions para flujos internos del App Router. |
-| 5 | Mock Layer | ⏳ No iniciado: ramas condicionales dispersas. | Implementar `RepositoryFactory` que lea `env.useMockData`, crear repos mock espejo y mover los stores in-memory existentes allí. |
-| 6 | QA y mediciones | ⏳ No iniciado. | Añadir pruebas unitarias para servicios portados, smoke tests automatizados (`GET /api/health`, `POST /api/invoices`) y métricas p95 en logs. |
+| 1 | Configuración Prisma | ✅ Listo: `schema.prisma`, `@prisma/client`, `src/lib/db/prisma.ts`, script `prepare`. | Mantener sincronización con `schema_master.sql`. |
+| 2 | Repositorios base | ✅ Mayoría migrada: artículos, kits, órdenes, alertas, cajas, roles, zonas/mesas, reportes. | Completar inventario y precios (bordes). |
+| 3 | Servicios | ✅ Operativos: `ArticleService`, `OrderService`, `InventoryService` (parcial), `CashRegisterService`, `ReportService`, `RoleService`, `TableService`, `WaiterService`, etc. | Continuar extrayendo restos de `src/lib/db/*.ts`.
+| 4 | Endpoints/Server Actions | ✅ La mayoría delega a servicios. | Evaluar Server Actions para flujos internos cuando aplique. |
+| 5 | Mock Layer | ✅ Implementado (`RepositoryFactory`). | Mantener mocks equivalentes al migrar nuevos repos. |
+| 6 | QA y mediciones | ✅ En curso: 134 tests en verde; lint/typecheck obligatorios. | Añadir métricas de performance p95 a logs. |
 
 ## 6. Dependencias y riesgos
 - **Sincronización de esquema**: riesgo de desalineación entre `schema_master.sql` y Prisma → mitigar ejecutando `prisma db pull` tras cada cambio SQL.
@@ -86,23 +93,18 @@ src/lib/services/
 3. **Portar inventario y dependencias**: mover `inventory.ts`, `warehouses.ts`, `articles.ts` y `articleKits.ts` hacia repositorios/servicios especializados, asegurando que `InvoiceService` y `/api/inventario/**` queden desacoplados de SQL crudo.
 4. **Implementar RepositoryFactory y pruebas**: exponer `getRepositories(env.useMockData)` que devuelva implementaciones Prisma o Mock, mover los stores en memoria existentes y añadir suites unitarias para los servicios migrados (`npm run lint`, `npm run typecheck`, `npm run test:services`).
 
-## 9. Inventario de módulos `src/lib/db` (17 nov 2025)
+## 9. Inventario y foco de cierre (17 nov 2025)
 
-| Módulo               | Descripción                          | Estado            | Próximos pasos |
-|----------------------|--------------------------------------|-------------------|----------------|
-| `articles.ts`        | Artículos y catálogo de precios      | ✅ Migrado        | N/A            |
-| `kits.ts`            | Kits de artículos                   | ✅ Migrado        | N/A            |
-| `inventory-alerts.ts`| Alertas de inventario               | ✅ Migrado        | N/A            |
-| `invoices.ts`        | Facturación                         | ✅ Migrado        | N/A            |
-| `auth.ts`            | Autenticación y roles               | ⏳ Sin migrar     | Crear `AuthRepository` y `AuthService`. |
-| `cash-registers.ts`  | Cajas y sesiones                    | ✅ Migrado        | N/A |
-| `orders.ts`          | Órdenes y comandas                  | ⚠️ Parcial        | Completar repositorio y eliminar helpers legacy. |
-| `inventory.ts`       | Inventario                          | ⚠️ Parcial        | Dividir en sub-repositorios especializados. |
-| `exchange-rate.ts`   | Tipos de cambio                     | ✅ Migrado        | Sustituido por `ExchangeRateRepository` + `ExchangeRateService`. |
-| `reports.ts`         | Reportes                            | ⏳ Sin migrar     | Crear repositorios específicos. |
-| `tables.ts`          | Mesas y zonas                       | ⏳ Sin migrar     | Diseñar `TableRepository` y `TableService`. |
-| `prices.ts`          | Listas de precios                   | ⏳ Sin migrar     | Crear `PriceListRepository`. |
+| Área                    | Estado actual                                  | Acción |
+|-------------------------|-----------------------------------------------|--------|
+| Artículos/Kits          | ✅ Migrado (repos + servicios)                 | N/A    |
+| Órdenes/Comandas        | ✅ Migrado (repos + servicios)                 | N/A    |
+| Cajas (apert./cierres)  | ✅ Migrado + reportes HTML + impresión modal   | N/A    |
+| Mesas/Zonas/Meseros     | ✅ TableService/WaiterService operativos       | N/A    |
+| Reportes (ventas, etc.) | ✅ ReportService + `format=html` en endpoints  | Retirar legacy remanente gradualmente |
+| Unidades/Roles          | ✅ Migrado                                     | N/A    |
+| Inventario              | ✅ Completo (compras/consumos/traspasos/kardex/existencias) | Validar rendimiento/índices |
+| Listas de precios       | ⚠️ Parcial                                    | Consolidar PriceListRepository/Service |
+| Autenticación           | ⚠️ Parcial                                    | Completar AuthRepository/Service |
 
-Este inventario refleja el estado actual de la migración a Prisma y los pasos necesarios para completar el proceso.
-
-Con esta propuesta completamos la Fase 3 (Diseño) y dejamos listo el backlog para ejecutar Fases 4 (Implementación) y 5 (Optimización continua).
+Este estado refleja la migración en curso, la adopción de reportes HTML con impresión en modal y la estandarización de pruebas. Toda nueva funcionalidad debe incluir tests (unitarios y/o API) y actualizar README + `.github/copilot-instructions.md` + este documento.

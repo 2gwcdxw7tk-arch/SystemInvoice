@@ -17,7 +17,7 @@ Este documento resume el estado real de la migración hacia la arquitectura basa
 | Tipos de cambio             | `ExchangeRateService`                                                                               | ✅     | Lecturas/escrituras vía servicio. |
 | Listas de precios           | `PriceListService`, `/api/precios`, resolución en `ArticleService`                                   | ✅     | UI espera `items[].price.base_price`. |
 | Clasificaciones             | `ArticleClassificationService`, endpoints asociados                                                  | ✅     | Jerarquía niveles 1–6. |
-| Reportes                    | `ReportService`, `ReportRepository`, `/api/reportes/**`                                             | ✅     | Endpoints migrados a servicio; soporte `format=html` y botón de impresión en `/reportes`. |
+| Reportes                    | `ReportService`, `ReportRepository`, `/api/reportes/**`                                             | ✅     | Endpoints migrados a servicio; soporte `format=html` y botón de impresión (modal) en `/reportes`. |
 
 ## 2. Backlog priorizado
 

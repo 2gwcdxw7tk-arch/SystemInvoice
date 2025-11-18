@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -181,6 +181,10 @@ export default function CashManagementPage() {
     targetSessionId: number | null;
   }>({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments(), targetSessionId: null });
   const [closingSubmitting, setClosingSubmitting] = useState(false);
+  // Impresión en modal (apertura/cierre)
+  const [printModalOpen, setPrintModalOpen] = useState(false);
+  const [printUrl, setPrintUrl] = useState<string | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   const loadCashSession = useCallback(async () => {
     if (!canAccess) {
@@ -427,7 +431,8 @@ export default function CashManagementPage() {
         operatorAdminUserId: resolvedOperatorId,
       });
       if (data?.report_url) {
-        window.open(String(data.report_url), "_blank", "noopener,noreferrer");
+        setPrintUrl(String(data.report_url));
+        setPrintModalOpen(true);
       }
       await loadCashSession();
     } catch (error) {
@@ -440,12 +445,14 @@ export default function CashManagementPage() {
 
   const handleOpenOpeningReport = useCallback((sessionId: number) => {
     const url = `/api/cajas/aperturas/${sessionId}/reporte?format=html`;
-    window.open(url, "_blank", "noopener,noreferrer");
+    setPrintUrl(url);
+    setPrintModalOpen(true);
   }, []);
 
   const handleOpenClosureReport = useCallback((sessionId: number) => {
     const url = `/api/cajas/cierres/${sessionId}/reporte?format=html`;
-    window.open(url, "_blank", "noopener,noreferrer");
+    setPrintUrl(url);
+    setPrintModalOpen(true);
   }, []);
 
   const addClosingPayment = useCallback(() => {
@@ -535,7 +542,8 @@ export default function CashManagementPage() {
       setClosingForm({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments(), targetSessionId: null });
       await loadCashSession();
       if (data?.report_url) {
-        window.open(String(data.report_url), "_blank", "noopener,noreferrer");
+        setPrintUrl(String(data.report_url));
+        setPrintModalOpen(true);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo cerrar la caja";
@@ -967,6 +975,45 @@ export default function CashManagementPage() {
           </Card>
         </>
       )}
+
+      <Modal
+        open={printModalOpen}
+        onClose={() => { setPrintModalOpen(false); setPrintUrl(null); }}
+        title="Imprimir reporte de caja"
+        description="Vista preliminar del reporte. Puedes imprimir o abrir en pestaña."
+        contentClassName="max-w-5xl"
+      >
+        {printUrl ? (
+          <div className="space-y-3">
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                onClick={() => {
+                  const iframe = iframeRef.current;
+                  try {
+                    iframe?.contentWindow?.focus();
+                    iframe?.contentWindow?.print();
+                  } catch {
+                    window.open(printUrl, "_blank", "noopener,noreferrer");
+                  }
+                }}
+              >
+                Imprimir
+              </Button>
+              <Button type="button" variant="outline" asChild>
+                <a href={printUrl} target="_blank" rel="noreferrer noopener">Abrir en pestaña</a>
+              </Button>
+            </div>
+            <div className="h-[70vh] overflow-hidden rounded-2xl border">
+              <iframe ref={iframeRef} src={printUrl} title="Reporte de caja" className="h-full w-full" />
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+            No hay URL de reporte disponible.
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={openingModalOpen}
