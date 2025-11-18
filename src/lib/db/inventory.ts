@@ -75,14 +75,18 @@ export interface RegisterInvoiceMovementsInput {
 
 export interface KardexFilter {
   article?: string;
+  articles?: string[];
   from?: string;
   to?: string;
   warehouse_code?: string;
+  warehouse_codes?: string[];
 }
 
 export interface StockFilter {
   article?: string;
+  articles?: string[];
   warehouse_code?: string;
+  warehouse_codes?: string[];
 }
 
 export interface PurchaseListFilter {
@@ -101,6 +105,7 @@ export interface ConsumptionListFilter {
 export interface KardexMovementRow {
   id: string;
   occurred_at: string;
+  created_at: string;
   transaction_type: TransactionType;
   transaction_code: string;
   article_code: string;
@@ -302,6 +307,7 @@ interface MockMovement {
   transaction_code: string;
   transaction_type: TransactionType;
   occurred_at: string;
+  created_at?: string | null;
   article_code: string;
   article_name: string;
   conversion_factor: number;
@@ -1921,15 +1927,18 @@ function matchesLike(value: string | null | undefined, filter?: string): boolean
 export async function listKardex(filters: KardexFilter = {}): Promise<KardexMovementRow[]> {
   if (env.useMockData) {
     let rows = mockMovements.slice();
+    const rawArticleCodes: string[] = filters.articles ?? (filters.article ? [filters.article] : []);
     const articleCodes = new Set(
-      (filters.articles ?? (filters.article ? [filters.article] : []))
-        .map((code) => code?.toUpperCase?.() ?? "")
-        .filter((code) => code.length > 0)
+      rawArticleCodes
+        .map((code) => (code ? code.toUpperCase() : ""))
+        .filter((code): code is string => code.length > 0)
     );
+    const rawWarehouseCodes: string[] =
+      filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []);
     const warehouseCodes = new Set(
-      (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
-        .map((code) => code?.toUpperCase?.() ?? "")
-        .filter((code) => code.length > 0)
+      rawWarehouseCodes
+        .map((code) => (code ? code.toUpperCase() : ""))
+        .filter((code): code is string => code.length > 0)
     );
     if (articleCodes.size > 0) {
       rows = rows.filter((row) => articleCodes.has(row.article_code?.toUpperCase()));
@@ -1994,12 +2003,15 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
   const params: unknown[] = [];
   const clauses: string[] = [];
 
-  const articleCodes = (filters.articles ?? (filters.article ? [filters.article] : []))
-    .map((code) => code?.toUpperCase?.() ?? "")
-    .filter((code) => code.length > 0);
-  const warehouseCodes = (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
-    .map((code) => code?.toUpperCase?.() ?? "")
-    .filter((code) => code.length > 0);
+  const rawArticleCodes: string[] = filters.articles ?? (filters.article ? [filters.article] : []);
+  const articleCodes = rawArticleCodes
+    .map((code) => (code ? code.toUpperCase() : ""))
+    .filter((code): code is string => code.length > 0);
+  const rawWarehouseCodes: string[] =
+    filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []);
+  const warehouseCodes = rawWarehouseCodes
+    .map((code) => (code ? code.toUpperCase() : ""))
+    .filter((code): code is string => code.length > 0);
 
   if (articleCodes.length > 0) {
     const placeholders = articleCodes.map((_, index) => `$${params.length + index + 1}`);
@@ -2105,15 +2117,18 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
 
 export async function getStockSummary(filters: StockFilter = {}): Promise<StockSummaryRow[]> {
   if (env.useMockData) {
+    const rawArticleCodes: string[] = filters.articles ?? (filters.article ? [filters.article] : []);
     const articleCodes = new Set(
-      (filters.articles ?? (filters.article ? [filters.article] : []))
-        .map((code) => code?.toUpperCase?.() ?? "")
-        .filter((code) => code.length > 0)
+      rawArticleCodes
+        .map((code) => (code ? code.toUpperCase() : ""))
+        .filter((code): code is string => code.length > 0)
     );
+    const rawWarehouseCodes: string[] =
+      filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []);
     const warehouseCodes = new Set(
-      (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
-        .map((code) => code?.toUpperCase?.() ?? "")
-        .filter((code) => code.length > 0)
+      rawWarehouseCodes
+        .map((code) => (code ? code.toUpperCase() : ""))
+        .filter((code): code is string => code.length > 0)
     );
     const aggregated = new Map<string, StockSummaryRow & { conversion_factor: number }>();
     for (const movement of mockMovements) {
@@ -2157,12 +2172,15 @@ export async function getStockSummary(filters: StockFilter = {}): Promise<StockS
   const params: unknown[] = [];
   const clauses: string[] = [];
 
-  const articleCodes = (filters.articles ?? (filters.article ? [filters.article] : []))
-    .map((code) => code?.toUpperCase?.() ?? "")
-    .filter((code) => code.length > 0);
-  const warehouseCodes = (filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []))
-    .map((code) => code?.toUpperCase?.() ?? "")
-    .filter((code) => code.length > 0);
+  const rawArticleCodes: string[] = filters.articles ?? (filters.article ? [filters.article] : []);
+  const articleCodes = rawArticleCodes
+    .map((code) => (code ? code.toUpperCase() : ""))
+    .filter((code): code is string => code.length > 0);
+  const rawWarehouseCodes: string[] =
+    filters.warehouse_codes ?? (filters.warehouse_code ? [filters.warehouse_code] : []);
+  const warehouseCodes = rawWarehouseCodes
+    .map((code) => (code ? code.toUpperCase() : ""))
+    .filter((code): code is string => code.length > 0);
 
   if (articleCodes.length > 0) {
     const placeholders = articleCodes.map((_, index) => `$${params.length + index + 1}`);
