@@ -4,7 +4,8 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // Usamos una sola variable: DB_CONNECTION_STRING
+  url      = env("DB_CONNECTION_STRING")
   schemas  = ["app"]
 }
 

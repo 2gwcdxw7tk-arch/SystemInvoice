@@ -57,7 +57,7 @@ Los handlers de API dependen de servicios (`InvoiceService`, `InventoryService`,
 
 ## Integración con PostgreSQL
 
-El acceso a datos se realiza principalmente con Prisma desde `src/lib/db/prisma.ts`. Este cliente configura `DATABASE_URL` a partir de `DB_CONNECTION_STRING` y se comparte de forma segura entre módulos.
+El acceso a datos se realiza principalmente con Prisma desde `src/lib/db/prisma.ts`. Este cliente usa una única variable `DB_CONNECTION_STRING` (y solo si falta, Prisma aceptará `DATABASE_URL` como alias de compatibilidad). De esta forma app y Prisma siempre apuntan a la misma base.
 
 Consulta la sección **Variables de entorno** para conocer el propósito de cada ajuste y sus valores sugeridos.
 
@@ -112,7 +112,7 @@ El endpoint `GET /api/health` valida la conectividad.
 | `NEXT_PUBLIC_SERVICE_RATE` | Cargo de servicio por defecto (acepta `0.10` o `10`) | `10` |
 | `DEFAULT_PRICE_LIST_CODE` | Lista de precios a usar en catálogos y facturas | `BASE` |
 | `DEFAULT_SALES_WAREHOUSE_CODE` | Almacén por defecto para consumos de facturación (fallback para artículos sin almacén asignado) | `PRINCIPAL` |
-| `DB_CONNECTION_STRING` | Cadena de conexión PostgreSQL con esquema `app` | `postgres://postgres:super_seguro@localhost:5432/facturador` |
+| `DB_CONNECTION_STRING` | Cadena de conexión PostgreSQL con esquema `app`. ÚNICA fuente para app y Prisma | `postgres://postgres:super_seguro@localhost:5432/facturador` |
 | `MOCK_DATA` | Activa modo demo en memoria (sin persistencia real) | `false` |
 | `SESSION_SECRET` | Clave aleatoria (>=32 caracteres) para firmar cookies | `cambia-esta-clave-super-secreta-32caracteres` |
 | `NODE_ENV` | Entorno de ejecución (afecta habilitación de Next.js) | `development` |

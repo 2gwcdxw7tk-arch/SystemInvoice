@@ -189,6 +189,10 @@ export default function MeserosComandasPage() {
   const [noteDraft, setNoteDraft] = useState("");
   const [noteTarget, setNoteTarget] = useState<OrderLine | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [seatConfirmOpen, setSeatConfirmOpen] = useState(false);
+  const [seatTarget, setSeatTarget] = useState<{ id: string; label: string; reservedBy?: string | null } | null>(null);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
 
   const skipSyncRef = useRef(false);
   const [now, setNow] = useState(() => new Date());
@@ -366,7 +370,7 @@ export default function MeserosComandasPage() {
     void persistOrder(pendingItems, sentItems);
   }, [pendingItems, sentItems, selectedTable, persistOrder]);
 
-  const handleChangeTable = useCallback(() => {
+  const doChangeTable = useCallback(() => {
     skipSyncRef.current = true;
     setSelectedTable(null);
     setPendingItems([]);
@@ -383,6 +387,14 @@ export default function MeserosComandasPage() {
     setSearchTerm("");
     void loadTables();
   }, [loadTables]);
+
+  const handleChangeTable = useCallback(() => {
+    if (pendingItems.length > 0 && sentItems.length === 0) {
+      setExitConfirmOpen(true);
+      return;
+    }
+    doChangeTable();
+  }, [pendingItems.length, sentItems.length, doChangeTable]);
 
   const activeTableSnapshot = useMemo(() => {
     if (!selectedTable) return null;
@@ -533,16 +545,7 @@ export default function MeserosComandasPage() {
       return;
     }
     if (!pendingItems.length) return;
-    if (window.confirm("Limpiar la comanda? Se perderan los articulos que aun no envias.")) {
-      setPendingItems([]);
-      setSelectedLevel1(null);
-      setSelectedLevel2(null);
-      setSelectedLevel3(null);
-      setActiveLevel(1);
-      setSearchTerm("");
-      setSearchEnabled(false);
-      toast({ variant: "success", title: "Comanda reiniciada", description: "Puedes comenzar una nueva seleccion de articulos." });
-    }
+    setResetConfirmOpen(true);
   }
 
   function openNotes(line: OrderLine) {
@@ -675,24 +678,32 @@ export default function MeserosComandasPage() {
             ) : tables.length > 0 ? (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6">
                 {tables.map((table) => {
-                  const hasActiveOrder = (table.order && table.order.status === "normal") || !!table.assignedWaiterId;
+                  const assignedToOther = !!table.assignedWaiterId && table.assignedWaiterId !== waiter.id;
+                  const hasActiveOrder = !!table.order && table.order.status === "normal";
                   const hasReservation = !!table.reservation;
-                  const hasBlocker = hasActiveOrder || hasReservation;
-                  const isMine = hasActiveOrder && table.assignedWaiterId === waiter.id;
-                  const isAvailable = !hasBlocker;
-                  const isLocked = hasBlocker && !isMine;
+                  const isMine = !!table.assignedWaiterId && table.assignedWaiterId === waiter.id;
+                  const isLocked = assignedToOther || (hasActiveOrder && !isMine);
+                  const isAvailable = !isLocked && !hasActiveOrder && !isMine; // Reservada sin asignación es seleccionable
                   const isClaiming = claimingTableId === table.id;
                   return (
                     <button
                       key={table.id}
                       type="button"
-                      onClick={() => handleSelectTable(table.id)}
+                      onClick={() => {
+                        if (!isLocked && hasReservation && !isMine) {
+                          setSeatTarget({ id: table.id, label: table.label, reservedBy: table.reservation?.reserved_by ?? null });
+                          setSeatConfirmOpen(true);
+                          return;
+                        }
+                        void handleSelectTable(table.id);
+                      }}
                       disabled={isLocked || isClaiming}
                       className={cn(
                         "flex min-h-[120px] flex-col justify-between rounded-2xl border bg-background/90 p-3 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:pointer-events-none disabled:opacity-100",
                         {
                           "ring-2 ring-emerald-500 border-emerald-500 bg-emerald-50": isMine,
-                          "border-zinc-200 bg-white": isAvailable && !isMine,
+                          "border-amber-300 bg-amber-50": !isMine && !isLocked && hasReservation,
+                          "border-zinc-200 bg-white": isAvailable && !isMine && !hasReservation,
                           "border-rose-500 bg-rose-100/90": isLocked,
                           "cursor-not-allowed": isLocked,
                           "hover:-translate-y-0.5 hover:shadow-md": !isLocked && !isClaiming,
@@ -708,19 +719,21 @@ export default function MeserosComandasPage() {
                               "rounded-full px-2 py-0.5 text-[11px] font-semibold border",
                               isMine
                                 ? "border-emerald-600 bg-emerald-600 text-white shadow-sm"
+                                : !isLocked && hasReservation
+                                ? "border-amber-400 bg-amber-500 text-white"
                                 : isAvailable
                                 ? "border-zinc-200 bg-white text-muted-foreground"
                                 : "border-rose-300 bg-rose-500 text-white"
                             )}
                           >
-                            {isMine ? "Tu mesa" : isAvailable ? "Libre" : hasReservation ? "Reservada" : "Ocupada"}
+                            {isMine ? "Tu mesa" : hasReservation ? "Reservada" : isAvailable ? "Libre" : "Ocupada"}
                           </span>
                         </div>
                         {table.zone ? <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{table.zone}</p> : null}
                         {!isAvailable && !isMine && table.assignedWaiterName ? (
                           <p className="text-[11px] font-medium text-rose-700">Asignada a {table.assignedWaiterName}</p>
                         ) : null}
-                        {!isAvailable && !isMine && hasReservation && table.reservation?.reserved_by ? (
+                        {!isMine && hasReservation && table.reservation?.reserved_by ? (
                           <p className="text-[11px] text-rose-700">Reserva de {table.reservation.reserved_by}</p>
                         ) : null}
                       </div>
@@ -1118,6 +1131,107 @@ export default function MeserosComandasPage() {
           <div className="flex justify-end">
             <Button variant="outline" onClick={() => setDetailModalOpen(false)}>
               Cerrar
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Confirmar sentar una mesa reservada */}
+      <Modal
+        open={seatConfirmOpen}
+        onClose={() => {
+          setSeatConfirmOpen(false);
+          setSeatTarget(null);
+        }}
+        title="¿Sentar reservación?"
+        description={seatTarget?.reservedBy ? `Esta mesa está reservada por ${seatTarget.reservedBy}.` : "Esta mesa tiene una reservación activa."}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Al continuar, la mesa se asignará a ti y la reservación pasará a estado “sentada”.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSeatConfirmOpen(false);
+                setSeatTarget(null);
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => {
+                const id = seatTarget?.id;
+                setSeatConfirmOpen(false);
+                setSeatTarget(null);
+                if (id) void handleSelectTable(id);
+              }}
+            >
+              Sentar mesa
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Confirmar limpiar comanda */}
+      <Modal
+        open={resetConfirmOpen}
+        onClose={() => setResetConfirmOpen(false)}
+        title="Limpiar comanda"
+        description="Se perderán los artículos que aún no enviaste."
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Esta acción no se puede deshacer.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setResetConfirmOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setResetConfirmOpen(false);
+                setPendingItems([]);
+                setSelectedLevel1(null);
+                setSelectedLevel2(null);
+                setSelectedLevel3(null);
+                setActiveLevel(1);
+                setSearchTerm("");
+                setSearchEnabled(false);
+                toast({ variant: "success", title: "Comanda reiniciada", description: "Puedes comenzar una nueva seleccion de articulos." });
+              }}
+            >
+              Sí, limpiar
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Confirmar salir de la mesa con pendientes */}
+      <Modal
+        open={exitConfirmOpen}
+        onClose={() => setExitConfirmOpen(false)}
+        title="Salir de la mesa"
+        description="Tienes artículos pendientes sin enviar. Si sales, se perderán."
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Puedes guardar o enviar la comanda antes de salir para no perder cambios.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setExitConfirmOpen(false)}>
+              Permanecer
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setExitConfirmOpen(false);
+                doChangeTable();
+              }}
+            >
+              Salir y descartar
             </Button>
           </div>
         </div>

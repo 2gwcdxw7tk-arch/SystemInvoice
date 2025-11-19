@@ -27,7 +27,7 @@
 - **Tables**: Use `TableService` (`src/lib/services/TableService.ts`) to manage table catalog, reservations, waiter snapshots and table state. API routes under `/api/tables/**` y `/api/meseros/tables/**` must consume this service (no `db/tables`).
 - **Monetary Values**: Always use `getCurrencyFormatter` or `formatCurrency` to ensure consistent formatting.
 - **Article–Warehouse Associations**: Use `ArticleWarehouseService` for listing/associating/desasociating bodegas de un artículo y para marcar bodega primaria. Este servicio sincroniza `articles.default_warehouse_id` y lo consumen `InventoryService` y los movimientos de venta. Nunca acceder directamente a tablas desde handlers.
-- **Environment Variables**: Read at the module level and memoize when reused (e.g., `NEXT_PUBLIC_VAT_RATE`, `DEFAULT_PRICE_LIST_CODE`, `DEFAULT_SALES_WAREHOUSE_CODE`). `NEXT_PUBLIC_CLIENT_LOGO_URL` controla el logotipo mostrado en login y barra superior.
+- **Environment Variables**: Usa una sola cadena de conexión para toda la app: `DB_CONNECTION_STRING`. Prisma y el runtime leen de la misma variable (se acepta `DATABASE_URL` solo como alias de compatibilidad si faltara). Lee variables a nivel de módulo y memorizalas cuando se reutilicen (e.g., `NEXT_PUBLIC_VAT_RATE`, `DEFAULT_PRICE_LIST_CODE`, `DEFAULT_SALES_WAREHOUSE_CODE`). `NEXT_PUBLIC_CLIENT_LOGO_URL` controla el logotipo mostrado en login y barra superior.
 
 ## Conventions
 - **Forms**: Use controlled forms with `useState` and light sanitization (`replace(/[^0-9.,]/g, "")`).

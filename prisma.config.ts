@@ -1,5 +1,5 @@
-import "dotenv/config"; // Cargar variables de entorno
-import { defineConfig, env } from "prisma/config";
+import "dotenv/config"; // Cargar variables de entorno desde .env cuando exista
+import { defineConfig } from "prisma/config";
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
@@ -8,6 +8,8 @@ export default defineConfig({
   },
   engine: "classic",
   datasource: {
-    url: env("DATABASE_URL"),
+    // Fuente única recomendada: DB_CONNECTION_STRING. Aceptamos DATABASE_URL como alias
+    // para compatibilidad, pero la documentación indica configurar solo DB_CONNECTION_STRING.
+    url: process.env.DB_CONNECTION_STRING?.trim() || process.env.DATABASE_URL?.trim() || "",
   },
 });
