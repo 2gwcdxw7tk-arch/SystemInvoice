@@ -4,6 +4,10 @@ import { z } from "zod";
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { createTableZone, listTableZones } from "@/lib/services/TableService";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 const createPayloadSchema = z.object({
   name: z.string().trim().min(1, "Ingresa el nombre de la zona"),
   is_active: z.boolean().optional(),
@@ -19,7 +23,14 @@ export async function GET(request: NextRequest) {
   const includeInactive = request.nextUrl.searchParams.get("include_inactive") !== "false";
   try {
     const zones = await listTableZones({ includeInactive });
-    return NextResponse.json({ success: true, zones });
+    return NextResponse.json(
+      { success: true, zones },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (error) {
     console.error("GET /api/tables/zones", error);
     return NextResponse.json({ success: false, message: "No se pudieron cargar las zonas" }, { status: 500 });

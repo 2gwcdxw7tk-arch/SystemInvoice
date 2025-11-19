@@ -4,6 +4,10 @@ import { z } from "zod";
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { createTableDefinition, listAvailableTables, listTableAdminSnapshots } from "@/lib/services/TableService";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 const createPayloadSchema = z.object({
   id: z.string().trim().min(1),
   label: z.string().trim().min(1),
@@ -22,7 +26,14 @@ export async function GET(request: NextRequest) {
   try {
     const availableOnly = request.nextUrl.searchParams.get("available") === "true";
     const tables = availableOnly ? await listAvailableTables() : await listTableAdminSnapshots();
-    return NextResponse.json({ success: true, tables });
+    return NextResponse.json(
+      { success: true, tables },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (error) {
     console.error("GET /api/tables", error);
     return NextResponse.json({ success: false, message: "No se pudieron consultar las mesas" }, { status: 500 });
