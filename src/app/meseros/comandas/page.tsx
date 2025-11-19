@@ -58,6 +58,17 @@ type ApiTableOrder = {
   sent_items: OrderLine[];
 };
 
+type ApiTableReservation = {
+  status: "holding" | "seated";
+  reserved_by: string;
+  contact_name?: string | null;
+  contact_phone?: string | null;
+  party_size?: number | null;
+  scheduled_for?: string | null;
+  created_at?: string;
+  updated_at?: string;
+} | null;
+
 type ApiTableSnapshot = {
   id: string;
   label: string;
@@ -67,6 +78,7 @@ type ApiTableSnapshot = {
   assigned_waiter_name: string | null;
   updated_at: string | null;
   order: ApiTableOrder | null;
+  reservation?: ApiTableReservation;
 };
 
 type TableSummary = {
@@ -82,6 +94,7 @@ type TableSummary = {
     pendingItems: OrderLine[];
     sentItems: OrderLine[];
   } | null;
+  reservation: ApiTableReservation;
 };
 
 type ActiveLevel = 1 | 2 | 3;
@@ -135,6 +148,7 @@ function adaptTableSnapshot(api: ApiTableSnapshot): TableSummary {
           sentItems: cloneLines(api.order.sent_items),
         }
       : null,
+    reservation: api.reservation ?? null,
   };
 }
 
@@ -205,7 +219,7 @@ export default function MeserosComandasPage() {
   const loadTables = useCallback(async () => {
     setLoadingTables(true);
     try {
-      const res = await fetch("/api/meseros/tables");
+      const res = await fetch("/api/meseros/tables", { cache: "no-store" });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.tables) {
         throw new Error(data?.message ?? "No se pudieron cargar las mesas");
@@ -662,9 +676,11 @@ export default function MeserosComandasPage() {
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6">
                 {tables.map((table) => {
                   const hasActiveOrder = (table.order && table.order.status === "normal") || !!table.assignedWaiterId;
+                  const hasReservation = !!table.reservation;
+                  const hasBlocker = hasActiveOrder || hasReservation;
                   const isMine = hasActiveOrder && table.assignedWaiterId === waiter.id;
-                  const isAvailable = !hasActiveOrder;
-                  const isLocked = hasActiveOrder && !isMine;
+                  const isAvailable = !hasBlocker;
+                  const isLocked = hasBlocker && !isMine;
                   const isClaiming = claimingTableId === table.id;
                   return (
                     <button
@@ -697,12 +713,15 @@ export default function MeserosComandasPage() {
                                 : "border-rose-300 bg-rose-500 text-white"
                             )}
                           >
-                            {isMine ? "Tu mesa" : isAvailable ? "Libre" : "Ocupada"}
+                            {isMine ? "Tu mesa" : isAvailable ? "Libre" : hasReservation ? "Reservada" : "Ocupada"}
                           </span>
                         </div>
                         {table.zone ? <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{table.zone}</p> : null}
                         {!isAvailable && !isMine && table.assignedWaiterName ? (
                           <p className="text-[11px] font-medium text-rose-700">Asignada a {table.assignedWaiterName}</p>
+                        ) : null}
+                        {!isAvailable && !isMine && hasReservation && table.reservation?.reserved_by ? (
+                          <p className="text-[11px] text-rose-700">Reserva de {table.reservation.reserved_by}</p>
                         ) : null}
                       </div>
                       <div className="mt-2 flex items-center justify-end text-[11px] text-muted-foreground">

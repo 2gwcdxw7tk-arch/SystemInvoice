@@ -20,6 +20,10 @@ const updatePayloadSchema = z.object({
   sent_items: z.array(orderLineSchema),
 });
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 export async function GET(request: NextRequest, context: { params: Promise<{ tableId: string }> }) {
   const { tableId } = await context.params;
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
@@ -41,7 +45,10 @@ export async function GET(request: NextRequest, context: { params: Promise<{ tab
     if (table.assigned_waiter_id && table.assigned_waiter_id !== waiterId) {
       return NextResponse.json({ success: false, message: "La mesa está asignada a otro mesero" }, { status: 409 });
     }
-    return NextResponse.json({ success: true, table });
+    return NextResponse.json(
+      { success: true, table },
+      { headers: { "Cache-Control": "no-store, max-age=0" } }
+    );
   } catch (error) {
     console.error(`GET /api/meseros/tables/${tableId}`, error);
     return NextResponse.json({ success: false, message: "No se pudo consultar la mesa" }, { status: 500 });
@@ -105,7 +112,10 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ t
       }
     }
 
-    return NextResponse.json({ success: true, table: responseTable });
+    return NextResponse.json(
+      { success: true, table: responseTable },
+      { headers: { "Cache-Control": "no-store, max-age=0" } }
+    );
   } catch (error) {
     console.error(`PATCH /api/meseros/tables/${tableId}`, error);
     const message = error instanceof Error ? error.message : "No se pudo guardar la comanda";

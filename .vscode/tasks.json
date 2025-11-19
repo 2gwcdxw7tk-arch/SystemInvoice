@@ -24,6 +24,17 @@
 			],
 			"isBackground": false,
 			"group": "test"
+		},
+		{
+			"label": "npm: lint",
+			"type": "shell",
+			"command": "npm.cmd",
+			"args": [
+				"run",
+				"lint"
+			],
+			"isBackground": false,
+			"group": "test"
 		}
 	]
 }

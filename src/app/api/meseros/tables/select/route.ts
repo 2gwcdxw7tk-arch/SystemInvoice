@@ -11,6 +11,10 @@ const payloadSchema = z.object({
   table_id: z.string().trim().min(1),
 });
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 export async function POST(request: NextRequest) {
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   const session = await parseSessionCookie(rawSession);
@@ -54,7 +58,10 @@ export async function POST(request: NextRequest) {
       })),
     });
     const refreshed = await getWaiterTable(table.id);
-    return NextResponse.json({ success: true, table: refreshed ?? table });
+    return NextResponse.json(
+      { success: true, table: refreshed ?? table },
+      { headers: { "Cache-Control": "no-store, max-age=0" } }
+    );
   } catch (error) {
     console.error("POST /api/meseros/tables/select", error);
     const message = error instanceof Error ? error.message : "No se pudo asignar la mesa";
