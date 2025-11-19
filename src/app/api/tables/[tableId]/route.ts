@@ -4,6 +4,10 @@ import { z } from "zod";
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { deleteTableDefinition, getTableAdminSnapshot, updateTableDefinition } from "@/lib/services/TableService";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 const updatePayloadSchema = z.object({
   label: z.string().trim().min(1).optional(),
   zone_id: z.string().trim().min(1).nullable().optional(),
@@ -24,7 +28,14 @@ export async function GET(request: NextRequest, context: { params: Promise<{ tab
     if (!table) {
       return NextResponse.json({ success: false, message: "Mesa no encontrada" }, { status: 404 });
     }
-    return NextResponse.json({ success: true, table });
+    return NextResponse.json(
+      { success: true, table },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (error) {
     console.error(`GET /api/tables/${tableId}`, error);
     return NextResponse.json({ success: false, message: "No se pudo consultar la mesa" }, { status: 500 });

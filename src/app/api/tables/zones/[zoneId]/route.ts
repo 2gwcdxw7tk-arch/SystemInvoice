@@ -4,6 +4,10 @@ import { z } from "zod";
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { deleteTableZone, updateTableZone } from "@/lib/services/TableService";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 const updatePayloadSchema = z.object({
   name: z.string().trim().min(1).optional(),
   is_active: z.boolean().optional(),
@@ -28,7 +32,14 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ z
       name: parsed.data.name,
       isActive: parsed.data.is_active,
     });
-    return NextResponse.json({ success: true, zone });
+    return NextResponse.json(
+      { success: true, zone },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (error) {
     console.error(`PATCH /api/tables/zones/${zoneId}`, error);
     const message = error instanceof Error ? error.message : "No se pudo actualizar la zona";
@@ -47,7 +58,14 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
 
   try {
     await deleteTableZone(zoneId);
-    return NextResponse.json({ success: true });
+    return NextResponse.json(
+      { success: true },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (error) {
     console.error(`DELETE /api/tables/zones/${zoneId}`, error);
     const message = error instanceof Error ? error.message : "No se pudo eliminar la zona";

@@ -4,6 +4,10 @@ import { z } from "zod";
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { releaseTableReservation, reserveTable } from "@/lib/services/TableService";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 const reservationSchema = z.object({
   reserved_by: z.string().trim().min(1),
   contact_name: z.string().trim().max(120).nullable().optional(),
@@ -37,7 +41,15 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ta
       scheduledFor: parsed.data.scheduled_for ?? null,
       notes: parsed.data.notes ?? null,
     });
-    return NextResponse.json({ success: true, table }, { status: 201 });
+    return NextResponse.json(
+      { success: true, table },
+      {
+        status: 201,
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (error) {
     console.error(`POST /api/tables/${tableId}/reservation`, error);
     const message = error instanceof Error ? error.message : "No se pudo reservar la mesa";
@@ -56,7 +68,14 @@ export async function DELETE(request: NextRequest, context: { params: Promise<{ 
 
   try {
     const table = await releaseTableReservation(tableId);
-    return NextResponse.json({ success: true, table });
+    return NextResponse.json(
+      { success: true, table },
+      {
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (error) {
     console.error(`DELETE /api/tables/${tableId}/reservation`, error);
     return NextResponse.json({ success: false, message: "No se pudo liberar la reservación" }, { status: 500 });
