@@ -11,7 +11,6 @@ import type { SessionPayload } from "@/lib/auth/session";
 import { SessionProvider, useSession } from "@/components/providers/session-provider";
 import { useToast } from "@/components/ui/toast-provider";
 import { isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
-import { useRef } from "react";
 import { Modal } from "@/components/ui/modal";
 
 const HIDE_CHROME_PATHS = new Set<string>(["/", "/meseros/comandas"]);
