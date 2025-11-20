@@ -395,21 +395,28 @@ export class CashRegisterService {
       throw new Error("El monto de apertura debe ser positivo o cero");
     }
     const allowUnassigned = input.allowUnassigned ?? false;
-    const openingDenominations = Array.isArray(input.openingDenominations)
+    const normalizedOpeningDenominations = Array.isArray(input.openingDenominations)
       ? input.openingDenominations.filter((d) => Number.isFinite(d.value) && d.value >= 0 && Number.isFinite(d.qty) && d.qty >= 0)
-      : undefined;
+      : [];
+    const requiresOpeningDenoms = input.openingAmount > 0;
+    const hasOpeningDenoms = normalizedOpeningDenominations.length > 0;
 
-    if (!openingDenominations || openingDenominations.length === 0) {
-      throw new Error("Debes capturar denominaciones de apertura");
+    if (requiresOpeningDenoms && !hasOpeningDenoms) {
+      throw new Error("Debes capturar denominaciones de apertura cuando el monto es mayor a cero");
     }
-    const openingCurrencySet = new Set(openingDenominations.map((d) => d.currency.toUpperCase()));
-    if (openingCurrencySet.size !== 1 || !openingCurrencySet.has(env.currency.local.code)) {
-      throw new Error(`Las denominaciones de apertura deben ser en ${env.currency.local.code}`);
+
+    if (hasOpeningDenoms) {
+      const openingCurrencySet = new Set(normalizedOpeningDenominations.map((d) => d.currency.toUpperCase()));
+      if (openingCurrencySet.size !== 1 || !openingCurrencySet.has(env.currency.local.code)) {
+        throw new Error(`Las denominaciones de apertura deben ser en ${env.currency.local.code}`);
+      }
+      const openingSum = normalizedOpeningDenominations.reduce((acc, d) => acc + d.value * d.qty, 0);
+      if (Math.abs(Number(openingSum.toFixed(2)) - Number(input.openingAmount.toFixed(2))) >= 0.005) {
+        throw new Error("La suma de denominaciones no coincide con el monto de apertura");
+      }
     }
-    const openingSum = openingDenominations.reduce((acc, d) => acc + d.value * d.qty, 0);
-    if (Math.abs(Number(openingSum.toFixed(2)) - Number(input.openingAmount.toFixed(2))) >= 0.005) {
-      throw new Error("La suma de denominaciones no coincide con el monto de apertura");
-    }
+
+    const payloadOpeningDenoms = hasOpeningDenoms ? normalizedOpeningDenominations : undefined;
 
     if (env.useMockData && this.mockSessions && this.mockAssignments) {
       const normalizedCode = input.cashRegisterCode.trim().toUpperCase();
@@ -454,7 +461,7 @@ export class CashRegisterService {
         openingAmount: Number(input.openingAmount.toFixed(2)),
         openingAt: nowIso,
         openingNotes,
-        openingDenominations: openingDenominations ?? null,
+        openingDenominations: payloadOpeningDenoms ?? null,
         closingAmount: null,
         closingAt: null,
         closingNotes: null,
@@ -473,7 +480,7 @@ export class CashRegisterService {
       openingNotes,
       allowUnassigned,
       actingAdminUserId: input.actingAdminUserId,
-      openingDenominations,
+      openingDenominations: payloadOpeningDenoms,
     });
   }
 

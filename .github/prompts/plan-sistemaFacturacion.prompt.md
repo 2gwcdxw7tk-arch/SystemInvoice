@@ -20,6 +20,7 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
 - Cajas: `CashRegisterService` migrado, reportes de apertura/cierre con HTML y modal de impresión en UI.
 - Asociaciones artículo–bodega: `ArticleWarehouseService` y endpoint `/api/articulos/[article_code]/almacenes` (GET/POST/DELETE) disponibles; UI de mantenimiento enlazada desde el modal del catálogo en `/articulos/[article_code]/almacenes`.
 - Documentación actualizada (`README.md`, `.github/copilot-instructions.md`, `docs/propuesta-arquitectura-mejoras.md`).
+- Hidratación: evita variaciones de markup o clases entre SSR y cliente; el encabezado ya fue ajustado como ejemplo (mismas clases `px`).
 - QA: suites Jest amplias (134 tests en verde); `npm run lint` y `npm run typecheck` obligatorios.
 
 ## Próximas tareas
@@ -36,6 +37,7 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
 - `/api/invoices`: valida caja abierta; registra consumos inventario.
 - `/api/reportes/**`: `format=html` entrega documento imprimible; JSON por defecto.
 - `/api/cajas/aperturas|cierres/{sessionId}/reporte`: HTML imprimible protegido (token/cookies Next).
+- Enlaces absolutos: construirlos siempre con `env.appUrl` (`NEXT_APP_URL`) para reportes o callbacks externos; no utilices `request.nextUrl.origin` en producción.
 
 ## Convenciones
 - Zod en handlers; toasts con `useToast()`; monetario con `getCurrencyFormatter`/`formatCurrency`.

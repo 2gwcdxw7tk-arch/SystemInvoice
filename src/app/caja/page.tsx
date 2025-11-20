@@ -413,28 +413,31 @@ export default function CashManagementPage() {
       return;
     }
 
-    // Validación de denominaciones apertura: requeridas y suma = monto
-    const normalizedDenoms = openingDenoms
-          .map((d) => ({
-            currency: (d.currency || defaultCurrency).trim().toUpperCase(),
-            value: Number(d.value.trim().replace(/,/g, ".")),
-            qty: Number(d.qty.trim()),
-            kind: d.kind,
-          }))
-          .filter((d) => d.currency.length === 3 && Number.isFinite(d.value) && d.value >= 0 && Number.isFinite(d.qty) && d.qty >= 0);
-    if (normalizedDenoms.length === 0) {
-      toast({ variant: "warning", title: "Caja", description: "Agrega el detalle de denominaciones de apertura" });
-      return;
-    }
-    const currencies = Array.from(new Set(normalizedDenoms.map((d) => d.currency)));
-    if (!(currencies.length === 1 && currencies[0] === defaultCurrency)) {
-      toast({ variant: "warning", title: "Caja", description: `Las denominaciones deben ser en ${defaultCurrency}` });
-      return;
-    }
-    const denomSum = normalizedDenoms.reduce((acc, d) => acc + d.value * d.qty, 0);
-    if (Math.abs(Number(denomSum.toFixed(2)) - Number(amountValue.toFixed(2))) >= 0.005) {
-      toast({ variant: "warning", title: "Caja", description: "La suma de denominaciones no coincide con el monto de apertura" });
-      return;
+    let normalizedDenoms: Array<{ currency: string; value: number; qty: number; kind?: DenominationKind }> = [];
+    const requiresOpeningDenomsValidation = amountValue > 0;
+    if (requiresOpeningDenomsValidation) {
+      normalizedDenoms = openingDenoms
+        .map((d) => ({
+          currency: (d.currency || defaultCurrency).trim().toUpperCase(),
+          value: Number(d.value.trim().replace(/,/g, ".")),
+          qty: Number(d.qty.trim()),
+          kind: d.kind,
+        }))
+        .filter((d) => d.currency.length === 3 && Number.isFinite(d.value) && d.value >= 0 && Number.isFinite(d.qty) && d.qty >= 0);
+      if (normalizedDenoms.length === 0) {
+        toast({ variant: "warning", title: "Caja", description: "Agrega el detalle de denominaciones de apertura" });
+        return;
+      }
+      const currencies = Array.from(new Set(normalizedDenoms.map((d) => d.currency)));
+      if (!(currencies.length === 1 && currencies[0] === defaultCurrency)) {
+        toast({ variant: "warning", title: "Caja", description: `Las denominaciones deben ser en ${defaultCurrency}` });
+        return;
+      }
+      const denomSum = normalizedDenoms.reduce((acc, d) => acc + d.value * d.qty, 0);
+      if (Math.abs(Number(denomSum.toFixed(2)) - Number(amountValue.toFixed(2))) >= 0.005) {
+        toast({ variant: "warning", title: "Caja", description: "La suma de denominaciones no coincide con el monto de apertura" });
+        return;
+      }
     }
 
     setOpeningSubmitting(true);
@@ -448,7 +451,7 @@ export default function CashManagementPage() {
           opening_amount: amountValue,
           opening_notes: openingForm.openingNotes.trim() ? openingForm.openingNotes.trim() : null,
           operator_admin_user_id: isAdmin ? resolvedOperatorId : undefined,
-                  opening_denominations: normalizedDenoms,
+          ...(requiresOpeningDenomsValidation ? { opening_denominations: normalizedDenoms } : {}),
         }),
       });
       const data = await response.json().catch(() => null);
@@ -476,7 +479,7 @@ export default function CashManagementPage() {
     } finally {
       setOpeningSubmitting(false);
     }
-  }, [currentAdminId, isAdmin, loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, openingForm.operatorAdminUserId, openingDenoms, toast]);
+  }, [currentAdminId, isAdmin, loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, openingForm.operatorAdminUserId, openingDenoms, toast, openPrintModal]);
 
   const handleOpenOpeningReport = useCallback((sessionId: number) => {
     openPrintModal(`/api/cajas/aperturas/${sessionId}/reporte?format=html`);
@@ -622,10 +625,15 @@ export default function CashManagementPage() {
         throw new Error(message);
       }
 
-      toast({ variant: "success", title: "Caja", description: "Caja cerrada correctamente" });
+      if (data?.already_closed) {
+        toast({ variant: "warning", title: "Caja", description: "La sesión ya estaba cerrada, se recuperó el reporte." });
+      } else {
+        toast({ variant: "success", title: "Caja", description: "Caja cerrada correctamente" });
+      }
       setClosingModalOpen(false);
       setClosingForm({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments(), targetSessionId: null });
       await loadCashSession();
+      // Después de refrescar sesión activa, abrir el reporte si existe
       if (data?.report_url) {
         openPrintModal(String(data.report_url));
       }
@@ -635,7 +643,7 @@ export default function CashManagementPage() {
     } finally {
       setClosingSubmitting(false);
     }
-  }, [cashState.activeSession?.id, closingForm, closingDenoms, closureExpectedTotal, loadCashSession, toast]);
+  }, [cashState.activeSession?.id, closingForm, closingDenoms, closureExpectedTotal, loadCashSession, toast, openPrintModal]);
 
   const confirmAndSubmitDifference = useCallback(() => {
     const prepared = preparedClosureRef.current;
@@ -694,12 +702,13 @@ export default function CashManagementPage() {
     (async () => {
       try {
         setClosureLoading(true);
-        const response = await fetch(`/api/cajas/cierres/${sessionId}/reporte?format=json`, { credentials: "include", cache: "no-store" });
+        // Usamos endpoint de preparación (más ligero y válido para sesiones abiertas)
+        const response = await fetch(`/api/cajas/cierres/${sessionId}/preparacion?format=json`, { credentials: "include", cache: "no-store" });
         const data = await response.json().catch(() => null);
         if (!response.ok || !data?.success) {
           throw new Error(data?.message || "No se pudo calcular el total esperado del cierre");
         }
-        const total = Number(data.report?.expectedTotalAmount ?? 0);
+        const total = Number(data.preview?.expectedTotalAmount ?? 0);
         if (!aborted) {
           setClosureExpectedTotal(Number(total.toFixed(2)));
           setClosureError(null);
@@ -733,6 +742,20 @@ export default function CashManagementPage() {
     }
     return map;
   }, [openingDenoms]);
+  const openingAmountValue = useMemo(() => {
+    const normalized = openingForm.openingAmount.trim().replace(/,/g, ".");
+    if (!normalized) {
+      return 0;
+    }
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }, [openingForm.openingAmount]);
+  const requiresOpeningDenoms = openingAmountValue > 0;
+  useEffect(() => {
+    if (!requiresOpeningDenoms && openingDenoms.length > 0) {
+      setOpeningDenoms([]);
+    }
+  }, [requiresOpeningDenoms, openingDenoms.length]);
   const addClosingDenom = () => setClosingDenoms((prev) => [...prev, { currency: defaultCurrency, kind: "BILL", value: "", qty: "" }]);
   const removeClosingDenom = (idx: number) => setClosingDenoms((prev) => prev.filter((_, i) => i !== idx));
   const patchClosingDenom = (idx: number, patch: Partial<DenominationLine>) => setClosingDenoms((prev) => prev.map((d, i) => i === idx ? { ...d, ...patch } : d));
@@ -1355,96 +1378,106 @@ export default function CashManagementPage() {
                 <p className="mt-1">Almacén: {selectedCashRegister.warehouseCode} • {selectedCashRegister.warehouseName}</p>
               </div>
             ) : null}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Monto de apertura</Label>
-                <Input
-                  value={openingForm.openingAmount}
-                  onChange={(event) =>
-                    setOpeningForm((prev) => ({ ...prev, openingAmount: event.target.value.replace(/[^0-9.,]/g, "") }))
-                  }
-                  placeholder="0.00"
-                  inputMode="decimal"
-                  className="rounded-2xl"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
-                <textarea
-                  value={openingForm.openingNotes}
-                  onChange={(event) =>
-                    setOpeningForm((prev) => ({ ...prev, openingNotes: event.target.value }))
-                  }
-                  placeholder="Observaciones opcionales"
-                  rows={3}
-                  className="w-full rounded-2xl border border-muted bg-background/95 p-3 text-sm text-foreground"
-                />
-              </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Monto de apertura</Label>
+              <Input
+                value={openingForm.openingAmount}
+                onChange={(event) =>
+                  setOpeningForm((prev) => ({ ...prev, openingAmount: event.target.value.replace(/[^0-9.,]/g, "") }))
+                }
+                placeholder="0.00"
+                inputMode="decimal"
+                className="rounded-2xl"
+              />
+              <p className="text-xs text-muted-foreground">Puedes iniciar en 0 si no habrá efectivo disponible.</p>
             </div>
             <div className="space-y-3">
-                                <p className="text-xs uppercase text-muted-foreground">Denominaciones</p>
-                                <div className="space-y-2">
-                                  {openingDenoms.length === 0 ? (
-                                    <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-3 text-xs text-muted-foreground">
-                                      No has agregado denominaciones.
-                                    </div>
-                                  ) : (
-                                    openingDenoms.map((d, idx) => (
-                                      <div key={`open-denom-${idx}`} className="grid gap-3 rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 sm:grid-cols-[minmax(90px,1fr),minmax(120px,1fr),minmax(120px,1fr),minmax(120px,1fr),auto]">
-                                        <Input
-                                          value={d.currency}
-                                          onChange={(e) => patchOpeningDenom(idx, { currency: e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase() })}
-                                          placeholder="Moneda"
-                                          className="rounded-2xl"
-                                        />
-                                        <Combobox<DenominationKind>
-                                          value={d.kind}
-                                          onChange={(value) => patchOpeningDenom(idx, { kind: value })}
-                                          options={denominationKindOptions}
-                                          placeholder="Tipo"
-                                          ariaLabel="Tipo de denominación"
-                                        />
-                                        <Input
-                                          value={d.value}
-                                          onChange={(e) => patchOpeningDenom(idx, { value: e.target.value.replace(/[^0-9.,]/g, "") })}
-                                          placeholder="Valor"
-                                          inputMode="decimal"
-                                          className="rounded-2xl"
-                                        />
-                                        <Input
-                                          value={d.qty}
-                                          onChange={(e) => patchOpeningDenom(idx, { qty: e.target.value.replace(/[^0-9]/g, "") })}
-                                          placeholder="Cantidad"
-                                          inputMode="numeric"
-                                          className="rounded-2xl"
-                                        />
-                                        <div className="flex items-center justify-end">
-                                          <Button
-                                            type="button"
-                                            variant="destructive"
-                                            size="icon"
-                                            className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
-                                            onClick={() => removeOpeningDenom(idx)}
-                                            aria-label="Quitar denominación"
-                                          >
-                                            <span className="leading-none">×</span>
-                                          </Button>
-                                        </div>
-                                      </div>
-                                    ))
-                                  )}
-                                  <div className="flex justify-end">
-                                    <Button type="button" variant="outline" size="sm" onClick={addOpeningDenom}>Agregar denominación</Button>
-                                  </div>
-                                  {openingDenomTotalByCurrency.size > 0 ? (
-                                    <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 text-xs text-muted-foreground">
-                                      {[...openingDenomTotalByCurrency.entries()].map(([cur, total]) => (
-                                        <div key={`open-denom-total-${cur}`}>{cur}: <span className="font-semibold text-foreground">{formatCurrency(total, { currency: cur })}</span></div>
-                                      ))}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </div>
+              <div className="flex items-center justify-between">
+                <p className="text-xs uppercase text-muted-foreground">Denominaciones</p>
+                {!requiresOpeningDenoms ? (
+                  <span className="text-xs text-muted-foreground">Se habilitan cuando el monto supera los 0.00</span>
+                ) : null}
+              </div>
+              {requiresOpeningDenoms ? (
+                <div className="space-y-2">
+                  {openingDenoms.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-3 text-xs text-muted-foreground">
+                      No has agregado denominaciones.
+                    </div>
+                  ) : (
+                    openingDenoms.map((d, idx) => (
+                      <div key={`open-denom-${idx}`} className="grid gap-3 rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 sm:grid-cols-[minmax(90px,1fr),minmax(120px,1fr),minmax(120px,1fr),minmax(120px,1fr),auto]">
+                        <Input
+                          value={d.currency}
+                          onChange={(e) => patchOpeningDenom(idx, { currency: e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase() })}
+                          placeholder="Moneda"
+                          className="rounded-2xl"
+                        />
+                        <Combobox<DenominationKind>
+                          value={d.kind}
+                          onChange={(value) => patchOpeningDenom(idx, { kind: value })}
+                          options={denominationKindOptions}
+                          placeholder="Tipo"
+                          ariaLabel="Tipo de denominación"
+                        />
+                        <Input
+                          value={d.value}
+                          onChange={(e) => patchOpeningDenom(idx, { value: e.target.value.replace(/[^0-9.,]/g, "") })}
+                          placeholder="Valor"
+                          inputMode="decimal"
+                          className="rounded-2xl"
+                        />
+                        <Input
+                          value={d.qty}
+                          onChange={(e) => patchOpeningDenom(idx, { qty: e.target.value.replace(/[^0-9]/g, "") })}
+                          placeholder="Cantidad"
+                          inputMode="numeric"
+                          className="rounded-2xl"
+                        />
+                        <div className="flex items-center justify-end">
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="icon"
+                            className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
+                            onClick={() => removeOpeningDenom(idx)}
+                            aria-label="Quitar denominación"
+                          >
+                            <span className="leading-none">×</span>
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  <div className="flex justify-end">
+                    <Button type="button" variant="outline" size="sm" onClick={addOpeningDenom}>Agregar denominación</Button>
+                  </div>
+                  {openingDenomTotalByCurrency.size > 0 ? (
+                    <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 text-xs text-muted-foreground">
+                      {[...openingDenomTotalByCurrency.entries()].map(([cur, total]) => (
+                        <div key={`open-denom-total-${cur}`}>{cur}: <span className="font-semibold text-foreground">{formatCurrency(total, { currency: cur })}</span></div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-3 text-xs text-muted-foreground">
+                  Captura un monto mayor a 0 para detallar las denominaciones de apertura.
+                </div>
+              )}
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
+              <textarea
+                value={openingForm.openingNotes}
+                onChange={(event) =>
+                  setOpeningForm((prev) => ({ ...prev, openingNotes: event.target.value }))
+                }
+                placeholder="Observaciones opcionales"
+                rows={3}
+                className="w-full rounded-2xl border border-muted bg-background/95 p-3 text-sm text-foreground"
+              />
+            </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setOpeningModalOpen(false)} disabled={openingSubmitting}>
                 Cancelar

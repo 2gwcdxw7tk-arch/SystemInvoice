@@ -104,6 +104,7 @@ El endpoint `GET /api/health` valida la conectividad.
 | `NEXT_PUBLIC_COMPANY_ACRONYM` | Sigla corta para badges y encabezados | `FAC` |
 | `NEXT_PUBLIC_CLIENT_LOGO_URL` | Ruta absoluta o relativa del logotipo mostrado en login y barra superior | `/logos/client.svg` |
 | `NEXT_APP_URL` | URL base usada en redirecciones, enlaces absolutos y correos | `http://localhost:3000` |
+> Importante: esta URL también se usa para generar los enlaces de reportes de caja (apertura/cierre). Configúrala con el dominio público para evitar respuestas `https://0.0.0.0`. 
 | `NEXT_PUBLIC_LOCAL_CURRENCY_CODE` | Código ISO de la moneda principal | `MXN` |
 | `NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL` | Símbolo de moneda principal | `$` |
 | `NEXT_PUBLIC_FOREIGN_CURRENCY_CODE` | Código ISO de la moneda secundaria | `USD` |
@@ -415,12 +416,7 @@ src/lib/services/InvoiceService.ts # Capa de negocio para facturas y pagos múlt
 
 Para garantizar que la documentación esté siempre alineada con el estado actual del proyecto, actualiza los siguientes archivos cada vez que realices cambios significativos:
 
-- `README.md`
-- `.github/copilot-instructions.md`
-- `.github/prompts/plan-sistemaFacturacion.prompt.md`
 
-Esto asegura que los desarrolladores y herramientas de soporte tengan acceso a información precisa y actualizada.
-
----
+- Cabecera optimizada para hidratar correctamente al compartir clases entre SSR y cliente.
 
  Hecho con dedicacion para optimizar la operacion de facturacion.

@@ -92,7 +92,7 @@ export function SiteHeader() {
   return (
     <header className="sticky top-0 z-50 border-b bg-background/85 backdrop-blur">
       <div className="container flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
-        <div className="flex min-h-[44px] items-center gap-3 rounded-xl px-1 sm:px-3 py-2 text-sm font-semibold">
+        <div className="flex min-h-[44px] items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold">
           {/* Botón menú móvil */}
           <Button
             type="button"

@@ -17,11 +17,15 @@ const payloadSchema = z.object({
   opening_amount: z.number().min(0, "El monto de apertura no puede ser negativo"),
   opening_notes: z.string().max(400).optional().nullable(),
   operator_admin_user_id: z.number().int().positive().optional(),
-  opening_denominations: z.array(denominationSchema).min(1, "Agrega el detalle de denominaciones"),
+  opening_denominations: z.array(denominationSchema).optional(),
 }).superRefine((data, ctx) => {
-  const denoms = data.opening_denominations ?? [];
+  const denoms = Array.isArray(data.opening_denominations) ? data.opening_denominations : [];
+  const requiresDenoms = data.opening_amount > 0;
+  if (requiresDenoms && denoms.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Agrega el detalle de denominaciones cuando el monto sea mayor a 0", path: ["opening_denominations"] });
+    return;
+  }
   if (denoms.length === 0) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Debes capturar denominaciones", path: ["opening_denominations"] });
     return;
   }
   const currencySet = new Set(denoms.map((d) => d.currency.toUpperCase()));
@@ -76,6 +80,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const openingDenoms = Array.isArray(parsed.data.opening_denominations) ? parsed.data.opening_denominations : [];
+
     const result = await cashRegisterService.openCashRegisterSession({
       adminUserId: targetAdminId,
       cashRegisterCode: parsed.data.cash_register_code,
@@ -83,7 +89,7 @@ export async function POST(request: NextRequest) {
       openingNotes: parsed.data.opening_notes ?? null,
       allowUnassigned: isAdministrator,
       actingAdminUserId: actingAdminId !== targetAdminId ? actingAdminId : undefined,
-      openingDenominations: parsed.data.opening_denominations,
+      openingDenominations: openingDenoms.length > 0 ? openingDenoms : undefined,
     });
 
     const reportToken = await createReportAccessToken({
@@ -92,6 +98,9 @@ export async function POST(request: NextRequest) {
       requesterId: actingAdminId,
       scope: actingAdminId === targetAdminId ? "self" : "admin",
     });
+
+    const baseUrl = env.appUrl || request.nextUrl.origin;
+    const reportUrl = `${baseUrl}/api/cajas/aperturas/${result.id}/reporte?format=html&token=${encodeURIComponent(reportToken)}`;
 
     return NextResponse.json(
       {
@@ -104,7 +113,7 @@ export async function POST(request: NextRequest) {
           status: result.status,
           cashRegister: result.cashRegister,
         },
-        report_url: `${request.nextUrl.origin}/api/cajas/aperturas/${result.id}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
+        report_url: reportUrl,
       },
       { status: 201 }
     );

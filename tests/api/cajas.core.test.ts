@@ -4,6 +4,9 @@ import { POST as AperturasPOST } from '@/app/api/cajas/aperturas/route';
 import { POST as CierresPOST } from '@/app/api/cajas/cierres/route';
 import { GET as SesionActivaGET } from '@/app/api/cajas/sesion-activa/route';
 import { GET as AsignacionesGET, POST as AsignacionesPOST } from '@/app/api/cajas/asignaciones/route';
+import { cashRegisterService } from '@/lib/services/CashRegisterService';
+
+const LOCAL_CURRENCY = (process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE ?? 'MXN').toUpperCase();
 
 jest.mock('@/lib/auth/access', () => ({
   requireAdministrator: async () => ({ userId: 1 }),
@@ -23,15 +26,75 @@ jest.mock('@/lib/services/CashRegisterService', () => ({
     listCashRegisterAssignments: jest.fn(async () => ([{ adminUserId: 10, assignments: [{ cashRegisterId: 1, isDefault: true }] }])),
     listActiveCashRegisterSessions: jest.fn(async () => ([])),
     listCashRegistersForAdmin: jest.fn(async () => ([{ cashRegisterId: 1, cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', allowManualWarehouseOverride: false, warehouseId: 1, warehouseCode: 'ALM', warehouseName: 'Alm', isDefault: true }])),
-    getActiveCashRegisterSessionByAdmin: jest.fn(async () => ({ id: 99, status: 'OPEN', openingAmount: 100, openingAt: new Date().toISOString(), openingNotes: null, cashRegister: { cashRegisterId: 1, cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' }, adminUserId: 10 })),
+    getActiveCashRegisterSessionByAdmin: jest.fn(async () => ({
+      id: 99,
+      status: 'OPEN',
+      openingAmount: 100,
+      openingAt: new Date().toISOString(),
+      openingNotes: null,
+      cashRegister: {
+        cashRegisterId: 1,
+        cashRegisterCode: 'CR-01',
+        cashRegisterName: 'Principal',
+        allowManualWarehouseOverride: false,
+        warehouseId: 1,
+        warehouseCode: 'ALM',
+        warehouseName: 'Alm',
+        isDefault: true,
+      },
+      adminUserId: 10,
+    })),
     listRecentCashRegisterSessions: jest.fn(async () => ([{ id: 98, status: 'CLOSED', openingAmount: 50, openingAt: new Date().toISOString(), closingAmount: 60, closingAt: new Date().toISOString(), cashRegister: { cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' } }])),
+    getCashRegisterClosureReport: jest.fn(async () => ({
+      sessionId: 99,
+      cashRegister: { cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' },
+      openedByAdminId: 10,
+      openingAmount: 100,
+      openingAt: new Date().toISOString(),
+      closingByAdminId: 10,
+      closingAmount: 120,
+      closingAt: new Date().toISOString(),
+      closingNotes: null,
+      expectedTotalAmount: 120,
+      reportedTotalAmount: 120,
+      differenceTotalAmount: 0,
+      totalInvoices: 5,
+      payments: [],
+      openingDenominations: null,
+      closingDenominations: null,
+    })),
     openCashRegisterSession: jest.fn(async (p: any) => ({ id: 100, status: 'OPEN', openingAmount: p.openingAmount, openingAt: new Date().toISOString(), openingNotes: p.openingNotes ?? null, cashRegister: { cashRegisterId: 1, cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' } })),
     closeCashRegisterSession: jest.fn(async () => ({ sessionId: 100, closingByAdminId: 10, openingAmount: 100, closingAmount: 120, expectedTotalAmount: 120, reportedTotalAmount: 120, differenceTotalAmount: 0, payments: [], cashRegister: { cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' } })),
+    getCashRegisterSessionById: jest.fn(async () => ({
+      id: 99,
+      status: 'OPEN',
+      adminUserId: 10,
+      openingAmount: 100,
+      openingAt: new Date().toISOString(),
+      openingNotes: null,
+      closingAmount: null,
+      closingAt: null,
+      closingNotes: null,
+      cashRegister: {
+        cashRegisterId: 1,
+        cashRegisterCode: 'CR-01',
+        cashRegisterName: 'Principal',
+        allowManualWarehouseOverride: false,
+        warehouseId: 1,
+        warehouseCode: 'ALM',
+        warehouseName: 'Alm',
+        isDefault: true,
+      },
+      closingUserId: null,
+      totalsSnapshot: null,
+    })),
     assignCashRegisterToAdmin: jest.fn(async () => {}),
     unassignCashRegisterFromAdmin: jest.fn(async () => {}),
     setDefaultCashRegisterForAdmin: jest.fn(async () => {}),
   }
 }));
+
+const mockedCashRegisterService = cashRegisterService as jest.Mocked<typeof cashRegisterService>;
 
 jest.mock('@/lib/services/AdminUserService', () => ({
   adminUserService: {
@@ -41,6 +104,10 @@ jest.mock('@/lib/services/AdminUserService', () => ({
 
 function makeReq(url: string) { return { url, nextUrl: new URL(url) } as any; }
 function makeReqWithCookies(url: string) { return { url, nextUrl: new URL(url), cookies: { get: () => ({ value: 'x' }) } } as any; }
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
 describe('Cajas API core', () => {
   it('GET /api/cajas', async () => {
@@ -70,20 +137,149 @@ describe('Cajas operaciones', () => {
   });
 
   it('POST /api/cajas/aperturas', async () => {
-    const req = { ...makeReqWithCookies('http://localhost/api/cajas/aperturas'), json: async () => ({ cash_register_code: 'CR-01', opening_amount: 100 }) } as any;
+    const req = {
+      ...makeReqWithCookies('http://localhost/api/cajas/aperturas'),
+      json: async () => ({
+        cash_register_code: 'CR-01',
+        opening_amount: 100,
+        opening_denominations: [
+          { currency: LOCAL_CURRENCY, value: 100, qty: 1, kind: 'BILL' },
+        ],
+      }),
+    } as any;
     const res = await AperturasPOST(req);
-    expect([200,201]).toContain(res.status);
     const body = await res.json();
+    if (![200, 201].includes(res.status)) {
+      // eslint-disable-next-line no-console
+      console.error('Apertura body', body);
+    }
+    expect([200,201]).toContain(res.status);
     expect(body.success).toBe(true);
     expect(typeof body.report_url).toBe('string');
   });
 
-  it('POST /api/cajas/cierres', async () => {
-    const req = { ...makeReqWithCookies('http://localhost/api/cajas/cierres'), json: async () => ({ closing_amount: 120, payments: [{ method: 'CASH', reported_amount: 120, transaction_count: 1 }] }) } as any;
-    const res = await CierresPOST(req);
-    expect(res.status).toBe(200);
+  it('POST /api/cajas/aperturas permite monto cero sin denominaciones', async () => {
+    const req = {
+      ...makeReqWithCookies('http://localhost/api/cajas/aperturas'),
+      json: async () => ({
+        cash_register_code: 'CR-01',
+        opening_amount: 0,
+        opening_notes: null,
+      }),
+    } as any;
+    const res = await AperturasPOST(req);
     const body = await res.json();
+    expect([200,201]).toContain(res.status);
     expect(body.success).toBe(true);
+    expect(mockedCashRegisterService.openCashRegisterSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      openingAmount: 0,
+      openingDenominations: undefined,
+    }));
+  });
+
+  it('POST /api/cajas/cierres', async () => {
+    const req = {
+      ...makeReqWithCookies('http://localhost/api/cajas/cierres'),
+      json: async () => ({
+        session_id: 123,
+        closing_amount: 120,
+        payments: [{ method: 'CASH', reported_amount: 120, transaction_count: 1 }],
+        closing_denominations: [{ currency: LOCAL_CURRENCY, value: 120, qty: 1, kind: 'BILL' }],
+      }),
+    } as any;
+    const res = await CierresPOST(req);
+    const body = await res.json();
+    if (res.status !== 200) {
+      // eslint-disable-next-line no-console
+      console.error('Cierre body', body);
+    }
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.already_closed).toBeUndefined();
+  });
+
+  it('POST /api/cajas/cierres detecta sesiones ya cerradas sin reintentar', async () => {
+    mockedCashRegisterService.getCashRegisterSessionById.mockResolvedValueOnce({
+      id: 99,
+      status: 'CLOSED',
+      adminUserId: 10,
+      openingAmount: 100,
+      openingAt: new Date().toISOString(),
+      openingNotes: null,
+      closingAmount: 120,
+      closingAt: new Date().toISOString(),
+      closingNotes: null,
+      cashRegister: {
+        cashRegisterId: 1,
+        cashRegisterCode: 'CR-01',
+        cashRegisterName: 'Principal',
+        allowManualWarehouseOverride: false,
+        warehouseId: 1,
+        warehouseCode: 'ALM',
+        warehouseName: 'Alm',
+        isDefault: true,
+      },
+      closingUserId: 10,
+      totalsSnapshot: null,
+    });
+    mockedCashRegisterService.getCashRegisterClosureReport.mockResolvedValueOnce({
+      sessionId: 99,
+      cashRegister: { cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' },
+      openedByAdminId: 10,
+      openingAmount: 100,
+      openingAt: new Date().toISOString(),
+      closingByAdminId: 10,
+      closingAmount: 120,
+      closingAt: new Date().toISOString(),
+      closingNotes: null,
+      expectedTotalAmount: 120,
+      reportedTotalAmount: 120,
+      differenceTotalAmount: 0,
+      totalInvoices: 5,
+      payments: [],
+      openingDenominations: null,
+      closingDenominations: null,
+    });
+
+    const req = {
+      ...makeReqWithCookies('http://localhost/api/cajas/cierres'),
+      json: async () => ({
+        session_id: 123,
+        closing_amount: 120,
+        payments: [{ method: 'CASH', reported_amount: 120, transaction_count: 1 }],
+        closing_denominations: [{ currency: LOCAL_CURRENCY, value: 120, qty: 1, kind: 'BILL' }],
+      }),
+    } as any;
+    const res = await CierresPOST(req);
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.already_closed).toBe(true);
+    expect(mockedCashRegisterService.closeCashRegisterSession).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/cajas/cierres tolerates sesiones ya cerradas', async () => {
+    mockedCashRegisterService.closeCashRegisterSession.mockRejectedValueOnce(new Error('La sesión indicada ya fue cerrada'));
+
+    const req = {
+      ...makeReqWithCookies('http://localhost/api/cajas/cierres'),
+      json: async () => ({
+        session_id: 123,
+        closing_amount: 120,
+        payments: [{ method: 'CASH', reported_amount: 120, transaction_count: 1 }],
+        closing_denominations: [{ currency: LOCAL_CURRENCY, value: 120, qty: 1, kind: 'BILL' }],
+      }),
+    } as any;
+    const res = await CierresPOST(req);
+    const body = await res.json();
+    if (res.status !== 200) {
+      // eslint-disable-next-line no-console
+      console.error('Cierre cerrado body', body);
+    }
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.already_closed).toBe(true);
+    expect(typeof body.report_url).toBe('string');
   });
 });
 

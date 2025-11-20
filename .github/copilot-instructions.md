@@ -29,11 +29,13 @@
 - **Monetary Values**: Always use `getCurrencyFormatter` or `formatCurrency` to ensure consistent formatting.
 - **Article–Warehouse Associations**: Use `ArticleWarehouseService` for listing/associating/desasociating bodegas de un artículo y para marcar bodega primaria. Este servicio sincroniza `articles.default_warehouse_id` y lo consumen `InventoryService` y los movimientos de venta. Nunca acceder directamente a tablas desde handlers.
 - **Environment Variables**: Usa una sola cadena de conexión para toda la app: `DB_CONNECTION_STRING`. Prisma y el runtime leen de la misma variable (se acepta `DATABASE_URL` solo como alias de compatibilidad si faltara). Lee variables a nivel de módulo y memorizalas cuando se reutilicen (e.g., `NEXT_PUBLIC_VAT_RATE`, `DEFAULT_PRICE_LIST_CODE`, `DEFAULT_SALES_WAREHOUSE_CODE`). `NEXT_PUBLIC_CLIENT_LOGO_URL` controla el logotipo mostrado en login y barra superior.
+- **Enlaces absolutos**: Usa `env.appUrl` (derivado de `NEXT_APP_URL`) para construir URLs de reportes u otras rutas públicas en los handlers; evita depender de `request.nextUrl.origin` para no terminar con `0.0.0.0` en producción.
 
 ## Conventions
 - **Forms**: Use controlled forms with `useState` and light sanitization (`replace(/[^0-9.,]/g, "")`).
 - **Toasts**: Use `useToast()` from `@/components/ui/use-toast` for consistent success/warning/error messages.
 - **UI Components**: Follow existing `Card`/`Modal` compositions (e.g., `rounded-2xl/3xl` borders, descriptive subtitles).
+- **Hydratación**: Evita variaciones condicionales en clases/markup entre SSR y cliente; la cabecera ya se ajustó para usar las mismas `px` en ambas etapas.
 - **API Handlers**: Validate inputs with Zod schemas (see `src/app/api/inventario/traspasos/route.ts`). Create schemas first and reuse error utilities.
 - **Service Dependency**: API handlers must depend on services (`adminUserService`, `waiterService`, etc.) and never call repositories directly.
   - For tables: depend on `TableService` methods like `listTableAdminSnapshots`, `listAvailableTables`, `reserveTable`, `releaseTableReservation`, `listWaiterTables`, etc.

@@ -79,23 +79,47 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
   }
 
+  const requesterId = Number(session.sub);
+
   try {
     // Compute expected total from facturas for the session and ensure reported totals match
     // Resolve session id: provided or current active of the user
-    const resolvedSessionId = parsed.data.session_id ?? (await cashRegisterService.getActiveCashRegisterSessionByAdmin(Number(session.sub)))?.id ?? null;
+    const resolvedSessionId = parsed.data.session_id ?? (await cashRegisterService.getActiveCashRegisterSessionByAdmin(requesterId))?.id ?? null;
     if (resolvedSessionId == null) {
       return NextResponse.json({ success: false, message: "No se encontró una sesión de caja abierta" }, { status: 400 });
     }
-    const report = await cashRegisterService.getCashRegisterClosureReport(resolvedSessionId);
+    const [report, sessionRecord] = await Promise.all([
+      cashRegisterService.getCashRegisterClosureReport(resolvedSessionId),
+      cashRegisterService.getCashRegisterSessionById(resolvedSessionId),
+    ]);
     if (!report) {
       return NextResponse.json({ success: false, message: "No fue posible calcular el total esperado del cierre" }, { status: 400 });
     }
+    if (!sessionRecord) {
+      return NextResponse.json({ success: false, message: "No se encontró la sesión indicada" }, { status: 404 });
+    }
     const expectedTotal = Number((report.expectedTotalAmount || 0).toFixed(2));
+    if (sessionRecord.status !== "OPEN") {
+      // Sesión ya cerrada: devolver estado y evitar segundo cierre fantasma
+      const reportToken = await createReportAccessToken({
+        reportType: "closure",
+        sessionId: report.sessionId,
+        requesterId,
+        scope: report.closingByAdminId === requesterId ? "self" : "admin",
+      });
+      const baseUrl = env.appUrl || request.nextUrl.origin;
+      return NextResponse.json({
+        success: true,
+        already_closed: true,
+        summary: report,
+        report_url: `${baseUrl}/api/cajas/cierres/${report.sessionId}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
+      }, { status: 200 });
+    }
     // Permitimos diferencias; el reporte y las tablas almacenan difference_amount
     // Aun así, normalizamos el total esperado para guardar en closing_amount
 
     const summary = await cashRegisterService.closeCashRegisterSession({
-      adminUserId: Number(session.sub),
+      adminUserId: requesterId,
       sessionId: resolvedSessionId,
       // Guardamos como monto de cierre el total esperado de facturas
       closingAmount: expectedTotal,
@@ -109,7 +133,6 @@ export async function POST(request: NextRequest) {
       closingDenominations: parsed.data.closing_denominations,
     });
 
-    const requesterId = Number(session.sub);
     const reportToken = await createReportAccessToken({
       reportType: "closure",
       sessionId: summary.sessionId,
@@ -117,16 +140,45 @@ export async function POST(request: NextRequest) {
       scope: summary.closingByAdminId === requesterId ? "self" : "admin",
     });
 
-    return NextResponse.json(
-      {
-        success: true,
-        summary,
-        report_url: `${request.nextUrl.origin}/api/cajas/cierres/${summary.sessionId}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
-      },
-      { status: 200 }
-    );
+    const baseUrl = env.appUrl || request.nextUrl.origin;
+    // Refrescar snapshot tras cierre para GET /sesion-activa inmediato
+    const refreshed = await cashRegisterService.getCashRegisterClosureReport(summary.sessionId);
+    return NextResponse.json({
+      success: true,
+      summary: refreshed ?? summary,
+      report_url: `${baseUrl}/api/cajas/cierres/${summary.sessionId}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
+    }, { status: 200 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "No se pudo cerrar la caja";
+
+    const sessionClosed =
+      message.toLowerCase().includes("ya fue cerrada") &&
+      (parsed.data.session_id != null || requesterId != null);
+
+    if (sessionClosed) {
+      const fallbackSessionId = parsed.data.session_id ?? null;
+      if (fallbackSessionId != null) {
+        const existingReport = await cashRegisterService.getCashRegisterClosureReport(fallbackSessionId);
+        if (existingReport && existingReport.closingAt) {
+          const reportToken = await createReportAccessToken({
+            reportType: "closure",
+            sessionId: existingReport.sessionId,
+            requesterId,
+            scope: existingReport.closingByAdminId === requesterId ? "self" : "admin",
+          });
+          const baseUrl = env.appUrl || request.nextUrl.origin;
+          return NextResponse.json(
+            {
+              success: true,
+              already_closed: true,
+              report_url: `${baseUrl}/api/cajas/cierres/${existingReport.sessionId}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
+            },
+            { status: 200 }
+          );
+        }
+      }
+    }
+
     return NextResponse.json({ success: false, message }, { status: 400 });
   }
 }
