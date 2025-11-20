@@ -60,6 +60,50 @@ export interface InvoiceInsertResult {
 
 export interface IInvoiceRepository {
   createInvoice(data: InvoicePersistenceInput): Promise<InvoiceInsertResult>;
-  deleteInvoice(invoiceId: number): Promise<void>;
+  updateInvoiceStatus(invoiceId: number, status: string, cancelledAt?: Date | null): Promise<void>;
   getInvoiceByNumber(invoiceNumber: string): Promise<InvoiceInsertResult | null>;
+  getInvoiceBasicById(invoiceId: number): Promise<{ id: number; invoice_number: string } | null>;
+  getInvoiceDetailById(invoiceId: number): Promise<{
+    id: number;
+    invoice_number: string;
+    status: string;
+    cancelled_at: string | null;
+    invoice_date: string;
+    table_code: string | null;
+    waiter_code: string | null;
+    subtotal: number;
+    service_charge: number;
+    vat_amount: number;
+    vat_rate: number;
+    total_amount: number;
+    currency_code: string;
+    notes: string | null;
+    customer_name: string | null;
+    customer_tax_id: string | null;
+    items: Array<{ id: number; line_number: number; description: string; quantity: number; unit_price: number; line_total: number; article_code: string | null }>;
+    payments: Array<{ id: number; payment_method: string; amount: number; reference: string | null }>;
+  } | null>;
+  listInvoices(params: {
+    from?: string;
+    to?: string;
+    q?: string;
+    table_code?: string;
+    waiter_code?: string;
+    status?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ total: number; items: Array<{
+    id: number;
+    invoice_number: string;
+    status: string;
+    invoice_date: string;
+    table_code: string | null;
+    waiter_code: string | null;
+    subtotal: number;
+    service_charge: number;
+    vat_amount: number;
+    total_amount: number;
+    currency_code: string;
+    customer_name: string | null;
+  }> }>;
 }

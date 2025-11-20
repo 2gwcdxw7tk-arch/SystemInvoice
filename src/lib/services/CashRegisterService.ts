@@ -395,6 +395,21 @@ export class CashRegisterService {
       throw new Error("El monto de apertura debe ser positivo o cero");
     }
     const allowUnassigned = input.allowUnassigned ?? false;
+    const openingDenominations = Array.isArray(input.openingDenominations)
+      ? input.openingDenominations.filter((d) => Number.isFinite(d.value) && d.value >= 0 && Number.isFinite(d.qty) && d.qty >= 0)
+      : undefined;
+
+    if (!openingDenominations || openingDenominations.length === 0) {
+      throw new Error("Debes capturar denominaciones de apertura");
+    }
+    const openingCurrencySet = new Set(openingDenominations.map((d) => d.currency.toUpperCase()));
+    if (openingCurrencySet.size !== 1 || !openingCurrencySet.has(env.currency.local.code)) {
+      throw new Error(`Las denominaciones de apertura deben ser en ${env.currency.local.code}`);
+    }
+    const openingSum = openingDenominations.reduce((acc, d) => acc + d.value * d.qty, 0);
+    if (Math.abs(Number(openingSum.toFixed(2)) - Number(input.openingAmount.toFixed(2))) >= 0.005) {
+      throw new Error("La suma de denominaciones no coincide con el monto de apertura");
+    }
 
     if (env.useMockData && this.mockSessions && this.mockAssignments) {
       const normalizedCode = input.cashRegisterCode.trim().toUpperCase();
@@ -439,6 +454,7 @@ export class CashRegisterService {
         openingAmount: Number(input.openingAmount.toFixed(2)),
         openingAt: nowIso,
         openingNotes,
+        openingDenominations: openingDenominations ?? null,
         closingAmount: null,
         closingAt: null,
         closingNotes: null,
@@ -457,6 +473,7 @@ export class CashRegisterService {
       openingNotes,
       allowUnassigned,
       actingAdminUserId: input.actingAdminUserId,
+      openingDenominations,
     });
   }
 
@@ -467,6 +484,9 @@ export class CashRegisterService {
       throw new Error("El monto de cierre debe ser positivo o cero");
     }
     const allowDifferentUser = input.allowDifferentUser ?? false;
+    const closingDenominations = Array.isArray(input.closingDenominations)
+      ? input.closingDenominations.filter((d) => Number.isFinite(d.value) && d.value >= 0 && Number.isFinite(d.qty) && d.qty >= 0)
+      : undefined;
 
     const normalizedPayments: ReportedPayment[] = input.payments.map((payment) => {
       const method = payment.method.trim().toUpperCase();
@@ -481,6 +501,24 @@ export class CashRegisterService {
         txCount,
       };
     });
+
+    // Denominaciones: requeridas solo si hay efectivo reportado, y deben cuadrar con ese efectivo
+    const cashReported = normalizedPayments
+      .filter((p) => p.method === "CASH" || p.method === "EFECTIVO")
+      .reduce((acc, p) => acc + p.reportedAmount, 0);
+    if (cashReported > 0) {
+      if (!closingDenominations || closingDenominations.length === 0) {
+        throw new Error("Debes capturar denominaciones de cierre para efectivo");
+      }
+      const closingCurrencySet = new Set(closingDenominations.map((d) => d.currency.toUpperCase()));
+      if (closingCurrencySet.size !== 1 || !closingCurrencySet.has(env.currency.local.code)) {
+        throw new Error(`Las denominaciones de cierre deben ser en ${env.currency.local.code}`);
+      }
+      const closingSum = closingDenominations.reduce((acc, d) => acc + d.value * d.qty, 0);
+      if (Math.abs(Number(closingSum.toFixed(2)) - Number(cashReported.toFixed(2))) >= 0.005) {
+        throw new Error("Las denominaciones de cierre no cuadran con el efectivo reportado");
+      }
+    }
 
     if (env.useMockData && this.mockSessions && this.mockSessionInvoices) {
       const session = (() => {
@@ -540,6 +578,7 @@ export class CashRegisterService {
         closingAt: summary.closingAt,
         closingNotes: summary.closingNotes,
         closingUserId: input.adminUserId,
+        closingDenominations: closingDenominations ?? null,
         totalsSnapshot: summary,
       };
       this.mockSessions.set(session.id, updatedSession);
@@ -553,6 +592,7 @@ export class CashRegisterService {
       payments: normalizedPayments,
       closingNotes,
       allowDifferentUser,
+      closingDenominations,
     });
   }
 
@@ -565,7 +605,7 @@ export class CashRegisterService {
     if (session.totalsSnapshot && typeof session.totalsSnapshot === "object") {
       const snapshot = session.totalsSnapshot as Partial<CashRegisterClosureSummary>;
       if (snapshot.payments && snapshot.payments.length > 0) {
-        return {
+        const base: CashRegisterReport = {
           sessionId: snapshot.sessionId ?? session.id,
           cashRegister: snapshot.cashRegister ?? session.cashRegister,
           openedByAdminId: snapshot.openedByAdminId ?? session.adminUserId,
@@ -580,7 +620,10 @@ export class CashRegisterService {
           differenceTotalAmount: snapshot.differenceTotalAmount ?? 0,
           totalInvoices: snapshot.totalInvoices ?? 0,
           payments: snapshot.payments,
+          openingDenominations: session.openingDenominations ?? null,
+          closingDenominations: session.closingDenominations ?? null,
         } satisfies CashRegisterReport;
+        return base;
       }
     }
 
@@ -605,7 +648,7 @@ export class CashRegisterService {
         })
       );
 
-      return buildClosureSummary({
+      const built = buildClosureSummary({
         session,
         closingUserId: session.closingUserId ?? session.adminUserId,
         closingAmount: session.closingAmount ?? 0,
@@ -619,6 +662,11 @@ export class CashRegisterService {
         })),
         totalInvoices: invoices.length,
       });
+      return {
+        ...built,
+        openingDenominations: session.openingDenominations ?? null,
+        closingDenominations: session.closingDenominations ?? null,
+      };
     }
 
     if (env.useMockData) {
@@ -644,8 +692,11 @@ export class CashRegisterService {
       })),
       totalInvoices: result.totalInvoices,
     });
-
-    return summary;
+    return {
+      ...summary,
+      openingDenominations: result.session.openingDenominations ?? null,
+      closingDenominations: result.session.closingDenominations ?? null,
+    };
   }
 
   registerInvoiceForSession(params: {

@@ -33,6 +33,7 @@ export interface ICashRegisterRepository {
     openingNotes: string | null;
     allowUnassigned?: boolean;
     actingAdminUserId?: number;
+    openingDenominations?: Array<{ currency: string; value: number; qty: number; kind?: string }>;
   }): Promise<CashRegisterSessionRecord>;
   closeCashRegisterSession(params: {
     adminUserId: number;
@@ -41,6 +42,7 @@ export interface ICashRegisterRepository {
     payments: ReportedPayment[];
     closingNotes: string | null;
     allowDifferentUser?: boolean;
+    closingDenominations?: Array<{ currency: string; value: number; qty: number; kind?: string }>;
   }): Promise<CashRegisterClosureSummary>;
   listActiveCashRegisterSessions(): Promise<CashRegisterSessionRecord[]>;
   getCashRegisterClosureReport(sessionId: number): Promise<{

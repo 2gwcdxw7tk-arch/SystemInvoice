@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { TotalsSummary } from "@/components/ui/totals-summary";
 import { useToast } from "@/components/ui/toast-provider";
 import { formatCurrency } from "@/config/currency";
 import { SERVICE_RATE, VAT_RATE, formatPercent } from "@/config/taxes";
@@ -1090,41 +1091,27 @@ export default function MeserosComandasPage() {
           </div>
 
           <div className="space-y-2 rounded-2xl border bg-background/80 p-3 text-sm text-muted-foreground">
-            <div className="flex items-center justify-between">
-              <span>Pendientes</span>
-              <span className="font-semibold text-foreground">{formatCurrency(pendingTotal)}</span>
+            <TotalsSummary
+              items={[
+                { label: "Pendientes", amount: pendingTotal },
+                { label: "Enviados", amount: sentTotal },
+                { label: "Subtotal", amount: itemsSubtotal },
+                { label: `Servicio ${SERVICE_RATE_LABEL}`, amount: serviceCharge },
+                { label: `IVA ${VAT_RATE_LABEL}`, amount: vatAmount },
+                { label: "Cuenta estimada", amount: estimatedTotal, emphasize: true },
+              ]}
+            />
+            <div className="grid grid-cols-[1fr,auto] text-xs uppercase tracking-wide">
+              <div className="pr-4">Total articulos</div>
+              <div className="text-right font-semibold text-foreground">{totalGuests}</div>
             </div>
-            <div className="flex items-center justify-between">
-              <span>Enviados</span>
-              <span className="font-semibold text-foreground">{formatCurrency(sentTotal)}</span>
+            <div className="grid grid-cols-[1fr,auto] text-xs uppercase tracking-wide">
+              <div className="pr-4">Cantidad pendiente</div>
+              <div className="text-right font-semibold text-foreground">{pendingQuantity}</div>
             </div>
-            <div className="flex items-center justify-between text-xs uppercase tracking-wide">
-              <span>Cantidad pendiente</span>
-              <span className="font-semibold text-foreground">{pendingQuantity}</span>
-            </div>
-            <div className="flex items-center justify-between text-xs uppercase tracking-wide">
-              <span>Cantidad enviada</span>
-              <span className="font-semibold text-foreground">{sentQuantity}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span>Subtotal</span>
-              <span className="font-semibold text-foreground">{formatCurrency(itemsSubtotal)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span>Servicio {SERVICE_RATE_LABEL}</span>
-              <span className="font-semibold text-foreground">{formatCurrency(serviceCharge)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span>IVA {VAT_RATE_LABEL}</span>
-              <span className="font-semibold text-foreground">{formatCurrency(vatAmount)}</span>
-            </div>
-            <div className="flex items-center justify-between text-base font-semibold text-foreground">
-              <span>Cuenta estimada</span>
-              <span>{formatCurrency(estimatedTotal)}</span>
-            </div>
-            <div className="flex items-center justify-between text-xs uppercase tracking-wide">
-              <span>Total articulos</span>
-              <span className="font-semibold text-foreground">{totalGuests}</span>
+            <div className="grid grid-cols-[1fr,auto] text-xs uppercase tracking-wide">
+              <div className="pr-4">Cantidad enviada</div>
+              <div className="text-right font-semibold text-foreground">{sentQuantity}</div>
             </div>
           </div>
 

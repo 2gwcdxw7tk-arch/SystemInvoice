@@ -2,13 +2,37 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { SESSION_COOKIE_NAME, createReportAccessToken, parseSessionCookie } from "@/lib/auth/session";
+import { env } from "@/lib/env";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
+
+const denominationSchema = z.object({
+  currency: z.string().trim().min(3).max(3),
+  value: z.number().min(0),
+  qty: z.number().int().min(0),
+  kind: z.enum(["COIN", "BILL", "OTHER"]).optional(),
+});
 
 const payloadSchema = z.object({
   cash_register_code: z.string().trim().min(1, "Selecciona una caja"),
   opening_amount: z.number().min(0, "El monto de apertura no puede ser negativo"),
   opening_notes: z.string().max(400).optional().nullable(),
   operator_admin_user_id: z.number().int().positive().optional(),
+  opening_denominations: z.array(denominationSchema).min(1, "Agrega el detalle de denominaciones"),
+}).superRefine((data, ctx) => {
+  const denoms = data.opening_denominations ?? [];
+  if (denoms.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Debes capturar denominaciones", path: ["opening_denominations"] });
+    return;
+  }
+  const currencySet = new Set(denoms.map((d) => d.currency.toUpperCase()));
+  if (currencySet.size !== 1 || !currencySet.has(env.currency.local.code)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Las denominaciones deben ser en ${env.currency.local.code}`, path: ["opening_denominations"] });
+  }
+  const sum = denoms.reduce((acc, d) => acc + d.value * d.qty, 0);
+  const equal = Math.abs(Number(sum.toFixed(2)) - Number(data.opening_amount.toFixed(2))) < 0.005;
+  if (!equal) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "La suma de denominaciones debe igualar el monto de apertura", path: ["opening_denominations"] });
+  }
 });
 
 export async function POST(request: NextRequest) {
@@ -59,6 +83,7 @@ export async function POST(request: NextRequest) {
       openingNotes: parsed.data.opening_notes ?? null,
       allowUnassigned: isAdministrator,
       actingAdminUserId: actingAdminId !== targetAdminId ? actingAdminId : undefined,
+      openingDenominations: parsed.data.opening_denominations,
     });
 
     const reportToken = await createReportAccessToken({

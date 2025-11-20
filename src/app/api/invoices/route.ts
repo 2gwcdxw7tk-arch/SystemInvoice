@@ -146,3 +146,35 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export async function GET(request: NextRequest) {
+  const url = new URL(request.url);
+  const from = url.searchParams.get("from") ?? undefined;
+  const to = url.searchParams.get("to") ?? undefined;
+  const q = url.searchParams.get("q") ?? undefined;
+  const table_code = url.searchParams.get("table") ?? undefined;
+  const waiter_code = url.searchParams.get("waiter") ?? undefined;
+  const status = url.searchParams.get("status") ?? undefined;
+  const page = url.searchParams.get("page") ?? undefined;
+  const pageSize = url.searchParams.get("pageSize") ?? undefined;
+
+  try {
+    const result = await invoiceService.listInvoices({
+      from: from || undefined,
+      to: to || undefined,
+      q: q || undefined,
+      table_code,
+      waiter_code,
+      status: status || undefined,
+      page: page ? Number(page) : undefined,
+      pageSize: pageSize ? Number(pageSize) : undefined,
+    });
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error("GET /api/invoices error", error);
+    return NextResponse.json(
+      { success: false, message: "No se pudieron listar las facturas" },
+      { status: 500 }
+    );
+  }
+}

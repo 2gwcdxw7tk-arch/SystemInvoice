@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { DatePicker } from "@/components/ui/date-picker";
+import { TotalsSummary } from "@/components/ui/totals-summary";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/config/currency";
@@ -146,7 +147,7 @@ const DEFAULT_MANUAL_CUSTOMER_NAME = "Cliente mostrador";
 const MANUAL_EXIT_WARNING =
   "Tienes una factura manual en progreso. Si sales sin generar la factura se perderán los datos capturados. ¿Deseas abandonar la captura?";
 
-type FacturacionMode = "sin-pedido" | "con-pedido" | "listas-precio";
+type FacturacionMode = "sin-pedido" | "con-pedido" | "listas-precio" | "historial";
 type InvoiceMode = "sin-pedido" | "con-pedido";
 
 const NEW_INVOICE_ID = "__invoice_manual__";
@@ -174,6 +175,12 @@ function FacturacionHomeMenu({ allowPriceLists }: { allowPriceLists: boolean }) 
       description: "Convierte órdenes de mesas ocupadas en facturas listas para cobro y cierre.",
       icon: UtensilsCrossed,
       highlight: "Pedidos",
+    },
+    {
+      key: "historial",
+      title: "Historial de facturas",
+      description: "Consulta facturas emitidas, filtra por fecha y anula si aplica.",
+      icon: History,
     },
     {
       key: "listas-precio",
@@ -1484,6 +1491,10 @@ export default function FacturacionPage() {
     );
   }
 
+  if (modeParam === "historial") {
+    return <InvoicesHistory />;
+  }
+
   if (modeParam === "sin-pedido" || modeParam === "con-pedido") {
     return (
       <FacturacionWorkspace
@@ -1498,6 +1509,320 @@ export default function FacturacionPage() {
   }
 
   return <FacturacionHomeMenu allowPriceLists={canManagePriceLists} />;
+}
+
+type InvoiceDetail = {
+  id: number;
+  invoice_number: string;
+  status: string;
+  cancelled_at: string | null;
+  invoice_date: string;
+  table_code: string | null;
+  waiter_code: string | null;
+  subtotal: number;
+  service_charge: number;
+  vat_amount: number;
+  vat_rate: number;
+  total_amount: number;
+  currency_code: string;
+  notes: string | null;
+  customer_name: string | null;
+  customer_tax_id: string | null;
+  items: Array<{ id: number; line_number: number; description: string; quantity: number; unit_price: number; line_total: number; article_code: string | null }>;
+  payments: Array<{ id: number; payment_method: string; amount: number; reference: string | null }>;
+};
+
+function InvoicesHistory() {
+  const { toast } = useToast();
+  const session = useSession();
+  const canCancel = isSessionAdministrator(session) || hasSessionPermission(session, "invoice.issue");
+  const [from, setFrom] = useState<string>(() => new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const [to, setTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(20);
+  const [loading, setLoading] = useState(false);
+  const [items, setItems] = useState<Array<{
+    id: number;
+    invoice_number: string;
+    status: string;
+    invoice_date: string;
+    table_code: string | null;
+    waiter_code: string | null;
+    subtotal: number;
+    service_charge: number;
+    vat_amount: number;
+    total_amount: number;
+    currency_code: string;
+    customer_name: string | null;
+  }>>([]);
+  const [total, setTotal] = useState(0);
+  const [detail, setDetail] = useState<InvoiceDetail | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [mutatingId, setMutatingId] = useState<number | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<{ id: number; invoice_number: string } | null>(null);
+
+  const fetchList = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      if (q.trim()) params.set("q", q.trim());
+      params.set("page", String(page));
+      params.set("pageSize", String(pageSize));
+      const res = await fetch(`/api/invoices?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(await res.text());
+      const data: { total: number; items: typeof items } = await res.json();
+      setItems(Array.isArray(data.items) ? data.items : []);
+      setTotal(typeof data.total === "number" ? data.total : 0);
+    } catch (error) {
+      console.error("No se pudieron listar las facturas", error);
+      toast({ variant: "error", title: "Facturas", description: "No se pudieron listar las facturas." });
+    } finally {
+      setLoading(false);
+    }
+  }, [from, to, q, page, pageSize, toast]);
+
+  useEffect(() => { void fetchList(); }, [fetchList]);
+
+  const openDetail = useCallback(async (id: number) => {
+    try {
+      const res = await fetch(`/api/invoices/${id}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data: { invoice: InvoiceDetail } = await res.json();
+      setDetail(data.invoice);
+      setDetailOpen(true);
+    } catch (error) {
+      console.error("No se pudo obtener la factura", error);
+      toast({ variant: "error", title: "Factura", description: "No se pudo abrir el detalle." });
+    }
+  }, [toast]);
+
+  const doCancelInvoice = useCallback(async (id: number) => {
+    if (!canCancel) return;
+    setMutatingId(id);
+    try {
+      const res = await fetch(`/api/invoices/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "ANULADA" }) });
+      if (!res.ok) throw new Error(await res.text());
+      toast({ variant: "success", title: "Factura", description: "Factura anulada correctamente." });
+      await fetchList();
+      if (detailOpen && detail?.id === id) {
+        await openDetail(id);
+      }
+      setCancelOpen(false);
+      setCancelTarget(null);
+    } catch (error) {
+      console.error("No se pudo anular la factura", error);
+      toast({ variant: "error", title: "Factura", description: "No se pudo anular la factura." });
+    } finally {
+      setMutatingId(null);
+    }
+  }, [canCancel, detail?.id, detailOpen, fetchList, openDetail, toast]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  return (
+    <section className="space-y-10 pb-16">
+      <header className="flex items-center justify-between">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">Historial de facturas</h1>
+          <p className="text-sm text-muted-foreground">Consulta, filtra y anula facturas emitidas.</p>
+        </div>
+      </header>
+
+      <Card className="rounded-3xl border bg-background/95 shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-xl font-semibold">Filtros</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))]">
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
+              <DatePicker value={from} onChange={setFrom} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
+              <DatePicker value={to} onChange={setTo} />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label className="text-xs uppercase text-muted-foreground">Buscar</Label>
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Número, cliente, mesa, mesero" className="rounded-2xl" />
+            </div>
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => { setQ(""); setPage(1); void fetchList(); }}>Limpiar</Button>
+            <Button type="button" className="rounded-2xl" onClick={() => { setPage(1); void fetchList(); }} disabled={loading}>{loading ? "Buscando..." : "Buscar"}</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-3xl border bg-background/95 shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-xl font-semibold">Listado</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="min-w-full table-auto text-left text-sm text-foreground">
+              <thead className="border-b text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Número</th>
+                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2">Mesa</th>
+                  <th className="px-3 py-2">Mesero</th>
+                  <th className="px-3 py-2">Cliente</th>
+                  <th className="px-3 py-2 text-right">Subtotal</th>
+                  <th className="px-3 py-2 text-right">IVA</th>
+                  <th className="px-3 py-2 text-right">Servicio</th>
+                  <th className="px-3 py-2 text-right">Total</th>
+                  <th className="px-3 py-2">Estado</th>
+                  <th className="px-3 py-2 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {items.length === 0 ? (
+                  <tr>
+                    <td colSpan={11} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                      {loading ? "Cargando facturas..." : "No se encontraron facturas con los filtros aplicados."}
+                    </td>
+                  </tr>
+                ) : items.map((inv) => {
+                  const fmt = getCurrencyFormatter(inv.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO");
+                  const isAnulada = inv.status?.toUpperCase() === "ANULADA";
+                  return (
+                    <tr key={inv.id} className="hover:bg-muted/30">
+                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{inv.invoice_number}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{new Date(inv.invoice_date).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{inv.table_code ?? "—"}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{inv.waiter_code ?? "—"}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{inv.customer_name ?? "—"}</td>
+                      <td className="px-3 py-2 text-right">{fmt.format(inv.subtotal)}</td>
+                      <td className="px-3 py-2 text-right">{fmt.format(inv.vat_amount)}</td>
+                      <td className="px-3 py-2 text-right">{fmt.format(inv.service_charge)}</td>
+                      <td className="px-3 py-2 text-right font-semibold">{fmt.format(inv.total_amount)}</td>
+                      <td className="px-3 py-2">
+                        <span className={cn("inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold",
+                          isAnulada ? "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300")}> 
+                          <span className="h-2 w-2 rounded-full bg-current" />
+                          {isAnulada ? "Anulada" : "Facturada"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button type="button" size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => void openDetail(inv.id)}>Ver</Button>
+                          {canCancel ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              className="h-8 rounded-xl px-3 text-xs"
+                              disabled={isAnulada || mutatingId === inv.id}
+                              onClick={() => { setCancelTarget({ id: inv.id, invoice_number: inv.invoice_number }); setCancelOpen(true); }}
+                            >
+                              {mutatingId === inv.id ? "Anulando..." : "Anular"}
+                            </Button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
+            <span>Mostrando {items.length} de {total}</span>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>Anterior</Button>
+              <span>Página {page} de {totalPages}</span>
+              <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Siguiente</Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Modal
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        title={detail ? `Factura ${detail.invoice_number}` : "Factura"}
+        description={detail ? new Date(detail.invoice_date).toLocaleString() : "Detalle de factura"}
+        contentClassName="max-w-3xl"
+      >
+        {detail ? (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2 text-sm text-muted-foreground">
+              <div>
+                <div><span className="font-medium text-foreground">Mesa:</span> {detail.table_code ?? "—"}</div>
+                <div><span className="font-medium text-foreground">Mesero:</span> {detail.waiter_code ?? "—"}</div>
+                <div><span className="font-medium text-foreground">Cliente:</span> {detail.customer_name ?? "—"}</div>
+              </div>
+              <div>
+                <div><span className="font-medium text-foreground">Estado:</span> {detail.status === 'ANULADA' ? 'Anulada' : 'Facturada'}</div>
+                {detail.cancelled_at ? (<div><span className="font-medium text-foreground">Anulada el:</span> {new Date(detail.cancelled_at).toLocaleString()}</div>) : null}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-muted">
+              <div className="max-h-[280px] overflow-y-auto">
+                <table className="min-w-full table-auto text-left text-sm">
+                  <thead className="border-b text-xs uppercase text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2">#</th>
+                      <th className="px-3 py-2">Descripción</th>
+                      <th className="px-3 py-2 text-right">Cantidad</th>
+                      <th className="px-3 py-2 text-right">Unitario</th>
+                      <th className="px-3 py-2 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {detail.items?.map((it) => (
+                      <tr key={it.id}>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{it.line_number}</td>
+                        <td className="px-3 py-2">{it.description}</td>
+                        <td className="px-3 py-2 text-right">{it.quantity}</td>
+                        <td className="px-3 py-2 text-right">{it.unit_price.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right font-semibold">{it.line_total.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <TotalsSummary
+              items={[
+                { label: "Subtotal", amount: detail.subtotal, currency: detail.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO" },
+                { label: "IVA", amount: detail.vat_amount, currency: detail.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO" },
+                { label: "Servicio", amount: detail.service_charge, currency: detail.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO" },
+                { label: "Total", amount: detail.total_amount, currency: detail.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO", emphasize: true },
+              ]}
+            />
+          </div>
+        ) : (
+          <div className="py-8 text-center text-sm text-muted-foreground">Cargando detalle...</div>
+        )}
+      </Modal>
+
+      <Modal
+        open={cancelOpen}
+        onClose={() => { if (!mutatingId) { setCancelOpen(false); setCancelTarget(null); } }}
+        title="Anular factura"
+        description={cancelTarget ? `Seguro que deseas anular la factura ${cancelTarget.invoice_number}? Esta acción revertirá el inventario.` : "Esta acción revertirá el inventario."}
+        contentClassName="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Esta operación es irreversible a nivel de estado. La factura será marcada como <span className="font-semibold text-foreground">ANULADA</span> y se revertirán los movimientos de inventario asociados.
+          </p>
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="outline" className="rounded-xl" onClick={() => { setCancelOpen(false); setCancelTarget(null); }} disabled={!!mutatingId}>Cancelar</Button>
+            <Button type="button" variant="destructive" className="rounded-xl" onClick={() => cancelTarget && doCancelInvoice(cancelTarget.id)} disabled={!cancelTarget || !!mutatingId}>
+              {cancelTarget && mutatingId === cancelTarget.id ? "Anulando..." : "Anular ahora"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </section>
+  );
 }
 
   // Toggle deslizante accesible (módulo global para reutilizar en subcomponentes)

@@ -192,9 +192,11 @@ model cash_register_sessions {
   opening_amount                                                  Decimal                          @default(0) @db.Decimal(18, 2)
   opening_at                                                      DateTime                         @default(now()) @db.Timestamptz(6)
   opening_notes                                                   String?                          @db.VarChar(400)
+  opening_denominations                                           Json?
   closing_amount                                                  Decimal?                         @db.Decimal(18, 2)
   closing_at                                                      DateTime?                        @db.Timestamptz(6)
   closing_notes                                                   String?                          @db.VarChar(400)
+  closing_denominations                                           Json?
   status                                                          String                           @default("OPEN") @db.VarChar(12)
   closing_user_id                                                 Int?
   totals_snapshot                                                 Json?
@@ -217,6 +219,8 @@ model invoices {
   waiter_code              String?                 @db.VarChar(50)
   invoice_date             DateTime                @default(now()) @db.Timestamptz(6)
   origin_order_id          BigInt?
+  status                   String                  @default("FACTURADA") @db.VarChar(12)
+  cancelled_at             DateTime?               @db.Timestamptz(6)
   subtotal                 Decimal                 @db.Decimal(18, 2)
   service_charge           Decimal                 @default(0) @db.Decimal(18, 2)
   vat_amount               Decimal                 @default(0) @db.Decimal(18, 2)

@@ -30,20 +30,22 @@ export function Modal({ open, onClose, title, description, children, className, 
   return (
     <div
       className={cn(
-        "fixed inset-0 z-[90] flex items-center justify-center p-4",
+        "fixed inset-0 z-[90] flex items-center justify-center",
         "overflow-y-auto overscroll-contain",
         className
       )}
     >
-      <div className="absolute inset-0 bg-background/70 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      {/* Backdrop must cover full viewport regardless of padding */}
+      <div className="fixed inset-0 bg-background/70 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
         aria-describedby={description ? descId : undefined}
         className={cn(
-          "relative z-[91] w-full max-w-5xl rounded-3xl border bg-background/95 shadow-2xl",
-          "max-h-[min(90vh,40rem)] overflow-y-auto",
+          "relative z-[91] m-4 w-full max-w-5xl rounded-3xl border bg-background/95 shadow-2xl",
+          // Make dialogs taller by default (up to viewport height)
+          "max-h-[90vh] overflow-y-auto",
           contentClassName
         )}
       >

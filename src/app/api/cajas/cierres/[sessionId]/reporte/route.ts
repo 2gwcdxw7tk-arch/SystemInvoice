@@ -95,6 +95,57 @@ function buildHtml(params: {
         .join("")
     : `<tr><td colspan="5" style="text-align:center; color:#6b7280; padding:24px; font-size:13px;">No se registraron pagos para esta sesión.</td></tr>`;
 
+  function buildDenomSections(
+    denoms: Array<{ currency: string; value: number; qty: number; kind?: string }> | null | undefined,
+    title: string
+  ): string {
+    const list = Array.isArray(denoms) ? denoms : [];
+    const byCurr = new Map<string, Array<{ value: number; qty: number; kind?: string }>>();
+    for (const d of list) {
+      const code = (d.currency || "").toUpperCase();
+      if (!byCurr.has(code)) byCurr.set(code, []);
+      byCurr.get(code)!.push({ value: Number(d.value || 0), qty: Math.trunc(Number(d.qty || 0)), kind: d.kind });
+    }
+    for (const arr of byCurr.values()) arr.sort((a, b) => b.value - a.value);
+    if (byCurr.size === 0) {
+      return `
+        <section>
+          <h2 style="font-size:18px; font-weight:600; margin:0 0 12px; color:#0f172a;">${escapeHtml(title)}</h2>
+          <div style="color:#6b7280; font-size:13px;">No se registraron denominaciones.</div>
+        </section>`;
+    }
+    return Array.from(byCurr.entries()).map(([currency, lines]) => {
+      const rows = lines.map((l) => {
+        const subtotal = (Number(l.value) || 0) * (Number(l.qty) || 0);
+        return `<tr><td>${escapeHtml(l.kind || '-') }</td><td>${escapeHtml(String(l.value))}</td><td>${escapeHtml(String(l.qty))}</td><td>${escapeHtml(formatCurrency(subtotal, { currency }))}</td></tr>`;
+      }).join("");
+      const total = lines.reduce((acc, l) => acc + (Number(l.value) || 0) * (Number(l.qty) || 0), 0);
+      return `
+      <section>
+        <h3 style="font-size:16px; font-weight:600; margin:16px 0 8px; color:#0f172a;">${escapeHtml(title)} (${escapeHtml(currency)})</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Tipo</th>
+              <th>Valor</th>
+              <th>Cantidad</th>
+              <th>Subtotal</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows || `<tr><td colspan="4" style="text-align:center; color:#6b7280; padding:16px;">Sin detalle</td></tr>`}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th colspan="3" style="text-align:right;">Total ${escapeHtml(currency)}</th>
+              <th>${escapeHtml(formatCurrency(total, { currency }))}</th>
+            </tr>
+          </tfoot>
+        </table>
+      </section>`;
+    }).join("");
+  }
+
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -241,6 +292,9 @@ function buildHtml(params: {
         </table>
       </section>
 
+      ${buildDenomSections(report.openingDenominations, 'Denominaciones de apertura')}
+      ${buildDenomSections(report.closingDenominations, 'Denominaciones de cierre')}
+
       <section>
         <h2 style="font-size:18px; font-weight:600; margin:0 0 12px; color:#0f172a;">Resumen adicional</h2>
         <table>
@@ -273,10 +327,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     return NextResponse.json({ success: false, message: "Identificador de sesión inválido" }, { status: 400 });
   }
 
-  const format = request.nextUrl.searchParams.get("format");
-  if (format && format.toLowerCase() !== "html") {
-    return NextResponse.json({ success: false, message: "Formato no soportado" }, { status: 400 });
-  }
+  const format = (request.nextUrl.searchParams.get("format") || "html").toLowerCase();
 
   const tokenRaw = request.nextUrl.searchParams.get("token") ?? undefined;
   const reportToken = tokenRaw ? await verifyReportAccessToken(tokenRaw).catch(() => null) : null;
@@ -349,6 +400,11 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     issuerName: issuedBy.name,
   };
 
+  if (format === "json") {
+    return NextResponse.json({ success: true, report: enrichedReport }, { status: 200 });
+  }
+
+  // default to HTML
   const html = buildHtml({
     report: enrichedReport,
     openedBy,

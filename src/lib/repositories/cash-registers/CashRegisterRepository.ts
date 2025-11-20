@@ -9,6 +9,7 @@ import {
   CashRegisterRecord,
   CashRegisterSessionRecord,
   CreateCashRegisterInput,
+  CashDenominationLine,
   ExpectedPayment,
   ReportedPayment,
   UpdateCashRegisterInput,
@@ -49,9 +50,11 @@ type CashRegisterSessionWithRelations = {
   opening_amount: number | Decimal;
   opening_at: Date;
   opening_notes: string | null;
+  opening_denominations: unknown | null;
   closing_amount: number | Decimal | null;
   closing_at: Date | null;
   closing_notes: string | null;
+  closing_denominations: unknown | null;
   status: string;
   closing_user_id: number | null;
   totals_snapshot: unknown;
@@ -87,6 +90,12 @@ function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterR
 }
 
 function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_default?: boolean }): CashRegisterSessionRecord {
+  const openingDenoms: CashDenominationLine[] | null = Array.isArray(session.opening_denominations)
+    ? (session.opening_denominations as Array<{ currency: string; value: number; qty: number; kind?: string }>)
+    : null;
+  const closingDenoms: CashDenominationLine[] | null = Array.isArray(session.closing_denominations)
+    ? (session.closing_denominations as Array<{ currency: string; value: number; qty: number; kind?: string }>)
+    : null;
   return {
     id: Number(session.id),
     status: session.status as "OPEN" | "CLOSED" | "CANCELLED",
@@ -94,9 +103,11 @@ function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_def
     openingAmount: Number(session.opening_amount),
     openingAt: session.opening_at.toISOString(),
     openingNotes: session.opening_notes,
+    openingDenominations: openingDenoms,
     closingAmount: session.closing_amount != null ? Number(session.closing_amount) : null,
     closingAt: session.closing_at?.toISOString() ?? null,
     closingNotes: session.closing_notes,
+    closingDenominations: closingDenoms,
     closingUserId: session.closing_user_id != null ? Number(session.closing_user_id) : null,
     totalsSnapshot: session.totals_snapshot ?? null,
     cashRegister: {
@@ -542,8 +553,9 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     openingNotes: string | null;
     allowUnassigned?: boolean;
     actingAdminUserId?: number;
+    openingDenominations?: Array<{ currency: string; value: number; qty: number; kind?: string }>;
   }): Promise<CashRegisterSessionRecord> {
-    const { adminUserId, cashRegisterCode, openingAmount, openingNotes, allowUnassigned = false } = params;
+    const { adminUserId, cashRegisterCode, openingAmount, openingNotes, allowUnassigned = false, openingDenominations } = params;
 
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const normalizedCode = normalizeCode(cashRegisterCode);
@@ -603,6 +615,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           admin_user_id: adminUserId,
           opening_amount: openingAmount,
           opening_notes: openingNotes,
+          opening_denominations: (openingDenominations as unknown as InputJsonValue) ?? undefined,
         },
         include: {
           cash_registers: {
@@ -626,8 +639,9 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     payments: ReportedPayment[];
     closingNotes: string | null;
     allowDifferentUser?: boolean;
+    closingDenominations?: Array<{ currency: string; value: number; qty: number; kind?: string }>;
   }): Promise<CashRegisterClosureSummary> {
-    const { adminUserId, sessionId, closingAmount, payments, closingNotes, allowDifferentUser = false } = params;
+    const { adminUserId, sessionId, closingAmount, payments, closingNotes, allowDifferentUser = false, closingDenominations } = params;
 
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       let sessionToClose: CashRegisterSessionWithRelations | null = null;
@@ -725,6 +739,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           closing_user_id: adminUserId,
           status: "CLOSED",
           totals_snapshot: summary as InputJsonValue, // Prisma JSON type
+          closing_denominations: (closingDenominations as unknown as InputJsonValue) ?? undefined,
         },
       });
 

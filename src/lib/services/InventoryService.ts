@@ -1258,6 +1258,117 @@ export class InventoryService {
       } satisfies ConsumptionMovementRow;
     });
   }
+
+  async reverseInvoiceMovements(input: { invoiceNumber: string; occurred_at?: string }): Promise<{ reversed: number }> {
+    const reference = input.invoiceNumber.trim();
+    if (!reference) return { reversed: 0 };
+    const occurredAt = input.occurred_at ? parseDateInput(input.occurred_at) : new Date();
+
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const movements = await tx.inventory_movements.findMany({
+        where: {
+          direction: "OUT",
+          inventory_transactions: { transaction_type: "CONSUMPTION", reference },
+        },
+        select: {
+          quantity_retail: true,
+          article_id: true,
+          warehouse_id: true,
+          articles_inventory_movements_article_idToarticles: { select: { article_code: true, conversion_factor: true } },
+        },
+      });
+      if (movements.length === 0) return { reversed: 0 };
+
+      // Agrupar por almacén y artículo
+      const byWarehouse = new Map<number, Array<typeof movements[0]>>();
+      for (const m of movements) {
+        const list = byWarehouse.get(Number(m.warehouse_id)) ?? [];
+        list.push(m);
+        byWarehouse.set(Number(m.warehouse_id), list);
+      }
+
+      let reversedCount = 0;
+      for (const [warehouseId, list] of byWarehouse) {
+        const warehouse = await this.warehouseRepository.findWarehouseById(warehouseId, tx);
+        if (!warehouse) continue;
+        const warehouseContext: WarehouseContext = {
+          id: Number(warehouse.id),
+          code: warehouse.code,
+          name: warehouse.name,
+        };
+        const transactionCode = generateTransactionCode("REV");
+        const trx = await this.inventoryTransactionRepository.createTransaction(
+          {
+            transaction_code: transactionCode,
+            transaction_type: "ADJUSTMENT",
+            warehouse_id: warehouseContext.id,
+            reference: `ANULACION ${reference}`,
+            counterparty_name: "Anulación de factura",
+            status: "CONFIRMADO",
+            notes: `Reverso de consumos registrados por la factura ${reference}`,
+            occurred_at: occurredAt,
+            authorized_by: "Sistema",
+            total_amount: 0,
+          },
+          tx
+        );
+        const transactionId = trx.id;
+
+        // Agrupar por artículo para sumar cantidades
+        const byArticle = new Map<number, { qtyRetail: number; code: string; conv: number }>();
+        for (const m of list) {
+          const key = Number(m.article_id);
+          const prev = byArticle.get(key) ?? { qtyRetail: 0, code: m.articles_inventory_movements_article_idToarticles.article_code, conv: Number(m.articles_inventory_movements_article_idToarticles.conversion_factor || 1) };
+          prev.qtyRetail += Number(m.quantity_retail);
+          byArticle.set(key, prev);
+        }
+
+        for (const [articleId, info] of byArticle) {
+          await this.warehouseStockRepository.ensureArticleWarehouseAssociation(articleId, warehouseContext.id, tx);
+          const entry = await this.inventoryTransactionRepository.createTransactionEntry(
+            {
+              transaction_id: transactionId,
+              article_id: articleId,
+              quantity_entered: info.conv > 0 ? info.qtyRetail / info.conv : info.qtyRetail,
+              entered_unit: info.conv > 0 ? ("RETAIL" as const) : ("RETAIL" as const),
+              direction: "IN",
+              unit_conversion_factor: info.conv,
+              kit_multiplier: null,
+              cost_per_unit: null,
+              subtotal: null,
+              notes: `Reverso factura ${reference}`,
+            },
+            tx
+          );
+          await this.inventoryTransactionRepository.createMovement(
+            {
+              transaction_id: transactionId,
+              entry_id: entry.id,
+              article_id: articleId,
+              direction: "IN",
+              quantity_retail: info.qtyRetail,
+              warehouse_id: warehouseContext.id,
+              source_kit_article_id: null,
+            },
+            tx
+          );
+          await this.applyStockDelta(
+            {
+              articleId,
+              articleCode: info.code,
+              warehouse: warehouseContext,
+              deltaRetail: info.qtyRetail,
+              conversionFactor: info.conv,
+            },
+            tx
+          );
+          reversedCount += 1;
+        }
+      }
+
+      return { reversed: reversedCount };
+    });
+  }
 }
 
 export const inventoryService = new InventoryService();

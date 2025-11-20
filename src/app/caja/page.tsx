@@ -27,6 +27,7 @@ import { Modal } from "@/components/ui/modal";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { formatCurrency } from "@/config/currency";
 import { hasSessionPermission, isSessionAdministrator } from "@/lib/auth/session-roles";
+import { cn } from "@/lib/utils";
 
 interface CashRegisterAssignmentOption {
   cashRegisterId: number;
@@ -100,14 +101,20 @@ type PaymentMethod = "CASH" | "CARD" | "TRANSFER" | "OTHER";
 interface ClosingFormPayment {
   method: PaymentMethod;
   amount: string;
-  transactionCount: string;
 }
 
 type NormalizedClosingPayment = {
   method: PaymentMethod;
   reported_amount: number;
-  transaction_count: number;
 };
+type DenominationKind = "COIN" | "BILL" | "OTHER";
+type DenominationLine = { currency: string; kind: DenominationKind; value: string; qty: string };
+const defaultCurrency = process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO";
+const denominationKindOptions: ComboboxOption<DenominationKind>[] = [
+  { value: "COIN", label: "Moneda" },
+  { value: "BILL", label: "Billete" },
+  { value: "OTHER", label: "Otro" },
+];
 
 const paymentMethodOptions: ComboboxOption<PaymentMethod>[] = [
   { value: "CASH", label: "Efectivo" },
@@ -127,7 +134,7 @@ const formatTimestampLocale = (value: string | null | undefined): string => {
   return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(date);
 };
 
-const createInitialClosingPayments = (): ClosingFormPayment[] => [{ method: "CASH", amount: "", transactionCount: "" }];
+const createInitialClosingPayments = (): ClosingFormPayment[] => [{ method: "CASH", amount: "" }];
 
 export default function CashManagementPage() {
   const session = useSession();
@@ -172,6 +179,7 @@ export default function CashManagementPage() {
     operatorAdminUserId: currentAdminId,
   });
   const [openingSubmitting, setOpeningSubmitting] = useState(false);
+  const [openingDenoms, setOpeningDenoms] = useState<DenominationLine[]>([]);
 
   const [closingModalOpen, setClosingModalOpen] = useState(false);
   const [closingForm, setClosingForm] = useState<{
@@ -181,6 +189,20 @@ export default function CashManagementPage() {
     targetSessionId: number | null;
   }>({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments(), targetSessionId: null });
   const [closingSubmitting, setClosingSubmitting] = useState(false);
+    const [closingDenoms, setClosingDenoms] = useState<DenominationLine[]>([]);
+  // Confirmación por diferencia
+  const [diffConfirmOpen, setDiffConfirmOpen] = useState(false);
+  const preparedClosureRef = useRef<{
+    sessionId: number;
+    payments: NormalizedClosingPayment[];
+    denoms: Array<{ currency: string; value: number; qty: number; kind?: DenominationKind }>;
+    expected: number;
+    reported: number;
+  } | null>(null);
+  // Resumen esperado para el cierre (desde facturas)
+  const [closureExpectedTotal, setClosureExpectedTotal] = useState<number | null>(null);
+  const [closureLoading, setClosureLoading] = useState(false);
+  const [closureError, setClosureError] = useState<string | null>(null);
   // Impresión en modal (apertura/cierre)
   const [printModalOpen, setPrintModalOpen] = useState(false);
   const [printUrl, setPrintUrl] = useState<string | null>(null);
@@ -403,6 +425,30 @@ export default function CashManagementPage() {
       return;
     }
 
+    // Validación de denominaciones apertura: requeridas y suma = monto
+    const normalizedDenoms = openingDenoms
+          .map((d) => ({
+            currency: (d.currency || defaultCurrency).trim().toUpperCase(),
+            value: Number(d.value.trim().replace(/,/g, ".")),
+            qty: Number(d.qty.trim()),
+            kind: d.kind,
+          }))
+          .filter((d) => d.currency.length === 3 && Number.isFinite(d.value) && d.value >= 0 && Number.isFinite(d.qty) && d.qty >= 0);
+    if (normalizedDenoms.length === 0) {
+      toast({ variant: "warning", title: "Caja", description: "Agrega el detalle de denominaciones de apertura" });
+      return;
+    }
+    const currencies = Array.from(new Set(normalizedDenoms.map((d) => d.currency)));
+    if (!(currencies.length === 1 && currencies[0] === defaultCurrency)) {
+      toast({ variant: "warning", title: "Caja", description: `Las denominaciones deben ser en ${defaultCurrency}` });
+      return;
+    }
+    const denomSum = normalizedDenoms.reduce((acc, d) => acc + d.value * d.qty, 0);
+    if (Math.abs(Number(denomSum.toFixed(2)) - Number(amountValue.toFixed(2))) >= 0.005) {
+      toast({ variant: "warning", title: "Caja", description: "La suma de denominaciones no coincide con el monto de apertura" });
+      return;
+    }
+
     setOpeningSubmitting(true);
     try {
       const response = await fetch("/api/cajas/aperturas", {
@@ -414,6 +460,7 @@ export default function CashManagementPage() {
           opening_amount: amountValue,
           opening_notes: openingForm.openingNotes.trim() ? openingForm.openingNotes.trim() : null,
           operator_admin_user_id: isAdmin ? resolvedOperatorId : undefined,
+                  opening_denominations: normalizedDenoms,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -430,6 +477,7 @@ export default function CashManagementPage() {
         openingNotes: "",
         operatorAdminUserId: resolvedOperatorId,
       });
+      setOpeningDenoms([]);
       if (data?.report_url) {
         setPrintUrl(String(data.report_url));
         setPrintModalOpen(true);
@@ -441,7 +489,7 @@ export default function CashManagementPage() {
     } finally {
       setOpeningSubmitting(false);
     }
-  }, [currentAdminId, isAdmin, loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, openingForm.operatorAdminUserId, toast]);
+  }, [currentAdminId, isAdmin, loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, openingForm.operatorAdminUserId, openingDenoms, toast]);
 
   const handleOpenOpeningReport = useCallback((sessionId: number) => {
     const url = `/api/cajas/aperturas/${sessionId}/reporte?format=html`;
@@ -458,7 +506,7 @@ export default function CashManagementPage() {
   const addClosingPayment = useCallback(() => {
     setClosingForm((prev) => ({
       ...prev,
-      payments: [...prev.payments, { method: "CASH", amount: "", transactionCount: "" }],
+      payments: [...prev.payments, { method: "CASH", amount: "" }],
     }));
   }, []);
 
@@ -479,30 +527,17 @@ export default function CashManagementPage() {
     }));
   }, []);
 
-  const handleCloseCashRegister = useCallback(async () => {
-    const normalizedAmount = closingForm.closingAmount.trim().replace(/,/g, ".");
-    const amountValue = Number(normalizedAmount);
-    if (!Number.isFinite(amountValue) || amountValue < 0) {
-      toast({ variant: "warning", title: "Caja", description: "Ingresa un monto de cierre válido" });
-      return;
-    }
-
-    const normalizedPayments = closingForm.payments
+  const handleCloseCashRegister = useCallback(async (forceSubmit: boolean = false) => {
+    // Construir pagos reportados y validar
+    let normalizedPayments = closingForm.payments
       .map((payment) => {
         const paymentAmount = Number(payment.amount.trim().replace(/,/g, "."));
         if (!Number.isFinite(paymentAmount) || paymentAmount < 0) {
           return null;
         }
-        const transactionCount = payment.transactionCount.trim()
-          ? Number(payment.transactionCount.trim())
-          : 0;
-        if (!Number.isFinite(transactionCount) || transactionCount < 0) {
-          return null;
-        }
         return {
           method: payment.method,
           reported_amount: Number(paymentAmount.toFixed(2)),
-          transaction_count: Math.trunc(transactionCount),
         };
       })
       .filter((entry): entry is NormalizedClosingPayment => entry !== null);
@@ -517,7 +552,73 @@ export default function CashManagementPage() {
       toast({ variant: "warning", title: "Caja", description: "Selecciona una sesión abierta para cerrar" });
       return;
     }
-
+    // Cálculo y validación de totales esperados y denominaciones según efectivo
+    const expected = closureExpectedTotal ?? null;
+    if (expected == null) {
+      toast({ variant: "warning", title: "Caja", description: "No se pudo calcular el total esperado del cierre" });
+      return;
+    }
+    let reportedTotal = normalizedPayments.reduce((acc, p) => acc + p.reported_amount, 0);
+    let difference = Number((reportedTotal - expected).toFixed(2));
+    const reportedCashBefore = normalizedPayments.filter((p) => {
+      const m = p.method.trim().toUpperCase();
+      return m === "CASH" || m === "EFECTIVO";
+    }).reduce((acc, p) => acc + p.reported_amount, 0);
+    let normClosingDenoms: Array<{ currency: string; value: number; qty: number; kind?: DenominationKind }> = [];
+    if (reportedCashBefore > 0) {
+      normClosingDenoms = closingDenoms
+        .map((d) => ({
+          currency: (d.currency || defaultCurrency).trim().toUpperCase(),
+          value: Number(d.value.trim().replace(/,/g, ".")),
+          qty: Number(d.qty.trim()),
+          kind: d.kind,
+        }))
+        .filter((d) => d.currency.length === 3 && Number.isFinite(d.value) && d.value >= 0 && Number.isFinite(d.qty) && d.qty >= 0);
+      if (normClosingDenoms.length === 0) {
+        toast({ variant: "warning", title: "Caja", description: "Agrega el detalle de denominaciones para efectivo" });
+        return;
+      }
+      const closeCurrencies = Array.from(new Set(normClosingDenoms.map((d) => d.currency)));
+      if (!(closeCurrencies.length === 1 && closeCurrencies[0] === defaultCurrency)) {
+        toast({ variant: "warning", title: "Caja", description: `Las denominaciones deben ser en ${defaultCurrency}` });
+        return;
+      }
+      const closeSum = normClosingDenoms.reduce((acc, d) => acc + d.value * d.qty, 0);
+      // Si las denominaciones no cuadran con el efectivo reportado, normalizamos el efectivo al monto de denominaciones
+      if (Math.abs(Number(closeSum.toFixed(2)) - Number(reportedCashBefore.toFixed(2))) >= 0.005) {
+        const cashIndexes = normalizedPayments
+          .map((p, idx) => ({ p, idx }))
+          .filter(({ p }) => {
+            const m = p.method.trim().toUpperCase();
+            return m === "CASH" || m === "EFECTIVO";
+          })
+          .map(({ idx }) => idx);
+        if (cashIndexes.length > 0) {
+          const firstIdx = cashIndexes[0];
+          normalizedPayments = normalizedPayments.map((p, idx) => {
+            if (!cashIndexes.includes(idx)) return p;
+            if (idx === firstIdx) {
+              return { ...p, reported_amount: Number(closeSum.toFixed(2)) };
+            }
+            return { ...p, reported_amount: 0 };
+          });
+          reportedTotal = normalizedPayments.reduce((acc, p) => acc + p.reported_amount, 0);
+          difference = Number((reportedTotal - expected).toFixed(2));
+        }
+      }
+    }
+    // Si hay diferencia y no se ha confirmado aún, abrir modal de confirmación
+    if (!forceSubmit && difference !== 0) {
+      preparedClosureRef.current = {
+        sessionId,
+        payments: normalizedPayments,
+        denoms: normClosingDenoms,
+        expected,
+        reported: reportedTotal,
+      };
+      setDiffConfirmOpen(true);
+      return;
+    }
     setClosingSubmitting(true);
     try {
       const response = await fetch("/api/cajas/cierres", {
@@ -526,9 +627,10 @@ export default function CashManagementPage() {
         credentials: "include",
         body: JSON.stringify({
           session_id: sessionId,
-          closing_amount: Number(amountValue.toFixed(2)),
+          closing_amount: Number((closureExpectedTotal ?? 0).toFixed(2)),
           payments: normalizedPayments,
           closing_notes: closingForm.closingNotes.trim() ? closingForm.closingNotes.trim() : null,
+          closing_denominations: normClosingDenoms,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -551,7 +653,18 @@ export default function CashManagementPage() {
     } finally {
       setClosingSubmitting(false);
     }
-  }, [cashState.activeSession?.id, closingForm, loadCashSession, toast]);
+  }, [cashState.activeSession?.id, closingForm, closingDenoms, closureExpectedTotal, loadCashSession, toast]);
+
+  const confirmAndSubmitDifference = useCallback(() => {
+    const prepared = preparedClosureRef.current;
+    if (!prepared) {
+      setDiffConfirmOpen(false);
+      return;
+    }
+    setDiffConfirmOpen(false);
+    // Forzamos el envío reusando el flujo de validación principal
+    void handleCloseCashRegister(true);
+  }, [handleCloseCashRegister]);
 
   const openOpeningModalWithContext = useCallback(
     (registerCode?: string, operatorAdminUserId?: number | null) => {
@@ -566,6 +679,7 @@ export default function CashManagementPage() {
           (isAdmin && cashState.operators.length > 0 ? cashState.operators[0].adminUserId : null),
       }));
       setOpeningModalOpen(true);
+      setOpeningDenoms([]);
     },
     [cashState.operators, currentAdminId, isAdmin]
   );
@@ -579,13 +693,91 @@ export default function CashManagementPage() {
         targetSessionId: sessionId ?? cashState.activeSession?.id ?? null,
       });
       setClosingModalOpen(true);
+      setClosingDenoms([]);
     },
     [cashState.activeSession?.id]
   );
 
+  // Cargar total esperado del cierre al abrir modal o cambiar la sesión objetivo
+  useEffect(() => {
+    if (!closingModalOpen) {
+      setClosureExpectedTotal(null);
+      setClosureError(null);
+      setClosureLoading(false);
+      return;
+    }
+    const sessionId = closingForm.targetSessionId ?? cashState.activeSession?.id ?? null;
+    if (!sessionId) return;
+    let aborted = false;
+    (async () => {
+      try {
+        setClosureLoading(true);
+        const response = await fetch(`/api/cajas/cierres/${sessionId}/reporte?format=json`, { credentials: "include", cache: "no-store" });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.message || "No se pudo calcular el total esperado del cierre");
+        }
+        const total = Number(data.report?.expectedTotalAmount ?? 0);
+        if (!aborted) {
+          setClosureExpectedTotal(Number(total.toFixed(2)));
+          setClosureError(null);
+        }
+      } catch (error) {
+        if (!aborted) {
+          const message = error instanceof Error ? error.message : "No se pudo calcular el total esperado del cierre";
+          setClosureExpectedTotal(null);
+          setClosureError(message);
+        }
+      } finally {
+        if (!aborted) setClosureLoading(false);
+      }
+    })();
+    return () => { aborted = true; };
+  }, [closingModalOpen, closingForm.targetSessionId, cashState.activeSession?.id]);
+
   const activeSession = cashState.activeSession;
   const hasAssignments = cashState.cashRegisters.length > 0;
-  const localCurrency = process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO";
+  const addOpeningDenom = () => setOpeningDenoms((prev) => [...prev, { currency: defaultCurrency, kind: "BILL", value: "", qty: "" }]);
+  const removeOpeningDenom = (idx: number) => setOpeningDenoms((prev) => prev.filter((_, i) => i !== idx));
+  const patchOpeningDenom = (idx: number, patch: Partial<DenominationLine>) => setOpeningDenoms((prev) => prev.map((d, i) => i === idx ? { ...d, ...patch } : d));
+  const openingDenomTotalByCurrency = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const d of openingDenoms) {
+      const code = (d.currency || defaultCurrency).toUpperCase();
+      const val = Number(d.value.replace(/,/g, "."));
+      const qty = Number(d.qty);
+      if (!Number.isFinite(val) || !Number.isFinite(qty)) continue;
+      map.set(code, (map.get(code) || 0) + val * qty);
+    }
+    return map;
+  }, [openingDenoms]);
+  const addClosingDenom = () => setClosingDenoms((prev) => [...prev, { currency: defaultCurrency, kind: "BILL", value: "", qty: "" }]);
+  const removeClosingDenom = (idx: number) => setClosingDenoms((prev) => prev.filter((_, i) => i !== idx));
+  const patchClosingDenom = (idx: number, patch: Partial<DenominationLine>) => setClosingDenoms((prev) => prev.map((d, i) => i === idx ? { ...d, ...patch } : d));
+  const closingDenomTotalByCurrency = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const d of closingDenoms) {
+      const code = (d.currency || defaultCurrency).toUpperCase();
+      const val = Number(d.value.replace(/,/g, "."));
+      const qty = Number(d.qty);
+      if (!Number.isFinite(val) || !Number.isFinite(qty)) continue;
+      map.set(code, (map.get(code) || 0) + val * qty);
+    }
+    return map;
+  }, [closingDenoms]);
+
+  // Si se reporta efectivo y no hay filas de denominaciones aún, agregar una fila inicial automáticamente
+  useEffect(() => {
+    if (!closingModalOpen) return;
+    const reportedCash = closingForm.payments.reduce((acc, p) => {
+      const m = (p.method || "").trim().toUpperCase();
+      const a = Number((p.amount || "").replace(/,/g, ".")) || 0;
+      return acc + (m === "CASH" || m === "EFECTIVO" ? a : 0);
+    }, 0);
+    if (reportedCash > 0 && closingDenoms.length === 0) {
+      setClosingDenoms((prev) => [...prev, { currency: defaultCurrency, kind: "BILL", value: "", qty: "" }]);
+    }
+  }, [closingModalOpen, closingForm.payments, closingDenoms.length]);
 
   return (
     <section className="space-y-10 pb-16">
@@ -729,7 +921,7 @@ export default function CashManagementPage() {
                   </div>
                   <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
                     <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
-                    <dd className="font-medium text-foreground">{formatCurrency(activeSession.openingAmount ?? 0, { currency: localCurrency })}</dd>
+                    <dd className="font-medium text-foreground">{formatCurrency(activeSession.openingAmount ?? 0, { currency: defaultCurrency })}</dd>
                   </div>
                   <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
                     <dt className="text-xs uppercase tracking-wide opacity-70">Notas</dt>
@@ -944,7 +1136,7 @@ export default function CashManagementPage() {
                         </div>
                         <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
                           <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
-                          <dd className="font-medium text-foreground">{formatCurrency(snapshot.openingAmount ?? 0, { currency: localCurrency })}</dd>
+                          <dd className="font-medium text-foreground">{formatCurrency(snapshot.openingAmount ?? 0, { currency: defaultCurrency })}</dd>
                         </div>
                         <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
                           <dt className="text-xs uppercase tracking-wide opacity-70">Cierre</dt>
@@ -1052,7 +1244,7 @@ export default function CashManagementPage() {
                 </div>
                 <div className="rounded-2xl bg-white/70 p-3">
                   <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
-                  <dd className="font-semibold text-foreground">{formatCurrency(activeSession.openingAmount ?? 0, { currency: localCurrency })}</dd>
+                  <dd className="font-semibold text-foreground">{formatCurrency(activeSession.openingAmount ?? 0, { currency: defaultCurrency })}</dd>
                 </div>
                 <div className="rounded-2xl bg-white/70 p-3">
                   <dt className="text-xs uppercase tracking-wide opacity-70">Notas</dt>
@@ -1061,7 +1253,14 @@ export default function CashManagementPage() {
               </dl>
             </div>
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => handleOpenOpeningReport(activeSession.id)}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setOpeningModalOpen(false);
+                  handleOpenOpeningReport(activeSession.id);
+                }}
+              >
                 <Download className="mr-2 h-4 w-4" />
                 Imprimir reporte
               </Button>
@@ -1145,6 +1344,70 @@ export default function CashManagementPage() {
                 />
               </div>
             </div>
+            <div className="space-y-3">
+                                <p className="text-xs uppercase text-muted-foreground">Denominaciones</p>
+                                <div className="space-y-2">
+                                  {openingDenoms.length === 0 ? (
+                                    <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-3 text-xs text-muted-foreground">
+                                      No has agregado denominaciones.
+                                    </div>
+                                  ) : (
+                                    openingDenoms.map((d, idx) => (
+                                      <div key={`open-denom-${idx}`} className="grid gap-3 rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 sm:grid-cols-[minmax(90px,1fr),minmax(120px,1fr),minmax(120px,1fr),minmax(120px,1fr),auto]">
+                                        <Input
+                                          value={d.currency}
+                                          onChange={(e) => patchOpeningDenom(idx, { currency: e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase() })}
+                                          placeholder="Moneda"
+                                          className="rounded-2xl"
+                                        />
+                                        <Combobox<DenominationKind>
+                                          value={d.kind}
+                                          onChange={(value) => patchOpeningDenom(idx, { kind: value })}
+                                          options={denominationKindOptions}
+                                          placeholder="Tipo"
+                                          ariaLabel="Tipo de denominación"
+                                        />
+                                        <Input
+                                          value={d.value}
+                                          onChange={(e) => patchOpeningDenom(idx, { value: e.target.value.replace(/[^0-9.,]/g, "") })}
+                                          placeholder="Valor"
+                                          inputMode="decimal"
+                                          className="rounded-2xl"
+                                        />
+                                        <Input
+                                          value={d.qty}
+                                          onChange={(e) => patchOpeningDenom(idx, { qty: e.target.value.replace(/[^0-9]/g, "") })}
+                                          placeholder="Cantidad"
+                                          inputMode="numeric"
+                                          className="rounded-2xl"
+                                        />
+                                        <div className="flex items-center justify-end">
+                                          <Button
+                                            type="button"
+                                            variant="destructive"
+                                            size="icon"
+                                            className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
+                                            onClick={() => removeOpeningDenom(idx)}
+                                            aria-label="Quitar denominación"
+                                          >
+                                            <span className="leading-none">×</span>
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                  <div className="flex justify-end">
+                                    <Button type="button" variant="outline" size="sm" onClick={addOpeningDenom}>Agregar denominación</Button>
+                                  </div>
+                                  {openingDenomTotalByCurrency.size > 0 ? (
+                                    <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 text-xs text-muted-foreground">
+                                      {[...openingDenomTotalByCurrency.entries()].map(([cur, total]) => (
+                                        <div key={`open-denom-total-${cur}`}>{cur}: <span className="font-semibold text-foreground">{formatCurrency(total, { currency: cur })}</span></div>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setOpeningModalOpen(false)} disabled={openingSubmitting}>
                 Cancelar
@@ -1172,74 +1435,51 @@ export default function CashManagementPage() {
         open={closingModalOpen}
         onClose={() => setClosingModalOpen(false)}
         title="Cerrar caja"
-        description="Registra el monto final y los detalles del cierre."
-        contentClassName="max-w-3xl"
+        description="Verifica que los montos cuadren y registra el cierre."
+        contentClassName="max-w-5xl"
       >
         {closingTarget ? (
           <div className="space-y-6">
-            <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-4 text-sm text-muted-foreground">
-              <p className="text-sm font-semibold text-foreground">Caja seleccionada</p>
-              <p className="text-base font-semibold text-foreground">
-                {closingTarget.cashRegisterCode} • {closingTarget.cashRegisterName}
-              </p>
-              <p className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                <Store className="h-3.5 w-3.5" />
-                {closingTarget.warehouseCode} • {closingTarget.warehouseName}
-              </p>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Responsable: {closingTarget.operatorDisplayName} ({closingTarget.operatorUsername})
-              </p>
-              <p className="text-xs text-muted-foreground">Apertura: {formatTimestampLocale(closingTarget.openingAt)}</p>
-            </div>
-
-            {isAdmin && closableSessions.length > 1 ? (
-              <Combobox<number>
-                value={closingTarget.sessionId}
-                onChange={(value) =>
-                  setClosingForm((prev) => ({
-                    ...prev,
-                    targetSessionId: value,
-                  }))
-                }
-                options={closableSessions}
-                placeholder="Selecciona la sesión a cerrar"
-                label="Sesión abierta"
-                ariaLabel="Seleccionar sesión abierta"
-              />
-            ) : null}
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Monto de cierre</Label>
-                <Input
-                  value={closingForm.closingAmount}
-                  onChange={(event) =>
-                    setClosingForm((prev) => ({ ...prev, closingAmount: event.target.value.replace(/[^0-9.,]/g, "") }))
-                  }
-                  placeholder="0.00"
-                  inputMode="decimal"
-                  className="rounded-2xl"
-                />
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-4 text-sm text-muted-foreground lg:col-span-2">
+                <p className="text-sm font-semibold text-foreground">Caja seleccionada</p>
+                <p className="text-base font-semibold text-foreground">
+                  {closingTarget.cashRegisterCode} • {closingTarget.cashRegisterName}
+                </p>
+                <p className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                  <Store className="h-3.5 w-3.5" />
+                  {closingTarget.warehouseCode} • {closingTarget.warehouseName}
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Responsable: {closingTarget.operatorDisplayName} ({closingTarget.operatorUsername})
+                </p>
+                <p className="text-xs text-muted-foreground">Apertura: {formatTimestampLocale(closingTarget.openingAt)}</p>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
-                <textarea
-                  value={closingForm.closingNotes}
-                  onChange={(event) =>
-                    setClosingForm((prev) => ({ ...prev, closingNotes: event.target.value }))
-                  }
-                  placeholder="Observaciones del cierre"
-                  rows={3}
-                  className="w-full rounded-2xl border border-muted bg-background/95 p-3 text-sm text-foreground"
-                />
+              <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-4 text-sm">
+                <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Resumen</p>
+                {closureLoading ? (
+                  <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin"/> Calculando…</div>
+                ) : closureError ? (
+                  <div className="text-destructive">{closureError}</div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Total esperado</span><span className="font-semibold">{formatCurrency(closureExpectedTotal ?? 0, { currency: "local" })}</span></div>
+                    <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Total reportado</span><span className="font-semibold">{formatCurrency((() => { const s = closingForm.payments.reduce((acc, p) => acc + (Number((p.amount||"").replace(/,/g, ".")) || 0), 0); return Number(s.toFixed(2)); })(), { currency: "local" })}</span></div>
+                    <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Diferencia</span><span className={cn("font-semibold", (() => { const expected = closureExpectedTotal ?? 0; const reported = closingForm.payments.reduce((acc, p) => acc + (Number((p.amount||"").replace(/,/g, ".")) || 0), 0); const diff = Number((reported - expected).toFixed(2)); return diff === 0 ? "text-muted-foreground" : diff > 0 ? "text-emerald-600" : "text-destructive"; })())}>{formatCurrency((() => { const expected = closureExpectedTotal ?? 0; const reported = closingForm.payments.reduce((acc, p) => acc + (Number((p.amount||"").replace(/,/g, ".")) || 0), 0); return Number((reported - expected).toFixed(2)); })(), { currency: "local" })}</span></div>
+                  </div>
+                )}
               </div>
             </div>
+
+            {/* Eliminado selector de "Sesión abierta"; el contexto define la sesión a cerrar */}
+
+            {/* Notas se mueven al final del modal */}
 
             <div className="space-y-3">
               <p className="text-xs uppercase text-muted-foreground">Detalle por método de pago</p>
               <div className="space-y-3">
                 {closingForm.payments.map((payment, index) => (
-                  <div key={`payment-${index}`} className="grid gap-3 rounded-2xl border border-muted-foreground/20 bg-muted/10 p-4 sm:grid-cols-[minmax(140px,1fr),minmax(120px,1fr),minmax(120px,1fr),auto]">
+                  <div key={`payment-${index}`} className="grid gap-3 rounded-2xl border border-muted-foreground/20 bg-muted/10 p-4 sm:grid-cols-[minmax(140px,1fr),minmax(120px,1fr),auto]">
                     <Combobox<PaymentMethod>
                       value={payment.method}
                       onChange={(value) => updateClosingPayment(index, { method: value })}
@@ -1255,25 +1495,125 @@ export default function CashManagementPage() {
                       inputMode="decimal"
                       className="rounded-2xl"
                     />
-                    <Input
-                      value={payment.transactionCount}
-                      onChange={(event) => updateClosingPayment(index, { transactionCount: event.target.value.replace(/[^0-9]/g, "") })}
-                      placeholder="Transacciones"
-                      inputMode="numeric"
-                      className="rounded-2xl"
-                    />
                     <div className="flex items-center justify-end gap-2">
-                      <Button type="button" variant="destructive" size="icon" className="h-6 w-6 rounded-full" onClick={() => removeClosingPayment(index)}>
-                        <Minus className="h-3 w-3" />
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon"
+                        className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
+                        onClick={() => removeClosingPayment(index)}
+                        aria-label="Quitar forma de pago"
+                      >
+                        <Minus className="h-[10px] w-[10px]" />
                       </Button>
                       {index === closingForm.payments.length - 1 ? (
-                        <Button type="button" variant="success" size="icon" className="h-6 w-6 rounded-full" onClick={addClosingPayment}>
-                          <Plus className="h-3 w-3" />
+                        <Button
+                          type="button"
+                          variant="success"
+                          size="icon"
+                          className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
+                          onClick={addClosingPayment}
+                          aria-label="Agregar forma de pago"
+                        >
+                          <Plus className="h-[10px] w-[10px]" />
                         </Button>
                       ) : null}
                     </div>
                   </div>
                 ))}
+              </div>
+              {/* Denominaciones: mostrar solo si se reporta efectivo > 0 y colocarlas debajo del detalle de pagos */}
+              {(() => { const cash = closingForm.payments.reduce((acc, p) => {
+                  const m = (p.method||"").toUpperCase().trim(); const a = Number((p.amount||"").replace(/,/g, ".")) || 0; return acc + (m === "CASH" || m === "EFECTIVO" ? a : 0);
+                }, 0); return cash > 0; })() ? (
+                <>
+                  <p className="text-xs uppercase text-muted-foreground">Denominaciones</p>
+                  <div className="space-y-2">
+                    {closingDenoms.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-3 text-xs text-muted-foreground">
+                        No has agregado denominaciones.
+                      </div>
+                    ) : (
+                      closingDenoms.map((d, idx) => (
+                        <div key={`close-denom-${idx}`} className="grid gap-3 rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 sm:grid-cols-[minmax(90px,1fr),minmax(120px,1fr),minmax(120px,1fr),minmax(120px,1fr),auto]">
+                          <Input
+                            value={d.currency}
+                            onChange={(e) => patchClosingDenom(idx, { currency: e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase() })}
+                            placeholder="Moneda"
+                            className="rounded-2xl"
+                          />
+                          <Combobox<DenominationKind>
+                            value={d.kind}
+                            onChange={(value) => patchClosingDenom(idx, { kind: value })}
+                            options={denominationKindOptions}
+                            placeholder="Tipo"
+                            ariaLabel="Tipo de denominación"
+                          />
+                          <Input
+                            value={d.value}
+                            onChange={(e) => patchClosingDenom(idx, { value: e.target.value.replace(/[^0-9.,]/g, "") })}
+                            placeholder="Valor"
+                            inputMode="decimal"
+                            className="rounded-2xl"
+                          />
+                          <Input
+                            value={d.qty}
+                            onChange={(e) => patchClosingDenom(idx, { qty: e.target.value.replace(/[^0-9]/g, "") })}
+                            placeholder="Cantidad"
+                            inputMode="numeric"
+                            className="rounded-2xl"
+                          />
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="icon"
+                              className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
+                              onClick={() => removeClosingDenom(idx)}
+                              aria-label="Quitar denominación"
+                            >
+                              <span className="leading-none">×</span>
+                            </Button>
+                            {idx === closingDenoms.length - 1 ? (
+                              <Button
+                                type="button"
+                                variant="success"
+                                size="icon"
+                                className="h-[22px] w-[22px] min-h-0 min-w-0 rounded-full"
+                                onClick={addClosingDenom}
+                                aria-label="Agregar denominación"
+                              >
+                                <Plus className="h-[10px] w-[10px]" />
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    {closingDenomTotalByCurrency.size > 0 ? (
+                      <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 text-xs text-muted-foreground">
+                        {[...closingDenomTotalByCurrency.entries()].map(([cur, total]) => (
+                          <div key={`close-denom-total-${cur}`}>{cur}: <span className="font-semibold text-foreground">{formatCurrency(total, { currency: cur })}</span></div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className="space-y-1 lg:col-span-3">
+                <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
+                <textarea
+                  value={closingForm.closingNotes}
+                  onChange={(event) =>
+                    setClosingForm((prev) => ({ ...prev, closingNotes: event.target.value }))
+                  }
+                  placeholder="Observaciones del cierre"
+                  rows={3}
+                  className="w-full rounded-2xl border border-muted bg-background/95 p-3 text-sm text-foreground"
+                />
               </div>
             </div>
 
@@ -1298,6 +1638,37 @@ export default function CashManagementPage() {
             Selecciona una sesión activa desde el panel o abre una caja para registrar el cierre.
           </div>
         )}
+      </Modal>
+
+      {/* Confirmación por diferencia */}
+      <Modal
+        open={diffConfirmOpen}
+        onClose={() => setDiffConfirmOpen(false)}
+        title="Confirmar diferencia en cierre"
+        description="Detectamos una diferencia entre lo esperado y lo reportado."
+        contentClassName="max-w-xl"
+      >
+        {(() => {
+          const prepared = preparedClosureRef.current;
+          const expected = prepared?.expected ?? 0;
+          const reported = prepared?.reported ?? 0;
+          const diff = Number((reported - expected).toFixed(2));
+          const isOver = diff > 0;
+          return (
+            <div className="space-y-5">
+              <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-4 text-sm">
+                <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Total esperado</span><span className="font-semibold">{formatCurrency(expected, { currency: "local" })}</span></div>
+                <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Total reportado</span><span className="font-semibold">{formatCurrency(reported, { currency: "local" })}</span></div>
+                <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Diferencia</span><span className={cn("font-semibold", diff === 0 ? "text-muted-foreground" : isOver ? "text-emerald-600" : "text-destructive")}>{formatCurrency(diff, { currency: "local" })} {diff === 0 ? "" : isOver ? "(sobrante)" : "(faltante)"}</span></div>
+              </div>
+              <p className="text-sm text-muted-foreground">Si continúas, registraremos esta diferencia en el cierre como {isOver ? "sobrante" : "faltante"}. Podrás verlo en el reporte.</p>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setDiffConfirmOpen(false)}>Cancelar</Button>
+                <Button type="button" onClick={confirmAndSubmitDifference}>Continuar y cerrar</Button>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
     </section>
   );

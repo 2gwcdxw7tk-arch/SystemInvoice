@@ -290,9 +290,11 @@ CREATE TABLE IF NOT EXISTS app.cash_register_sessions (
   opening_amount NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (opening_amount >= 0),
   opening_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   opening_notes VARCHAR(400),
+  opening_denominations JSONB,
   closing_amount NUMERIC(18,2),
   closing_at TIMESTAMPTZ,
   closing_notes VARCHAR(400),
+  closing_denominations JSONB,
   status VARCHAR(12) NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED', 'CANCELLED')),
   closing_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
   totals_snapshot JSONB,
@@ -395,6 +397,13 @@ CREATE INDEX IF NOT EXISTS ix_invoices_waiter_code
 
 CREATE INDEX IF NOT EXISTS ix_invoices_cash_session
   ON app.invoices (cash_register_session_id);
+
+-- Cambios: Estado y fecha de anulación en facturas
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS status VARCHAR(12) NOT NULL DEFAULT 'FACTURADA';
+
+ALTER TABLE app.invoices
+  ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ NULL;
 
 -- ========================================================
 -- Tabla: app.invoice_payments (pagos asociados a facturas)

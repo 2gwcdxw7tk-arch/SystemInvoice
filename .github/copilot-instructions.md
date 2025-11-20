@@ -22,6 +22,7 @@
 
 ## Domain Patterns
 - **Facturación**: Flows are separated by `mode` in `src/app/facturacion/page.tsx`. Extend the existing switch instead of creating new routes.
+- **Facturas – Anulación**: Las facturas no se borran. La anulación cambia `invoices.status` a `ANULADA` y registra `cancelled_at`. El backend revierte movimientos de inventario al anular.
 - **Price Lists**: Use `useRef` caches (`catalogRequestedRef`, `articlesRequestedRef`) to manage fetch guards. Extend these guards instead of duplicating fetch logic.
 - **Authentication**: Use `adminUserService` and `waiterService`. Add new operations in services/repositories before modifying handlers.
 - **Tables**: Use `TableService` (`src/lib/services/TableService.ts`) to manage table catalog, reservations, waiter snapshots and table state. API routes under `/api/tables/**` y `/api/meseros/tables/**` must consume this service (no `db/tables`).
@@ -62,3 +63,5 @@
 
 ## Recommended
 - Siempre responde en español.
+- toda modificacion de esquema de base de datos debe ir acompañada de su respectiva migracion en prisma y la actualizacion del archivo schema_master.sql de tal manera que el estado del esquema de base de datos pueda ser replicado en cualquier entorno.
+- Cualquier mensaje de confirmacion debe de ser de un estilo de modal acorde al estilo de la aplicacion, no usar los alertas nativas del navegador.

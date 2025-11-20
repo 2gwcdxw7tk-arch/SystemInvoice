@@ -55,6 +55,47 @@ function buildOpeningHtml(params: {
   const cashRegister = session.cashRegister;
   const openingNotes = session.openingNotes?.trim() ? session.openingNotes.trim() : "Sin notas";
   const closingStatus = session.status === "CLOSED" ? formatDateTime(session.closingAt) : "Sin cierre";
+  const denominations = Array.isArray(session.openingDenominations) ? session.openingDenominations : [];
+
+  const denomByCurrency = new Map<string, Array<{ value: number; qty: number; kind?: string }>>();
+  for (const d of denominations) {
+    const code = (d.currency || "").toUpperCase();
+    if (!denomByCurrency.has(code)) denomByCurrency.set(code, []);
+    denomByCurrency.get(code)!.push({ value: Number(d.value || 0), qty: Math.trunc(Number(d.qty || 0)), kind: d.kind });
+  }
+  for (const entry of denomByCurrency.values()) {
+    entry.sort((a, b) => b.value - a.value);
+  }
+  const denomSections = Array.from(denomByCurrency.entries()).map(([currency, lines]) => {
+    const rows = lines.map((l) => {
+      const subtotal = (Number(l.value) || 0) * (Number(l.qty) || 0);
+      return `<tr><td>${escapeHtml(l.kind || '-')}</td><td>${escapeHtml(String(l.value))}</td><td>${escapeHtml(String(l.qty))}</td><td>${escapeHtml(formatCurrency(subtotal, { currency }))}</td></tr>`;
+    }).join("");
+    const total = lines.reduce((acc, l) => acc + (Number(l.value) || 0) * (Number(l.qty) || 0), 0);
+    return `
+      <section>
+        <h3 style="font-size:16px; font-weight:600; margin:16px 0 8px; color:#0f172a;">Denominaciones (${escapeHtml(currency)})</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Tipo</th>
+              <th>Valor</th>
+              <th>Cantidad</th>
+              <th>Subtotal</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows || `<tr><td colspan="4" style="text-align:center; color:#6b7280; padding:16px;">Sin detalle</td></tr>`}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th colspan="3" style="text-align:right;">Total ${escapeHtml(currency)}</th>
+              <th>${escapeHtml(formatCurrency(total, { currency }))}</th>
+            </tr>
+          </tfoot>
+        </table>
+      </section>`;
+  }).join("");
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -150,6 +191,12 @@ function buildOpeningHtml(params: {
           </tbody>
         </table>
       </section>
+
+      ${denominations.length > 0 ? denomSections : `
+      <section>
+        <h2 style="font-size:18px; font-weight:600; margin:16px 0 12px; color:#0f172a;">Denominaciones de apertura</h2>
+        <div style="color:#6b7280; font-size:13px;">No se registraron denominaciones.</div>
+      </section>`}
 
       <section>
         <h2 style="font-size:18px; font-weight:600; margin:0 0 12px; color:#0f172a;">Registro de emisión</h2>

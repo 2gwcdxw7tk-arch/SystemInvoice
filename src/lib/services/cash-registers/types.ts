@@ -30,9 +30,11 @@ export type CashRegisterSessionRecord = {
   openingAmount: number;
   openingAt: string;
   openingNotes: string | null;
+  openingDenominations?: CashDenominationLine[] | null;
   closingAmount: number | null;
   closingAt: string | null;
   closingNotes: string | null;
+  closingDenominations?: CashDenominationLine[] | null;
   cashRegister: CashRegisterAssignment;
   closingUserId: number | null;
   totalsSnapshot: unknown;
@@ -65,6 +67,8 @@ export type CashRegisterClosureSummary = {
 
 export type CashRegisterReport = CashRegisterClosureSummary & {
   issuerName?: string | null;
+  openingDenominations?: CashDenominationLine[] | null;
+  closingDenominations?: CashDenominationLine[] | null;
 };
 
 export type CashRegisterAssignmentGroup = {
@@ -96,6 +100,7 @@ export interface OpenCashRegisterSessionInput {
   openingNotes?: string | null;
   actingAdminUserId?: number;
   allowUnassigned?: boolean;
+  openingDenominations?: CashDenominationLine[];
 }
 
 export interface CloseCashRegisterSessionInput {
@@ -105,6 +110,7 @@ export interface CloseCashRegisterSessionInput {
   payments: Array<{ method: string; reportedAmount: number; transactionCount?: number }>;
   closingNotes?: string | null;
   allowDifferentUser?: boolean;
+  closingDenominations?: CashDenominationLine[];
 }
 
 export type ExpectedPayment = {
@@ -117,4 +123,12 @@ export type ReportedPayment = {
   method: string;
   reportedAmount: number;
   txCount: number;
+};
+
+export type DenominationKind = "COIN" | "BILL" | "OTHER";
+export type CashDenominationLine = {
+  currency: string; // ISO 4217 code (e.g., NIO, USD)
+  value: number;    // Face value per unit
+  qty: number;      // Quantity counted
+  kind?: DenominationKind;
 };

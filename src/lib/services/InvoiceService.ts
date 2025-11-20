@@ -59,7 +59,8 @@ function clonePayment(payment: InvoicePaymentInput): InvoicePaymentInput {
 }
 
 // Mock stores (trasladados desde src/lib/db/invoices.ts)
-const mockInvoices: InvoiceInsertResult[] = [];
+type MockInvoiceRec = InvoiceInsertResult & { status: string; cancelled_at: string | null };
+const mockInvoices: MockInvoiceRec[] = [];
 const mockPayments: { invoice_id: number; payment: InvoicePaymentInput }[] = [];
 const mockItems: { invoice_id: number; line_number: number; description: string; quantity: number; unit_price: number; line_total: number }[] = [];
 
@@ -101,13 +102,101 @@ export class InvoiceService {
     return this.invoiceRepository.getInvoiceByNumber(invoiceNumber);
   }
 
+  async getInvoiceDetailById(invoiceId: number) {
+    if (env.useMockData) {
+      const inv = mockInvoices.find((i) => i.id === invoiceId);
+      if (!inv) return null;
+      return {
+        id: inv.id,
+        invoice_number: inv.invoice_number,
+        status: inv.status,
+        cancelled_at: inv.cancelled_at,
+        invoice_date: new Date().toISOString(),
+        table_code: null,
+        waiter_code: null,
+        subtotal: 0,
+        service_charge: 0,
+        vat_amount: 0,
+        vat_rate: 0,
+        total_amount: 0,
+        currency_code: "NIO",
+        notes: null,
+        customer_name: null,
+        customer_tax_id: null,
+        items: mockItems.filter((m) => m.invoice_id === inv.id).map((m) => ({
+          id: m.line_number,
+          line_number: m.line_number,
+          description: m.description,
+          quantity: m.quantity,
+          unit_price: m.unit_price,
+          line_total: m.line_total,
+          article_code: null,
+        })),
+        payments: mockPayments.filter((p) => p.invoice_id === inv.id).map((p, idx) => ({
+          id: idx + 1,
+          payment_method: p.payment.method,
+          amount: p.payment.amount,
+          reference: p.payment.reference ?? null,
+        })),
+      } as const;
+    }
+    return this.invoiceRepository.getInvoiceDetailById(invoiceId);
+  }
+
+  async listInvoices(params: {
+    from?: string;
+    to?: string;
+    q?: string;
+    table_code?: string;
+    waiter_code?: string;
+    page?: number;
+    pageSize?: number;
+  }) {
+    if (env.useMockData) {
+      return { total: mockInvoices.length, items: mockInvoices.map((i) => ({
+        id: i.id,
+        invoice_number: i.invoice_number,
+        status: i.status,
+        invoice_date: new Date().toISOString(),
+        table_code: null,
+        waiter_code: null,
+        subtotal: 0,
+        service_charge: 0,
+        vat_amount: 0,
+        total_amount: 0,
+        currency_code: "NIO",
+        customer_name: null,
+      })) } as const;
+    }
+    return this.invoiceRepository.listInvoices(params);
+  }
+
+  async cancelInvoice(invoiceId: number): Promise<void> {
+    if (env.useMockData) {
+      const rec = mockInvoices.find((i) => i.id === invoiceId);
+      if (rec && rec.status !== "ANULADA") {
+        rec.status = "ANULADA";
+        rec.cancelled_at = new Date().toISOString();
+      }
+      return;
+    }
+    const basic = await this.invoiceRepository.getInvoiceBasicById(invoiceId);
+    if (!basic) {
+      throw new Error("Factura no encontrada");
+    }
+    // Revertir movimientos de inventario referenciados por el número de factura
+    await inventoryService.reverseInvoiceMovements({ invoiceNumber: basic.invoice_number });
+    // Marcar factura como ANULADA (soft-cancel)
+    await this.invoiceRepository.updateInvoiceStatus(invoiceId, "ANULADA", new Date());
+  }
+
   private async createInvoiceMock(
     input: Omit<InvoicePersistenceInput, "movementLines">,
     movementLines: InvoiceConsumptionLineInput[]
   ): Promise<InvoiceInsertResult> {
     const id = mockInvoices.length + 1;
     const record: InvoiceInsertResult = { id, invoice_number: input.invoice_number };
-    mockInvoices.push(record);
+    mockInvoices.push({ ...record, status: "FACTURADA", cancelled_at: null });
 
     if (input.items.length > 0) {
       input.items.forEach((item, idx) => {
@@ -133,16 +222,7 @@ export class InvoiceService {
       }));
     }
 
-    if (preparedMovementLines.length > 0) {
-      await inventoryService.registerInvoiceMovements({
-        invoiceId: id,
-        invoiceNumber: input.invoice_number,
-        invoiceDate: input.invoiceDate,
-        tableCode: input.table_code ?? null,
-        customerName: input.customer_name ?? null,
-        lines: preparedMovementLines,
-      });
-    }
+    // En modo mock no registramos movimientos reales de inventario
 
     if (input.cash_register_session_id) {
       cashRegisterService.registerInvoiceForSession({

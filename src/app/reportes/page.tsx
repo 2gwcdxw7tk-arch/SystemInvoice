@@ -14,6 +14,7 @@ import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-provider";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/config/currency";
+import { TotalsSummary } from "@/components/ui/totals-summary";
 import type {
   InventoryMovementsResult,
   InventoryMovementsSummaryRow,
@@ -907,6 +908,19 @@ export default function ReportesPage() {
           ) : (
             <p className="text-sm text-muted-foreground">Ingresa un rango válido y consulta para ver resultados.</p>
           )}
+
+          {salesState.data ? (
+            <div className="mt-4">
+              <TotalsSummary
+                items={[
+                  { label: "Subtotal", amount: salesState.data.totals.subtotal },
+                  { label: "Servicio", amount: salesState.data.totals.serviceCharge },
+                  { label: "IVA", amount: salesState.data.totals.vat },
+                  { label: "Total", amount: salesState.data.totals.total, emphasize: true },
+                ]}
+              />
+            </div>
+          ) : null}
 
           {salesState.data ? (
             <div className="overflow-x-auto">

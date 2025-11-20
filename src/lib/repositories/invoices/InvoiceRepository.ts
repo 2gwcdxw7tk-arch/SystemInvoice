@@ -37,6 +37,7 @@ export class InvoiceRepository implements IInvoiceRepository {
           waiter_code: waiterCode,
           invoice_date: data.invoiceDate,
           origin_order_id: data.originOrderId,
+          status: 'FACTURADA',
           subtotal: data.subtotal,
           service_charge: data.service_charge,
           vat_amount: data.vat_amount,
@@ -116,9 +117,14 @@ export class InvoiceRepository implements IInvoiceRepository {
     return result;
   }
 
-  async deleteInvoice(invoiceId: number): Promise<void> {
-    await this.prisma.invoices.delete({
+  async updateInvoiceStatus(invoiceId: number, status: string, cancelledAt?: Date | null): Promise<void> {
+    await this.prisma.invoices.update({
       where: { id: BigInt(invoiceId) },
+      data: {
+        status,
+        cancelled_at: cancelledAt ?? null,
+        updated_at: new Date(),
+      },
     });
   }
 
@@ -128,5 +134,198 @@ export class InvoiceRepository implements IInvoiceRepository {
       select: { id: true, invoice_number: true },
     });
     return invoice ? { id: Number(invoice.id), invoice_number: invoice.invoice_number } : null;
+  }
+
+  async getInvoiceBasicById(invoiceId: number): Promise<{ id: number; invoice_number: string } | null> {
+    const invoice = await this.prisma.invoices.findUnique({
+      where: { id: BigInt(invoiceId) },
+      select: { id: true, invoice_number: true },
+    });
+    return invoice ? { id: Number(invoice.id), invoice_number: invoice.invoice_number } : null;
+  }
+
+  async getInvoiceDetailById(invoiceId: number): Promise<{
+    id: number;
+    invoice_number: string;
+    status: string;
+    cancelled_at: string | null;
+    invoice_date: string;
+    table_code: string | null;
+    waiter_code: string | null;
+    subtotal: number;
+    service_charge: number;
+    vat_amount: number;
+    vat_rate: number;
+    total_amount: number;
+    currency_code: string;
+    notes: string | null;
+    customer_name: string | null;
+    customer_tax_id: string | null;
+    items: Array<{ id: number; line_number: number; description: string; quantity: number; unit_price: number; line_total: number; article_code: string | null }>;
+    payments: Array<{ id: number; payment_method: string; amount: number; reference: string | null }>;
+  } | null> {
+    const row = await this.prisma.invoices.findUnique({
+      where: { id: BigInt(invoiceId) },
+      select: {
+        id: true,
+        invoice_number: true,
+        status: true,
+        cancelled_at: true,
+        invoice_date: true,
+        table_code: true,
+        waiter_code: true,
+        subtotal: true,
+        service_charge: true,
+        vat_amount: true,
+        vat_rate: true,
+        total_amount: true,
+        currency_code: true,
+        notes: true,
+        customer_name: true,
+        customer_tax_id: true,
+        invoice_items: {
+          select: {
+            id: true,
+            line_number: true,
+            description: true,
+            quantity: true,
+            unit_price: true,
+            line_total: true,
+            article_code: true,
+          },
+          orderBy: { line_number: "asc" },
+        },
+        invoice_payments: {
+          select: { id: true, payment_method: true, amount: true, reference: true },
+          orderBy: { id: "asc" },
+        },
+      },
+    });
+    if (!row) return null;
+    return {
+      id: Number(row.id),
+      invoice_number: row.invoice_number,
+      status: row.status,
+      cancelled_at: row.cancelled_at ? row.cancelled_at.toISOString() : null,
+      invoice_date: row.invoice_date.toISOString(),
+      table_code: row.table_code,
+      waiter_code: row.waiter_code,
+      subtotal: Number(row.subtotal),
+      service_charge: Number(row.service_charge),
+      vat_amount: Number(row.vat_amount),
+      vat_rate: Number(row.vat_rate),
+      total_amount: Number(row.total_amount),
+      currency_code: row.currency_code,
+      notes: row.notes ?? null,
+      customer_name: row.customer_name ?? null,
+      customer_tax_id: row.customer_tax_id ?? null,
+      items: row.invoice_items.map((it) => ({
+        id: Number(it.id),
+        line_number: it.line_number,
+        description: it.description,
+        quantity: Number(it.quantity),
+        unit_price: Number(it.unit_price),
+        line_total: Number(it.line_total),
+        article_code: it.article_code ?? null,
+      })),
+      payments: row.invoice_payments.map((p) => ({
+        id: Number(p.id),
+        payment_method: p.payment_method,
+        amount: Number(p.amount),
+        reference: p.reference ?? null,
+      })),
+    };
+  }
+
+  async listInvoices(params: {
+    from?: string;
+    to?: string;
+    q?: string;
+    table_code?: string;
+    waiter_code?: string;
+    status?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ total: number; items: Array<{
+    id: number;
+    invoice_number: string;
+    status: string;
+    invoice_date: string;
+    table_code: string | null;
+    waiter_code: string | null;
+    subtotal: number;
+    service_charge: number;
+    vat_amount: number;
+    total_amount: number;
+    currency_code: string;
+    customer_name: string | null;
+  }> }> {
+    const page = Math.max(1, Number(params.page ?? 1));
+    const pageSize = Math.min(100, Math.max(1, Number(params.pageSize ?? 20)));
+    const skip = (page - 1) * pageSize;
+    const from = params.from ? new Date(params.from.includes("T") ? params.from : `${params.from}T00:00:00`) : undefined;
+    const to = params.to ? new Date(params.to.includes("T") ? params.to : `${params.to}T23:59:59.999`) : undefined;
+    const where: Prisma.invoicesWhereInput = {};
+    if (from || to) {
+      where.invoice_date = { gte: from ?? undefined, lte: to ?? undefined };
+    }
+    if (params.table_code) {
+      where.table_code = params.table_code;
+    }
+    if (params.waiter_code) {
+      where.waiter_code = params.waiter_code;
+    }
+    if (params.status && params.status.trim().length > 0) {
+      where.status = params.status.trim().toUpperCase();
+    }
+    if (params.q && params.q.trim().length > 0) {
+      const q = params.q.trim();
+      where.OR = [
+        { invoice_number: { contains: q, mode: "insensitive" } },
+        { customer_name: { contains: q, mode: "insensitive" } },
+        { table_code: { contains: q, mode: "insensitive" } },
+        { waiter_code: { contains: q, mode: "insensitive" } },
+      ];
+    }
+
+    const total = await this.prisma.invoices.count({ where });
+    const rows = await this.prisma.invoices.findMany({
+      where,
+      orderBy: { invoice_date: "desc" },
+      skip,
+      take: pageSize,
+      select: {
+        id: true,
+        invoice_number: true,
+        status: true,
+        invoice_date: true,
+        table_code: true,
+        waiter_code: true,
+        subtotal: true,
+        service_charge: true,
+        vat_amount: true,
+        total_amount: true,
+        currency_code: true,
+        customer_name: true,
+      },
+    });
+
+    return {
+      total,
+      items: rows.map((r) => ({
+        id: Number(r.id),
+        invoice_number: r.invoice_number,
+        status: r.status,
+        invoice_date: r.invoice_date.toISOString(),
+        table_code: r.table_code,
+        waiter_code: r.waiter_code,
+        subtotal: Number(r.subtotal),
+        service_charge: Number(r.service_charge),
+        vat_amount: Number(r.vat_amount),
+        total_amount: Number(r.total_amount),
+        currency_code: r.currency_code,
+        customer_name: r.customer_name ?? null,
+      })),
+    };
   }
 }
