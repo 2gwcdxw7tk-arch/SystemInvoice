@@ -112,6 +112,7 @@ const ORDER_STATUS_BADGES: Record<OrderStatus, string> = {
   anulado: "border-rose-200 bg-rose-50 text-rose-700",
 };
 const SERVICE_RATE_LABEL = formatPercent(SERVICE_RATE);
+const SERVICE_CHARGE_ENABLED = SERVICE_RATE > 0;
 const VAT_RATE_LABEL = formatPercent(VAT_RATE);
 const CLOCK_FORMATTER = new Intl.DateTimeFormat("es-NI", {
   hour: "numeric",
@@ -591,10 +592,21 @@ export default function MeserosComandasPage() {
   const hasOrderDetail = pendingItems.length > 0 || sentItems.length > 0;
   const orderStatus: OrderStatus = activeTableSnapshot?.order?.status ?? "normal";
   const itemsSubtotal = useMemo(() => pendingTotal + sentTotal, [pendingTotal, sentTotal]);
-  const serviceCharge = useMemo(() => itemsSubtotal * SERVICE_RATE, [itemsSubtotal]);
+  const serviceCharge = useMemo(() => (SERVICE_CHARGE_ENABLED ? itemsSubtotal * SERVICE_RATE : 0), [itemsSubtotal]);
   const taxableBase = useMemo(() => itemsSubtotal + serviceCharge, [itemsSubtotal, serviceCharge]);
   const vatAmount = useMemo(() => taxableBase * VAT_RATE, [taxableBase]);
   const estimatedTotal = useMemo(() => taxableBase + vatAmount, [taxableBase, vatAmount]);
+  const totalsItems = useMemo(() => {
+    const items: Array<{ label: string; amount: number; emphasize?: boolean }> = [
+      { label: "Pendientes", amount: pendingTotal },
+      { label: "Enviados", amount: sentTotal },
+      { label: "Subtotal", amount: itemsSubtotal },
+      { label: SERVICE_CHARGE_ENABLED ? `Servicio ${SERVICE_RATE_LABEL}` : "Servicio (sin cargo)", amount: serviceCharge },
+      { label: `IVA ${VAT_RATE_LABEL}`, amount: vatAmount },
+      { label: "Cuenta estimada", amount: estimatedTotal, emphasize: true },
+    ];
+    return items;
+  }, [estimatedTotal, itemsSubtotal, pendingTotal, sentTotal, serviceCharge, vatAmount]);
   const clockLabel = useMemo(() => CLOCK_FORMATTER.format(now).toUpperCase(), [now]);
   const dateLabel = useMemo(() => {
     const text = DATE_FORMATTER.format(now);
@@ -1091,16 +1103,7 @@ export default function MeserosComandasPage() {
           </div>
 
           <div className="space-y-2 rounded-2xl border bg-background/80 p-3 text-sm text-muted-foreground">
-            <TotalsSummary
-              items={[
-                { label: "Pendientes", amount: pendingTotal },
-                { label: "Enviados", amount: sentTotal },
-                { label: "Subtotal", amount: itemsSubtotal },
-                { label: `Servicio ${SERVICE_RATE_LABEL}`, amount: serviceCharge },
-                { label: `IVA ${VAT_RATE_LABEL}`, amount: vatAmount },
-                { label: "Cuenta estimada", amount: estimatedTotal, emphasize: true },
-              ]}
-            />
+            <TotalsSummary items={totalsItems} />
             <div className="grid grid-cols-[1fr,auto] text-xs uppercase tracking-wide">
               <div className="pr-4">Total articulos</div>
               <div className="text-right font-semibold text-foreground">{totalGuests}</div>

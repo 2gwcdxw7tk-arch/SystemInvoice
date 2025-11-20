@@ -11,6 +11,7 @@ import {
   ExpectedPayment,
   OpenCashRegisterSessionInput,
   ReportedPayment,
+  AssignInvoiceSequenceInput,
   UpdateCashRegisterInput,
 } from "@/lib/services/cash-registers/types";
 import { buildClosureSummary } from "@/lib/services/cash-registers/summary";
@@ -43,6 +44,9 @@ type MockCashRegister = {
   notes: string | null;
   createdAt: string;
   updatedAt: string | null;
+  invoiceSequenceDefinitionId: number | null;
+  invoiceSequenceCode: string | null;
+  invoiceSequenceName: string | null;
 };
 
 function cloneRegister(register: MockCashRegister): MockCashRegister {
@@ -51,6 +55,9 @@ function cloneRegister(register: MockCashRegister): MockCashRegister {
     createdAt: register.createdAt,
     updatedAt: register.updatedAt,
     notes: register.notes,
+    invoiceSequenceDefinitionId: register.invoiceSequenceDefinitionId,
+    invoiceSequenceCode: register.invoiceSequenceCode,
+    invoiceSequenceName: register.invoiceSequenceName,
   };
 }
 
@@ -67,6 +74,9 @@ function mapRegisterToRecord(register: MockCashRegister): CashRegisterRecord {
     notes: register.notes,
     createdAt: register.createdAt,
     updatedAt: register.updatedAt,
+    invoiceSequenceDefinitionId: register.invoiceSequenceDefinitionId,
+    invoiceSequenceCode: register.invoiceSequenceCode,
+    invoiceSequenceName: register.invoiceSequenceName,
   } satisfies CashRegisterRecord;
 }
 
@@ -103,6 +113,9 @@ export class CashRegisterService {
           notes: null,
           createdAt: new Date().toISOString(),
           updatedAt: null,
+          invoiceSequenceDefinitionId: null,
+          invoiceSequenceCode: null,
+          invoiceSequenceName: null,
         },
       ];
       this.mockAssignments = new Map();
@@ -194,6 +207,9 @@ export class CashRegisterService {
       notes: input.notes?.trim() ? input.notes.trim().slice(0, 250) : null,
       createdAt: nowIso,
       updatedAt: nowIso,
+      invoiceSequenceDefinitionId: null,
+      invoiceSequenceCode: null,
+      invoiceSequenceName: null,
     };
     this.mockCashRegisters.push(newRegister);
     return mapRegisterToRecord(cloneRegister(newRegister));
@@ -226,6 +242,12 @@ export class CashRegisterService {
       target.notes = input.notes?.trim() ? input.notes.trim().slice(0, 250) : null;
     }
 
+    if (typeof input.invoiceSequenceDefinitionId !== "undefined") {
+      target.invoiceSequenceDefinitionId = input.invoiceSequenceDefinitionId ?? null;
+      target.invoiceSequenceCode = null;
+      target.invoiceSequenceName = null;
+    }
+
     if (typeof input.warehouseCode === "string" && input.warehouseCode.trim().length > 0) {
       const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
       const warehouse = await warehouseService.getWarehouseByCode(normalizedWarehouseCode);
@@ -239,6 +261,33 @@ export class CashRegisterService {
 
     target.updatedAt = new Date().toISOString();
     return mapRegisterToRecord(cloneRegister(target));
+  }
+
+  async setInvoiceSequenceForRegister(input: AssignInvoiceSequenceInput): Promise<CashRegisterRecord> {
+    const normalizedCode = normalizeCode(input.cashRegisterCode);
+    if (env.useMockData) {
+      const target = this.mockCashRegisters.find((register) => register.code === normalizedCode);
+      if (!target) {
+        throw new Error("Caja no encontrada (mock)");
+      }
+      target.invoiceSequenceDefinitionId = input.sequenceDefinitionId ?? null;
+      target.invoiceSequenceCode = null;
+      target.invoiceSequenceName = null;
+      target.updatedAt = new Date().toISOString();
+      return mapRegisterToRecord(cloneRegister(target));
+    }
+
+    return this.repository.updateCashRegister(normalizedCode, {
+      invoiceSequenceDefinitionId: input.sequenceDefinitionId ?? null,
+    });
+  }
+
+  async getCashRegisterById(cashRegisterId: number): Promise<CashRegisterRecord | null> {
+    if (env.useMockData) {
+      const target = this.mockCashRegisters.find((register) => register.id === cashRegisterId);
+      return target ? mapRegisterToRecord(cloneRegister(target)) : null;
+    }
+    return this.repository.getCashRegisterById(cashRegisterId);
   }
 
   async listCashRegisterAssignments(options: { adminUserIds?: number[] } = {}): Promise<CashRegisterAssignmentGroup[]> {
@@ -389,6 +438,29 @@ export class CashRegisterService {
     return this.repository.getCashRegisterSessionById(sessionId);
   }
 
+  async recordInvoiceSequenceUsage(sessionId: number, invoiceLabel: string): Promise<void> {
+    if (!invoiceLabel || !invoiceLabel.trim()) {
+      return;
+    }
+
+    if (env.useMockData && this.mockSessions) {
+      const existing = this.mockSessions.get(sessionId);
+      if (!existing) {
+        return;
+      }
+      const trimmed = invoiceLabel.trim();
+      const updated: CashRegisterSessionRecord = cloneSession({
+        ...existing,
+        invoiceSequenceStart: existing.invoiceSequenceStart ?? trimmed,
+        invoiceSequenceEnd: trimmed,
+      });
+      this.mockSessions.set(sessionId, updated);
+      return;
+    }
+
+    await this.repository.updateSessionInvoiceSequenceRange(sessionId, invoiceLabel);
+  }
+
   async openCashRegisterSession(input: OpenCashRegisterSessionInput): Promise<CashRegisterSessionRecord> {
     const openingNotes = input.openingNotes?.trim()?.slice(0, 400) ?? null;
     if (!(input.openingAmount >= 0)) {
@@ -468,6 +540,8 @@ export class CashRegisterService {
         cashRegister: cloneAssignment(target),
         closingUserId: null,
         totalsSnapshot: null,
+        invoiceSequenceStart: null,
+        invoiceSequenceEnd: null,
       };
       this.mockSessions.set(id, newSession);
       return cloneSession(newSession);

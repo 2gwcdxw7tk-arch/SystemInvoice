@@ -18,6 +18,12 @@ import {
 import type { ICashRegisterRepository } from "./ICashRegisterRepository";
 
 // Tipos para los payloads de Prisma con las relaciones incluidas
+type SequenceDefinitionSummary = {
+  id: number;
+  code: string;
+  name: string;
+};
+
 type CashRegisterWithWarehouse = {
   id: number | bigint;
   code: string;
@@ -29,6 +35,8 @@ type CashRegisterWithWarehouse = {
   created_at: Date;
   updated_at: Date | null;
   warehouses: { id: number; code: string; name: string };
+  invoice_sequence_definition_id: number | null;
+  sequence_definitions: SequenceDefinitionSummary | null;
 };
 
 type CashRegisterUserWithRelations = {
@@ -59,6 +67,8 @@ type CashRegisterSessionWithRelations = {
   status: string;
   closing_user_id: number | null;
   totals_snapshot: unknown;
+  invoice_sequence_start: string | null;
+  invoice_sequence_end: string | null;
   created_at: Date;
   updated_at: Date | null;
   cash_registers: {
@@ -87,6 +97,9 @@ function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterR
     notes: register.notes,
     createdAt: register.created_at.toISOString(),
     updatedAt: register.updated_at?.toISOString() ?? null,
+    invoiceSequenceDefinitionId: register.invoice_sequence_definition_id ? Number(register.invoice_sequence_definition_id) : null,
+    invoiceSequenceCode: register.sequence_definitions?.code ?? null,
+    invoiceSequenceName: register.sequence_definitions?.name ?? null,
   } satisfies CashRegisterRecord;
 }
 
@@ -134,6 +147,8 @@ function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_def
       warehouseName: session.cash_registers!.warehouses!.name,
       isDefault: !!session.is_default,
     },
+    invoiceSequenceStart: session.invoice_sequence_start ?? null,
+    invoiceSequenceEnd: session.invoice_sequence_end ?? null,
   } satisfies CashRegisterSessionRecord;
 }
 
@@ -153,6 +168,13 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       },
       include: {
         warehouses: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
+        sequence_definitions: {
           select: {
             id: true,
             code: true,
@@ -200,6 +222,13 @@ export class CashRegisterRepository implements ICashRegisterRepository {
               name: true,
             },
           },
+          sequence_definitions: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+            },
+          },
         },
       });
 
@@ -221,6 +250,13 @@ export class CashRegisterRepository implements ICashRegisterRepository {
               name: true,
             },
           },
+          sequence_definitions: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+            },
+          },
         },
       });
 
@@ -229,6 +265,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       }
 
       let targetWarehouseId = currentRegister.warehouse_id;
+      let targetSequenceDefinitionId = currentRegister.invoice_sequence_definition_id;
 
       if (typeof input.warehouseCode === "string" && input.warehouseCode.trim().length > 0) {
         const normalizedInputWarehouseCode = normalizeCode(input.warehouseCode);
@@ -243,6 +280,21 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         targetWarehouseId = newWarehouse.id;
       }
 
+      if (typeof input.invoiceSequenceDefinitionId !== "undefined") {
+        if (input.invoiceSequenceDefinitionId === null) {
+          targetSequenceDefinitionId = null;
+        } else {
+          const candidate = await tx.sequence_definitions.findUnique({
+            where: { id: Number(input.invoiceSequenceDefinitionId) },
+            select: { id: true },
+          });
+          if (!candidate) {
+            throw new Error("La secuencia especificada no existe");
+          }
+          targetSequenceDefinitionId = Number(candidate.id);
+        }
+      }
+
       const updatedRegister = await tx.cash_registers.update({
         where: { code: normalizedCode },
         data: {
@@ -251,9 +303,17 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           is_active: input.isActive,
           notes: input.notes?.trim() ? input.notes.trim().slice(0, 250) : null,
           warehouse_id: targetWarehouseId,
+          invoice_sequence_definition_id: targetSequenceDefinitionId,
         },
         include: {
           warehouses: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+            },
+          },
+          sequence_definitions: {
             select: {
               id: true,
               code: true,
@@ -264,6 +324,47 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       });
 
       return mapRegisterToRecord(updatedRegister);
+    });
+  }
+
+  async getCashRegisterById(cashRegisterId: number): Promise<CashRegisterRecord | null> {
+    const register = await this.prisma.cash_registers.findUnique({
+      where: { id: Number(cashRegisterId) },
+      include: {
+        warehouses: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
+        sequence_definitions: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!register || !register.warehouses) {
+      return null;
+    }
+
+    return mapRegisterToRecord({
+      id: register.id,
+      code: register.code,
+      name: register.name,
+      warehouse_id: register.warehouse_id,
+      allow_manual_warehouse_override: register.allow_manual_warehouse_override,
+      is_active: register.is_active,
+      notes: register.notes,
+      created_at: register.created_at,
+      updated_at: register.updated_at,
+      warehouses: register.warehouses,
+      invoice_sequence_definition_id: register.invoice_sequence_definition_id ?? null,
+      sequence_definitions: register.sequence_definitions ?? null,
     });
   }
 
@@ -583,6 +684,9 @@ export class CashRegisterRepository implements ICashRegisterRepository {
             warehouses: {
               select: { id: true, code: true, name: true },
             },
+            sequence_definitions: {
+              select: { id: true, code: true, name: true },
+            },
           },
         });
       } else {
@@ -590,9 +694,11 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           where: { admin_user_id: adminUserId, cash_registers: { code: normalizedCode, is_active: true } },
           include: {
             cash_registers: {
-              select: { id: true, code: true, name: true, allow_manual_warehouse_override: true, warehouse_id: true },
               include: {
                 warehouses: {
+                  select: { id: true, code: true, name: true },
+                },
+                sequence_definitions: {
                   select: { id: true, code: true, name: true },
                 },
               },
@@ -820,6 +926,37 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     });
 
     return { session, payments, totalInvoices };
+  }
+
+  async updateSessionInvoiceSequenceRange(sessionId: number, invoiceLabel: string): Promise<void> {
+    const trimmed = invoiceLabel.trim();
+    if (!trimmed) {
+      throw new Error("El consecutivo de factura no puede estar vacío");
+    }
+
+    await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const current = await tx.cash_register_sessions.findUnique({
+        where: { id: BigInt(sessionId) },
+        select: {
+          id: true,
+          invoice_sequence_start: true,
+        },
+      });
+
+      if (!current) {
+        throw new Error("Sesión de caja no encontrada");
+      }
+
+      const startValue = current.invoice_sequence_start ?? trimmed;
+
+      await tx.cash_register_sessions.update({
+        where: { id: current.id },
+        data: {
+          invoice_sequence_start: startValue,
+          invoice_sequence_end: trimmed,
+        },
+      });
+    });
   }
 
   async listActiveCashRegisterSessions(): Promise<CashRegisterSessionRecord[]> {

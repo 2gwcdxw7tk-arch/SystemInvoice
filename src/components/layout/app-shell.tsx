@@ -115,8 +115,8 @@ function AppShellInner({ children }: { children: ReactNode }) {
           collapsed ? "lg:grid-cols-[5rem,1fr]" : "lg:grid-cols-[16rem,1fr]"
         )}
       >
-        <aside className="sticky top-[3.5rem] hidden self-start lg:block">
-          <div className={cn(collapsed ? "w-[5rem]" : "w-[16rem]")}> {/* Removed ml-4 to avoid width overflow */}
+        <aside className="sticky top-[0rem] hidden self-start lg:block">
+          <div className={cn(collapsed ? "w-[5rem]" : "w-[16rem]")}>
             <div className="max-h-[calc(100vh-6rem)] overflow-hidden rounded-2xl border bg-background/90 p-2 shadow-lg backdrop-blur">
               <div className="flex h-[calc(100vh-6rem)] flex-col">
                 <Sidebar collapsed={collapsed} onToggleCollapse={() => setCollapsed((prev) => !prev)} />

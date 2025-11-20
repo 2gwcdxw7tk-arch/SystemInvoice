@@ -8,7 +8,7 @@ function parseRate(raw: string | undefined, fallback: number): number {
 }
 
 export const VAT_RATE = parseRate(process.env.NEXT_PUBLIC_VAT_RATE, 0.15);
-export const SERVICE_RATE = parseRate(process.env.NEXT_PUBLIC_SERVICE_RATE, 0.1);
+export const SERVICE_RATE = parseRate(process.env.NEXT_PUBLIC_SERVICE_RATE, 0);
 
 export function formatPercent(rate: number): string {
   return PERCENT_FORMATTER.format(rate);

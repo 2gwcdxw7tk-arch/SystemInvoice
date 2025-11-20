@@ -2,6 +2,7 @@ import { env } from "@/lib/env";
 import { inventoryService } from "@/lib/services/InventoryService";
 import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
+import { sequenceService } from "@/lib/services/SequenceService";
 import type {
   IInvoiceRepository,
   InvoiceInsertInput,
@@ -75,12 +76,18 @@ export class InvoiceService {
     const normalizedItems = normalizeItemsForPersistence(input.items);
     const movementLines = buildMovementLinesFromItems(input.items);
 
+    const invoiceNumber = await this.resolveInvoiceNumber(input);
+
     if (env.useMockData) {
-      return this.createInvoiceMock({ ...input, payments, items: normalizedItems }, movementLines);
+      return this.createInvoiceMock(
+        { ...input, invoice_number: invoiceNumber, payments, items: normalizedItems },
+        movementLines
+      );
     }
 
     const persistencePayload: InvoicePersistenceInput = {
       ...input,
+      invoice_number: invoiceNumber,
       payments,
       items: normalizedItems,
       movementLines,
@@ -238,6 +245,24 @@ export class InvoiceService {
     }
 
     return record;
+  }
+
+  private async resolveInvoiceNumber(input: InvoiceInsertInput): Promise<string> {
+    const provided = input.invoice_number?.trim();
+
+    if (env.useMockData) {
+      return provided && provided.length > 0 ? provided : `F-MOCK-${Date.now()}`;
+    }
+
+    if (!input.cash_register_id || !input.cash_register_session_id) {
+      throw new Error("Configura un consecutivo para la caja antes de facturar");
+    }
+
+    return sequenceService.generateInvoiceNumber({
+      cashRegisterId: input.cash_register_id,
+      cashRegisterCode: input.cash_register_code ?? "",
+      sessionId: input.cash_register_session_id,
+    });
   }
 }
 

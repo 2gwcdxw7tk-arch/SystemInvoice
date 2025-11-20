@@ -4,6 +4,7 @@ import { z } from "zod";
 import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
 import { adminUserService } from "@/lib/services/AdminUserService";
+import type { CashRegisterClosureSummary } from "@/lib/services/cash-registers/types";
 
 const responseSchema = z.object({
   success: z.literal(true),
@@ -44,6 +45,15 @@ const responseSchema = z.object({
       openingAt: z.string(),
       closingAmount: z.number().nullable(),
       closingAt: z.string().nullable(),
+      totals: z
+        .object({
+          closingAmount: z.number().nullable(),
+          expectedAmount: z.number().nullable(),
+          reportedAmount: z.number().nullable(),
+          differenceAmount: z.number().nullable(),
+        })
+        .nullable()
+        .optional(),
       cashRegister: z.object({
         code: z.string(),
         name: z.string(),
@@ -96,6 +106,54 @@ const responseSchema = z.object({
     })
     .optional(),
 });
+
+function extractSessionTotals(session: {
+  totalsSnapshot: unknown;
+  closingAmount: number | null;
+}): {
+  closingAmount: number | null;
+  expectedAmount: number | null;
+  reportedAmount: number | null;
+  differenceAmount: number | null;
+} | null {
+  if (session.totalsSnapshot && typeof session.totalsSnapshot === "object") {
+    const snapshot = session.totalsSnapshot as Partial<CashRegisterClosureSummary>;
+    const expectedAmount = typeof snapshot.expectedTotalAmount === "number" ? snapshot.expectedTotalAmount : null;
+    const reportedAmount = typeof snapshot.reportedTotalAmount === "number" ? snapshot.reportedTotalAmount : null;
+    const closingAmount =
+      typeof snapshot.closingAmount === "number"
+        ? snapshot.closingAmount
+        : session.closingAmount != null
+          ? session.closingAmount
+          : null;
+    const differenceFromSnapshot =
+      typeof snapshot.differenceTotalAmount === "number" ? snapshot.differenceTotalAmount : null;
+    const differenceAmount =
+      differenceFromSnapshot != null
+        ? differenceFromSnapshot
+        : expectedAmount != null && reportedAmount != null
+          ? Number((reportedAmount - expectedAmount).toFixed(2))
+          : null;
+
+    return {
+      closingAmount,
+      expectedAmount,
+      reportedAmount,
+      differenceAmount,
+    };
+  }
+
+  if (session.closingAmount != null) {
+    return {
+      closingAmount: session.closingAmount,
+      expectedAmount: null,
+      reportedAmount: session.closingAmount,
+      differenceAmount: null,
+    };
+  }
+
+  return null;
+}
 
 export async function GET(request: NextRequest) {
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
@@ -294,6 +352,7 @@ export async function GET(request: NextRequest) {
         openingAt: session.openingAt,
         closingAmount: session.closingAmount,
         closingAt: session.closingAt,
+        totals: extractSessionTotals(session),
         cashRegister: {
           code: session.cashRegister.cashRegisterCode,
           name: session.cashRegister.cashRegisterName,
@@ -347,6 +406,7 @@ export async function GET(request: NextRequest) {
         openingAt: session.openingAt,
         closingAmount: session.closingAmount,
         closingAt: session.closingAt,
+        totals: extractSessionTotals(session),
         cashRegister: {
           code: session.cashRegister.cashRegisterCode,
           name: session.cashRegister.cashRegisterName,

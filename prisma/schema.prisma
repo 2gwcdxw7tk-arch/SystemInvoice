@@ -128,6 +128,50 @@ model article_warehouses {
   @@schema("app")
 }
 
+model sequence_definitions {
+  id            Int                            @id @default(autoincrement())
+  code          String                         @unique @db.VarChar(64)
+  name          String                         @db.VarChar(160)
+  scope         String                         @db.VarChar(24)
+  prefix        String                         @default("") @db.VarChar(40)
+  suffix        String                         @default("") @db.VarChar(40)
+  padding       Int                            @default(6)
+  start_value   BigInt                         @default(1)
+  step          Int                            @default(1)
+  is_active     Boolean                        @default(true)
+  created_at    DateTime                       @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime?                      @default(now()) @db.Timestamptz(6)
+  cash_registers cash_registers[]
+  sequence_counters sequence_counters[]
+  inventory_sequence_settings inventory_sequence_settings[]
+
+  @@schema("app")
+}
+
+model sequence_counters {
+  id                     BigInt              @id @default(autoincrement())
+  sequence_definition_id Int
+  scope_type             String              @default("GLOBAL") @db.VarChar(24)
+  scope_key              String              @default("") @db.VarChar(80)
+  current_value          BigInt
+  updated_at             DateTime?           @default(now()) @db.Timestamptz(6)
+  sequence_definitions   sequence_definitions @relation(fields: [sequence_definition_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([sequence_definition_id, scope_type, scope_key], map: "uq_sequence_counters_scope")
+  @@schema("app")
+}
+
+model inventory_sequence_settings {
+  id                     Int                 @id @default(autoincrement())
+  transaction_type       String              @unique(map: "uq_inventory_sequence_settings_tx_type") @db.VarChar(24)
+  sequence_definition_id Int
+  created_at             DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime?           @default(now()) @db.Timestamptz(6)
+  sequence_definitions   sequence_definitions @relation(fields: [sequence_definition_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@schema("app")
+}
+
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model articles {
   id                                                                                 BigInt                          @id @default(autoincrement())
@@ -200,6 +244,8 @@ model cash_register_sessions {
   status                                                          String                           @default("OPEN") @db.VarChar(12)
   closing_user_id                                                 Int?
   totals_snapshot                                                 Json?
+  invoice_sequence_start                                          String?                          @db.VarChar(60)
+  invoice_sequence_end                                            String?                          @db.VarChar(60)
   created_at                                                      DateTime                         @default(now()) @db.Timestamptz(6)
   updated_at                                                      DateTime?                        @default(now()) @db.Timestamptz(6)
   cash_register_session_payments                                  cash_register_session_payments[]
@@ -303,10 +349,12 @@ model cash_registers {
   notes                           String?                  @db.VarChar(250)
   created_at                      DateTime                 @default(now()) @db.Timestamptz(6)
   updated_at                      DateTime?                @default(now()) @db.Timestamptz(6)
+  invoice_sequence_definition_id  Int?
   cash_register_sessions          cash_register_sessions[]
   cash_register_users             cash_register_users[]
   invoices_invoices_cash_register_idTocash_registers invoices[]              @relation("invoices_cash_register_idTocash_registers")
   warehouses                      warehouses               @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sequence_definitions            sequence_definitions?    @relation(fields: [invoice_sequence_definition_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([is_active, code, warehouse_id], map: "ix_cash_registers_active")
   @@schema("app")

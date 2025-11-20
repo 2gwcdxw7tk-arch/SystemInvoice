@@ -108,6 +108,7 @@ El endpoint `GET /api/health` valida la conectividad.
 | --- | --- | --- |
 | `NEXT_PUBLIC_COMPANY_NAME` | Nombre comercial mostrado en la interfaz y en tickets | `Facturador POS` |
 | `NEXT_PUBLIC_COMPANY_ACRONYM` | Sigla corta para badges y encabezados | `FAC` |
+| `NEXT_PUBLIC_COMPANY_ADDRESS` | Dirección impresa en tickets y reportes rápidos | `Calle Principal 123, Ciudad` |
 | `NEXT_PUBLIC_CLIENT_LOGO_URL` | Ruta absoluta o relativa del logotipo mostrado en login y barra superior | `/logos/client.svg` |
 | `NEXT_APP_URL` | URL base usada en redirecciones, enlaces absolutos y correos | `http://localhost:3000` |
 > Importante: esta URL también se usa para generar los enlaces de reportes de caja (apertura/cierre). Configúrala con el dominio público para evitar respuestas `https://0.0.0.0`. 
@@ -116,7 +117,7 @@ El endpoint `GET /api/health` valida la conectividad.
 | `NEXT_PUBLIC_FOREIGN_CURRENCY_CODE` | Código ISO de la moneda secundaria | `USD` |
 | `NEXT_PUBLIC_FOREIGN_CURRENCY_SYMBOL` | Símbolo de moneda secundaria | `$` |
 | `NEXT_PUBLIC_VAT_RATE` | IVA por defecto (acepta `0.16` o `16`) | `15` |
-| `NEXT_PUBLIC_SERVICE_RATE` | Cargo de servicio por defecto (acepta `0.10` o `10`) | `10` |
+| `NEXT_PUBLIC_SERVICE_RATE` | Cargo de servicio por defecto (acepta `0.10` o `10`). Si se omite o es `0`, no se añade cargo automáticamente. | `10` |
 | `DEFAULT_PRICE_LIST_CODE` | Lista de precios a usar en catálogos y facturas | `BASE` |
 | `DEFAULT_SALES_WAREHOUSE_CODE` | Almacén por defecto para consumos de facturación (fallback para artículos sin almacén asignado) | `PRINCIPAL` |
 | `DB_CONNECTION_STRING` | Cadena de conexión PostgreSQL con esquema `app`. ÚNICA fuente para app y Prisma | `postgres://postgres:super_seguro@localhost:5432/facturador` |
@@ -169,7 +170,7 @@ Validaciones clave:
 - El endpoint devuelve `409` si el administrador tiene rol `FACTURADOR` pero no existe una apertura de caja `OPEN` asociada a su usuario.
 - La suma de `payments.amount` debe ser mayor o igual que `total_amount`. Si queda saldo pendiente el endpoint devuelve `409`; se permite excedente para calcular el cambio en el cliente.
 - `vat_rate` acepta porcentaje decimal (ej. 0.15) generado desde `NEXT_PUBLIC_VAT_RATE` y puede ser 0 si el cliente es exento (checkbox UI).
-- Servicio se calcula en el cliente con `NEXT_PUBLIC_SERVICE_RATE` cuando se activa el toggle "Con cargo".
+- Servicio se calcula en el cliente con `NEXT_PUBLIC_SERVICE_RATE` cuando se activa el toggle "Con cargo". Si el valor es `0` o no está definido, el toggle aparece apagado y el cargo no se considera en los cálculos.
 - `customer_name` y `customer_tax_id` permiten personalizar la identificación fiscal en la factura y ticket.
 - `items` guarda el desglose de líneas en `app.invoice_items` (cantidad, descripción, precio unitario, total). 
 - Las facturas originadas desde `/facturacion` quedan asociadas a `cash_register_id`, `cash_register_session_id` e `issuer_admin_user_id` para reportes de jornada.
@@ -231,6 +232,34 @@ curl -X POST http://localhost:3000/api/inventario/warehouses \
 
 La respuesta exitosa incluye `transaction_id` y `transaction_code`. Las validaciones garantizan almacenes distintos, autorizador obligatorio y cantidades positivas.
 
+## Consecutivos configurables
+
+El tab **Consecutivos** dentro de `/preferencias` centraliza la administración de folios para facturación e inventario. Cada definición pertenece a un `scope` (`INVOICE` o `INVENTORY`) y compone el folio con `prefix`, `padding`, `suffix`, `startValue` y `step`. La interfaz muestra una vista previa del siguiente folio calculada a partir del contador real.
+
+1. **Definiciones** (`/api/preferencias/consecutivos`): crea o ajusta plantillas de folios. Ejemplo de alta:
+	```bash
+	curl -X POST http://localhost:3000/api/preferencias/consecutivos \
+		-H "Content-Type: application/json" \
+		-d '{
+		  "code": "FACTURAS_FISCALES",
+		  "name": "Facturas fiscales",
+		  "scope": "INVOICE",
+		  "prefix": "F-",
+		  "padding": 8,
+		  "startValue": 1,
+		  "step": 1
+		}'
+	```
+	Los folios avanzan con `step` al confirmar transacciones. Puedes activar/desactivar definiciones sin perder el contador histórico.
+2. **Asignación a cajas** (`/api/preferencias/consecutivos/cajas`): cada caja debe tener un consecutivo `INVOICE` antes de emitir facturas. La UI enlaza una lista de cajas (activas e inactivas) y permite limpiar la asignación si requieres pausar el folio. Cuando una caja con sesión abierta usa `SequenceService.generateInvoiceNumber`, el folio queda registrado en la bitácora de la jornada.
+3. **Asignación a inventario** (`/api/preferencias/consecutivos/inventario`): define un consecutivo `INVENTORY` para cada tipo de movimiento (`PURCHASE`, `CONSUMPTION`, `ADJUSTMENT`, `TRANSFER`). `InventoryService` consume estos folios mediante `sequenceService.generateInventoryCode` al confirmar compras, consumos, ajustes o traspasos. Si falta la asignación correspondiente el servicio devuelve un error bloqueando la operación.
+
+Consejos prácticos:
+- Usa prefijos distintos por serie (ej. `CP-` para compras, `TR-` para traspasos) y mantén `padding` consistente para reportes ordenados.
+- Ajusta `startValue` únicamente al crear la definición. Para reiniciar una serie crea una nueva definición y reasígnala; así conservas historial.
+- Revisa la columna “Siguiente folio” en la UI para validar que la numeración avance según lo esperado antes de habilitar las cajas o campañas de inventario.
+- Al emitir facturas, el backend ignora cualquier `invoice_number` enviado por el cliente y genera el folio usando `SequenceService.generateInvoiceNumber`, actualizando automáticamente el rango de la sesión de caja.
+
 ## Autenticación y sesiones
 
 - `POST /api/login` genera una cookie de sesión firmada (`facturador_session`) con vigencia de 12 horas tanto para administradores como para meseros. La cookie se firma con `SESSION_SECRET`, por lo que **debe** ser una cadena aleatoria de al menos 32 caracteres.
@@ -251,7 +280,8 @@ La respuesta exitosa incluye `transaction_id` y `transaction_code`. Las validaci
 
 - Los endpoints de reportes soportan respuesta JSON (por defecto) y HTML para impresión agregando `format=html` al querystring.
 - En la UI de `/reportes` cada tarjeta incluye un botón "Imprimir" que abre un modal con la vista HTML lista para imprimir sin salir de la página. También puedes abrir la URL directa si prefieres una pestaña nueva.
- - En `/caja`, los reportes de apertura y cierre también se muestran en un modal (iframe) listo para imprimir; además se ofrece el enlace para abrir en una pestaña nueva.
+- En `/caja`, los reportes de apertura y cierre también se muestran en un modal (iframe) listo para imprimir; además se ofrece el enlace para abrir en una pestaña nueva.
+- El historial de sesiones de caja se abre ahora desde el botón **Ver historial**, que despliega un modal dedicado con el saldo final de cada jornada y resalta faltantes o sobrantes cuando se registraron.
 - Ejemplos rápidos de URLs HTML:
 	- `/api/reportes/ventas/resumen?from=2025-11-01&to=2025-11-17&format=html`
 	- `/api/reportes/ventas/meseros?from=2025-11-01&to=2025-11-17&waiter_code=MES-01&format=html`

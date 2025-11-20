@@ -17,7 +17,7 @@ export interface InvoicePaymentInput {
 }
 
 export interface InvoiceInsertInput {
-  invoice_number: string;
+  invoice_number?: string | null;
   table_code: string | null;
   waiter_code: string | null;
   invoiceDate: Date;
@@ -36,6 +36,7 @@ export interface InvoiceInsertInput {
   issuer_admin_user_id?: number | null;
   cash_register_id?: number | null;
   cash_register_session_id?: number | null;
+  cash_register_code?: string | null;
   cashRegisterWarehouseCode?: string | null;
 }
 
@@ -47,7 +48,8 @@ export interface InvoiceItemPersistence {
   line_total: number;
 }
 
-export interface InvoicePersistenceInput extends Omit<InvoiceInsertInput, "items" | "payments"> {
+export interface InvoicePersistenceInput extends Omit<InvoiceInsertInput, "items" | "payments" | "invoice_number"> {
+  invoice_number: string;
   items: InvoiceItemPersistence[];
   payments: InvoicePaymentInput[];
   movementLines: InvoiceConsumptionLineInput[];

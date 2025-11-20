@@ -17,8 +17,9 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
 - Inventario: `InventoryService` con existencias/kardex; ambas vistas soportan filtros multiselección de artículos/bodegas y reportes HTML imprimibles; traspasos/consumos en consolidación.
 - Unidades: `UnitService` y endpoints `/api/unidades` migrados.
 - Mesas/Zonas/Meseros: `TableService` y `WaiterService`; `/api/tables/**` y `/api/meseros/**` dependen de servicios. `OrderService.syncWaiterOrderForTable` integra UI de meseros.
-- Cajas: `CashRegisterService` migrado, reportes de apertura/cierre con HTML y modal de impresión en UI.
+- Cajas: `CashRegisterService` migrado, reportes de apertura/cierre con HTML y modal de impresión en UI; el historial vive en un modal separado que muestra saldo final y diferencias (faltantes/sobrantes) por sesión.
 - Asociaciones artículo–bodega: `ArticleWarehouseService` y endpoint `/api/articulos/[article_code]/almacenes` (GET/POST/DELETE) disponibles; UI de mantenimiento enlazada desde el modal del catálogo en `/articulos/[article_code]/almacenes`.
+- Consecutivos: `SequenceService` con repositorio Prisma, UI en `/preferencias` (tab **Consecutivos**), endpoints `/api/preferencias/consecutivos`, `/api/preferencias/consecutivos/cajas` e `/api/preferencias/consecutivos/inventario`, y pruebas en `tests/api/preferencias.consecutivos.test.ts`.
 - Documentación actualizada (`README.md`, `.github/copilot-instructions.md`, `docs/propuesta-arquitectura-mejoras.md`).
 - Hidratación: evita variaciones de markup o clases entre SSR y cliente; el encabezado ya fue ajustado como ejemplo (mismas clases `px`).
 - QA: suites Jest amplias (134 tests en verde); `npm run lint` y `npm run typecheck` obligatorios.
@@ -28,6 +29,7 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
 2) Clasificaciones: `ArticleClassificationService` en API y UI.
 3) Revisión continua para asegurar dependencia exclusiva de servicios en handlers.
 4) Métricas de performance (p95) en logs y seguimiento en reportes críticos.
+5) Integrar `SequenceService.generateInvoiceNumber` en `InvoiceService` y registrar rangos por sesión de caja; añadir métricas/reporte que expongan inicio/fin de folios por jornada.
 
 ## Contratos clave
 - `/api/articulos`: acepta `price_list_code`, `unit`; UI espera `items[].price.base_price`.
@@ -46,6 +48,7 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
 - Evitar legacy `src/lib/db/**` en nuevos handlers; agregar operaciones a servicios y luego consumirlos.
 - Política de calidad: toda nueva funcionalidad debe incluir tests (unitarias y/o API) bajo `tests/**`.
 - `NEXT_PUBLIC_CLIENT_LOGO_URL` define el logotipo mostrado en el login y el encabezado; siempre proveer fallback textual cuando no esté set.
+- Encabezados y tickets toman `NEXT_PUBLIC_COMPANY_NAME` y `NEXT_PUBLIC_COMPANY_ADDRESS`; mantén ambos actualizados para impresión.
 
 ## Modo Mock
 - Servicios exponen memoria interna en `MOCK_DATA=true` con la misma interfaz pública.

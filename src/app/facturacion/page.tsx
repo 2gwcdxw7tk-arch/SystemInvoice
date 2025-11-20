@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button } from "@/components/ui/button";
@@ -143,10 +144,19 @@ const paymentMethodOptions: ComboboxOption<PaymentMethod>[] = [
   { value: "OTHER", label: paymentMethodLabels.OTHER },
 ];
 
-const DEFAULT_MANUAL_CUSTOMER_NAME = "Cliente mostrador";
-const MANUAL_EXIT_WARNING =
-  "Tienes una factura manual en progreso. Si sales sin generar la factura se perderán los datos capturados. ¿Deseas abandonar la captura?";
+const ESCAPE_HTML_REGEX = /[&<>"']/g;
+const ESCAPE_HTML_REPLACEMENTS: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
 
+const escapeHtml = (input: string): string =>
+  input.replace(ESCAPE_HTML_REGEX, (char) => ESCAPE_HTML_REPLACEMENTS[char] ?? char);
+
+const DEFAULT_MANUAL_CUSTOMER_NAME = "Cliente mostrador";
 type FacturacionMode = "sin-pedido" | "con-pedido" | "listas-precio" | "historial";
 type InvoiceMode = "sin-pedido" | "con-pedido";
 
@@ -1856,7 +1866,7 @@ function InvoicesHistory() {
  }
 
  // Subcomponente UI para gestionar múltiples formas de pago
- function PaymentsSectionUI({ payments, setPayments, serviceEnabled, setServiceEnabled, applyVAT, setApplyVAT, vatRate }: { payments: Payment[]; setPayments: (p: Payment[]) => void; serviceEnabled: boolean; setServiceEnabled: (v: boolean) => void; applyVAT: boolean; setApplyVAT: (v: boolean) => void; vatRate: number }) {
+ function PaymentsSectionUI({ payments, setPayments, serviceEnabled, setServiceEnabled, applyVAT, setApplyVAT, vatRate, serviceToggleDisabled }: { payments: Payment[]; setPayments: (p: Payment[]) => void; serviceEnabled: boolean; setServiceEnabled: (v: boolean) => void; applyVAT: boolean; setApplyVAT: (v: boolean) => void; vatRate: number; serviceToggleDisabled: boolean }) {
    const addPayment = () => setPayments([...payments, { method: "CARD", amount: "", reference: "" }]);
   const removePayment = (idx: number) => {
     if (payments.length === 1) return;
@@ -1939,7 +1949,7 @@ function InvoicesHistory() {
       <div className="flex flex-wrap items-center gap-8">
         <div className="flex items-center gap-2">
           <span className="text-xs uppercase text-muted-foreground">Servicio</span>
-          <Switch checked={serviceEnabled} onChange={setServiceEnabled} aria-label="Servicio" />
+          <Switch checked={serviceEnabled} onChange={setServiceEnabled} aria-label="Servicio" disabled={serviceToggleDisabled} />
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs uppercase text-muted-foreground">IVA</span>
@@ -1974,6 +1984,7 @@ function FacturacionWorkspace({
   const vatRate = VAT_RATE;
   const serviceRate = SERVICE_RATE;
   const router = useRouter();
+  const session = useSession();
   const modeTitle = mode === "sin-pedido" ? "Facturación sin pedido" : "Facturación con pedido";
   const [orders, setOrders] = useState<TableOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -1982,7 +1993,7 @@ function FacturacionWorkspace({
   const [manualPriceListCode, setManualPriceListCode] = useState(defaultPriceListCode);
   const [payments, setPayments] = useState<Payment[]>(() => createInitialPaymentsState());
   const [amountReceived, setAmountReceived] = useState("0");
-  const [serviceEnabled, setServiceEnabled] = useState(false);
+  const [serviceEnabled, setServiceEnabled] = useState(() => serviceRate > 0);
   const [applyVAT, setApplyVAT] = useState(() => vatRate > 0);
   const [invoiceDate, setInvoiceDate] = useState<string>(() => new Date().toISOString().slice(0,10));
   const [draftInvoice, setDraftInvoice] = useState<DraftInvoice>(() => createInitialManualDraft());
@@ -2006,6 +2017,12 @@ function FacturacionWorkspace({
       setApplyVAT(false);
     }
   }, [vatRate]);
+
+  useEffect(() => {
+    if (serviceRate === 0) {
+      setServiceEnabled(false);
+    }
+  }, [serviceRate]);
 
   useEffect(() => {
     if (mode === "sin-pedido" && selectedTableId === NEW_INVOICE_ID && !draftInvoice.items.length) {
@@ -2154,7 +2171,7 @@ function FacturacionWorkspace({
       window.location.href = target.href;
       return;
     }
-    router.push(target.href);
+    router.push(target.href as Route);
   }, [router]);
   const cancelManualExit = useCallback(() => {
     manualExitNavigationRef.current = null;
@@ -2845,7 +2862,7 @@ function FacturacionWorkspace({
       }
       await refreshOrders();
       setPayments(createInitialPaymentsState());
-      setServiceEnabled(false);
+      setServiceEnabled(serviceRate > 0);
       setApplyVAT(vatRate > 0);
       setAddItemModalOpen(false);
       toast({ variant: "success", title: "Pedido anulado", description: `${selectedOrder.tableLabel} quedó libre.` });
@@ -2858,7 +2875,7 @@ function FacturacionWorkspace({
       });
       return false;
     }
-  }, [mode, refreshOrders, selectedOrder, toast, vatRate]);
+  }, [mode, refreshOrders, selectedOrder, serviceRate, toast, vatRate]);
 
    useEffect(() => {
      // sincroniza monto recibido con suma de pagos
@@ -2890,13 +2907,13 @@ function FacturacionWorkspace({
       const fallback = activeLists.find((list) => list.id === defaultPriceListCode) ?? activeLists[0];
       return fallback.id;
     });
-  setPayments(createInitialPaymentsState());
-    setServiceEnabled(false);
+    setPayments(createInitialPaymentsState());
+    setServiceEnabled(serviceRate > 0);
     setApplyVAT(vatRate > 0);
     setCustomerName(mode === "sin-pedido" ? DEFAULT_MANUAL_CUSTOMER_NAME : "");
     setCustomerTaxId("");
     setAddItemModalOpen(false);
-  }, [defaultPriceListCode, mode, priceLists, vatRate]);
+  }, [defaultPriceListCode, mode, priceLists, serviceRate, vatRate]);
 
   type SaveInvoiceResult = { id: number | null; invoiceNumber: string | null };
 
@@ -2965,13 +2982,16 @@ function FacturacionWorkspace({
       if (!res.ok) {
         throw new Error(await res.text());
       }
-      const data = (await res.json()) as { id: number };
+      const data = (await res.json()) as { id: number; invoice_number?: string | null };
       if (mode === "con-pedido") {
         await refreshOrders().catch((refreshError) => {
           console.error("No se pudo refrescar los pedidos", refreshError);
         });
       }
-      return { id: data?.id ?? null, invoiceNumber: payload.invoice_number };
+      return {
+        id: data?.id ?? null,
+        invoiceNumber: data?.invoice_number ?? payload.invoice_number ?? null,
+      };
     } catch (error) {
       console.error("Error al guardar la factura", error);
       toast({ variant: "error", title: "Facturación", description: "No se pudo guardar la factura." });
@@ -3006,24 +3026,89 @@ function FacturacionWorkspace({
     const now = new Date();
     const time = now.toTimeString().slice(0, 8);
     const printedDate = new Date(`${invoiceDateValue}T${time}`);
-    const itemsMarkup = invoiceItems.map(item => {
-      const itemTotal = formatCurrency(item.qty * item.unitPrice, { currency: "local" });
-      const modifiers = item.modifiers && item.modifiers.length > 0 ? `<div class="modifiers">${item.modifiers.map(m => `• ${m}`).join("<br />")}</div>` : "";
-      return `<div class="row"><span>${item.qty} x ${item.name}</span><span>${itemTotal}</span></div>${modifiers}`;
-    }).join("");
+    const companyName = process.env.NEXT_PUBLIC_COMPANY_NAME?.trim() || "Facturador POS";
+    const companyAddress = process.env.NEXT_PUBLIC_COMPANY_ADDRESS?.trim();
+    const cashSession = cashSessionState.activeSession;
 
-    const metaLine = manualFlowActive
-      ? `Referencia: ${invoiceLabel}${invoiceWaiter ? ` • Responsable: ${invoiceWaiter}` : ""}`
-      : `Mesa: ${orderSnapshot?.tableLabel ?? orderSnapshot?.orderCode ?? "N/D"} • Mesero: ${orderSnapshot?.waiter ?? "No asignado"}`;
+    const itemsMarkup =
+      invoiceItems.length > 0
+        ? invoiceItems
+            .map((item) => {
+              const quantityLabel = `${item.qty} x ${item.name ?? ""}`.trim();
+              const itemTotal = formatCurrency(item.qty * item.unitPrice, { currency: "local" });
+              const modifiers =
+                item.modifiers && item.modifiers.length > 0
+                  ? `<div class="modifiers">${item.modifiers.map((modifier) => `• ${escapeHtml(String(modifier))}`).join("<br />")}</div>`
+                  : "";
+              return `<div class="row"><span>${escapeHtml(quantityLabel)}</span><span>${escapeHtml(itemTotal)}</span></div>${modifiers}`;
+            })
+            .join("")
+        : `<div class="row"><span>${escapeHtml("Sin consumo")}</span><span>${escapeHtml(formatCurrency(0, { currency: "local" }))}</span></div>`;
+
+    const formattedDate = printedDate.toLocaleString("es-MX");
+    const consecutiveValue =
+      result.invoiceNumber && result.invoiceNumber.length > 0
+        ? `Consecutivo: ${result.invoiceNumber}`
+        : "Consecutivo: ______________________";
+    const dateLine = `Fecha: ${formattedDate}`;
+    const manualReference = invoiceLabel?.trim() ?? "";
+    const orderReference = orderSnapshot?.orderCode?.trim() ?? "";
+    const referenceValue = manualFlowActive ? manualReference : orderReference || manualReference;
+    const referenceLine =
+      referenceValue && referenceValue.length > 0 ? `Referencia: ${referenceValue}` : "Referencia: ______________________";
+    const mesaLine = !manualFlowActive && orderSnapshot?.tableLabel
+      ? `Mesa: ${orderSnapshot.tableLabel}`
+      : null;
+    const waiterLine = !manualFlowActive && orderSnapshot?.waiter
+      ? `Mesero: ${orderSnapshot.waiter}`
+      : null;
+    const sessionName = session?.name?.trim() ?? "";
+    const responsibleCandidates = [
+      sessionName && sessionName.length > 0 ? sessionName : null,
+      manualFlowActive ? invoiceWaiter?.trim() ?? null : null,
+    ].filter((candidate): candidate is string => Boolean(candidate && candidate.length > 0));
+    const responsibleName = responsibleCandidates.length > 0 ? responsibleCandidates[0] : null;
+    const responsibleLine =
+      responsibleName && responsibleName.length > 0
+        ? `Responsable: ${responsibleName}`
+        : "Responsable: ______________________";
+    const cashLineText = cashSession
+      ? `Caja: ${cashSession.cashRegister.cashRegisterName} (${cashSession.cashRegister.cashRegisterCode})`
+      : "Caja: ______________________";
+    const customerNameLine =
+      invoiceCustomer && invoiceCustomer.length > 0
+        ? `Cliente: ${invoiceCustomer}`
+        : "Cliente: Consumidor final";
+    const customerTaxLine =
+      invoiceCustomerTaxId && invoiceCustomerTaxId.length > 0
+        ? `ID: ${invoiceCustomerTaxId}`
+        : null;
+    const addressText =
+      companyAddress && companyAddress.length > 0
+        ? `Dirección: ${companyAddress}`
+        : "Dirección: ______________________";
+
+    const headerMarkup = [
+      `<p class="title">${escapeHtml(companyName)}</p>`,
+      `<p class="muted">${escapeHtml(addressText).replace(/\r?\n/g, "<br />")}</p>`,
+      `<p class="muted">${escapeHtml(consecutiveValue)}</p>`,
+      `<p class="muted">${escapeHtml(dateLine)}</p>`,
+      `<p class="muted">${escapeHtml(responsibleLine)}</p>`,
+      `<p class="muted">${escapeHtml(referenceLine)}</p>`,
+      mesaLine ? `<p class="muted">${escapeHtml(mesaLine)}</p>` : "",
+      waiterLine ? `<p class="muted">${escapeHtml(waiterLine)}</p>` : "",
+      `<p class="muted">${escapeHtml(cashLineText)}</p>`,
+      `<p class="muted">${escapeHtml(customerNameLine)}</p>`,
+      customerTaxLine ? `<p class="muted">${escapeHtml(customerTaxLine)}</p>` : "",
+    ]
+      .filter(Boolean)
+      .join("\n        ");
 
     const html = `
       <div class="ticket">
-        <p class="title">${process.env.NEXT_PUBLIC_COMPANY_ACRONYM ?? "FACT"} POS</p>
-        <p class="muted">${printedDate.toLocaleString("es-MX")} ${result.invoiceNumber ? `• Folio ${result.invoiceNumber}` : ""}</p>
-        <p class="muted">${metaLine}</p>
-        ${(invoiceCustomer || invoiceCustomerTaxId) ? `<p class="muted">${invoiceCustomer ? `Cliente: ${invoiceCustomer}` : ''}${invoiceCustomer && invoiceCustomerTaxId ? ' • ' : ''}${invoiceCustomerTaxId ? `ID: ${invoiceCustomerTaxId}` : ''}</p>` : ''}
+        ${headerMarkup}
         <p class="separator"></p>
-        ${itemsMarkup || '<div class="row"><span>Sin consumo</span><span>$0.00</span></div>'}
+        ${itemsMarkup}
         <p class="separator"></p>
         <div class="row"><span>Subtotal</span><span>${formatCurrency(invoiceSummary.subtotal, { currency: "local" })}</span></div>
         <div class="row"><span>Servicio</span><span>${formatCurrency(invoiceSummary.serviceCharge, { currency: "local" })}</span></div>
@@ -3032,9 +3117,12 @@ function FacturacionWorkspace({
         <p class="separator"></p>
         ${paymentsSnapshot
           .filter(p => (Number(String(p.amount).replace(/,/g, ".")) || 0) > 0)
-          .map(p => `<div class="row"><span>Pago (${methodLabel(p.method)})</span><span>${formatCurrency(Number(String(p.amount).replace(/,/g, ".")) || 0, { currency: "local" })}</span></div>`)
+          .map((payment) => {
+            const rawAmount = Number(String(payment.amount).replace(/,/g, ".")) || 0;
+            return `<div class="row"><span>${escapeHtml(`Pago (${methodLabel(payment.method)})`)}</span><span>${escapeHtml(formatCurrency(rawAmount, { currency: "local" }))}</span></div>`;
+          })
           .join("")}
-        <div class="row"><span>Cambio</span><span>${formatCurrency(changeDueAmount, { currency: "local" })}</span></div>
+        <div class="row"><span>Cambio</span><span>${escapeHtml(formatCurrency(changeDueAmount, { currency: "local" }))}</span></div>
         <p class="separator"></p>
         <p class="muted">¡Gracias por su visita!</p>
       </div>`;
@@ -3050,7 +3138,7 @@ function FacturacionWorkspace({
       resetManualInvoice();
     } else {
       setPayments(createInitialPaymentsState());
-      setServiceEnabled(false);
+      setServiceEnabled(serviceRate > 0);
       setApplyVAT(vatRate > 0);
       setCustomerName("");
       setCustomerTaxId("");
@@ -3452,6 +3540,7 @@ function FacturacionWorkspace({
                setPayments={setPayments}
                serviceEnabled={serviceEnabled}
                setServiceEnabled={setServiceEnabled}
+                serviceToggleDisabled={serviceRate === 0}
                applyVAT={applyVAT}
                setApplyVAT={setApplyVAT}
                vatRate={vatRate}

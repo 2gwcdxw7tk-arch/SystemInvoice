@@ -18,6 +18,7 @@ const envSchema = z
       .min(1, "NEXT_PUBLIC_COMPANY_NAME es requerido")
       .default("Facturador"),
     NEXT_PUBLIC_COMPANY_ACRONYM: z.string().trim().optional(),
+    NEXT_PUBLIC_COMPANY_ADDRESS: z.string().trim().optional(),
     DB_CONNECTION_STRING: z.string().trim().optional(),
     MOCK_DATA: z.string().trim().optional(),
     NEXT_PUBLIC_CLIENT_LOGO_URL: z.string().trim().optional(),
@@ -93,6 +94,10 @@ const envSchema = z
                 .map((word) => word[0]?.toUpperCase() ?? "")
                 .join("")
                 .slice(0, 4) || value.NEXT_PUBLIC_COMPANY_NAME.slice(0, 4).toUpperCase(),
+        address:
+          value.NEXT_PUBLIC_COMPANY_ADDRESS && value.NEXT_PUBLIC_COMPANY_ADDRESS.length > 0
+            ? value.NEXT_PUBLIC_COMPANY_ADDRESS
+            : null,
         logoUrl:
           value.NEXT_PUBLIC_CLIENT_LOGO_URL && value.NEXT_PUBLIC_CLIENT_LOGO_URL.length > 0
             ? value.NEXT_PUBLIC_CLIENT_LOGO_URL

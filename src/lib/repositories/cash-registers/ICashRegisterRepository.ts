@@ -14,6 +14,7 @@ export interface ICashRegisterRepository {
   listCashRegisters(options?: { includeInactive?: boolean }): Promise<CashRegisterRecord[]>;
   createCashRegister(input: CreateCashRegisterInput): Promise<CashRegisterRecord>;
   updateCashRegister(cashRegisterCode: string, input: UpdateCashRegisterInput): Promise<CashRegisterRecord>;
+  getCashRegisterById(cashRegisterId: number): Promise<CashRegisterRecord | null>;
   listCashRegistersForAdmin(adminUserId: number): Promise<CashRegisterAssignment[]>;
   listCashRegisterAssignments(options?: { adminUserIds?: number[] }): Promise<CashRegisterAssignmentGroup[]>;
   assignCashRegisterToAdmin(params: {
@@ -50,4 +51,5 @@ export interface ICashRegisterRepository {
     payments: ExpectedPayment[];
     totalInvoices: number;
   } | null>;
+  updateSessionInvoiceSequenceRange(sessionId: number, invoiceLabel: string): Promise<void>;
 }

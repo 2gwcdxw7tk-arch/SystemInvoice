@@ -8,6 +8,7 @@ import {
   CircleDot,
   Download,
   History,
+  ListChecks,
   Loader2,
   Lock,
   Minus,
@@ -55,6 +56,13 @@ interface CashRegisterActiveSession {
   };
 }
 
+interface CashRegisterSessionTotals {
+  closingAmount: number | null;
+  expectedAmount: number | null;
+  reportedAmount: number | null;
+  differenceAmount: number | null;
+}
+
 interface CashRegisterSessionSnapshot {
   id: number;
   status: "OPEN" | "CLOSED" | "CANCELLED";
@@ -62,6 +70,7 @@ interface CashRegisterSessionSnapshot {
   openingAt: string;
   closingAmount: number | null;
   closingAt: string | null;
+  totals?: CashRegisterSessionTotals | null;
   cashRegister: {
     code: string;
     name: string;
@@ -198,7 +207,8 @@ export default function CashManagementPage() {
     targetSessionId: number | null;
   }>({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments(), targetSessionId: null });
   const [closingSubmitting, setClosingSubmitting] = useState(false);
-    const [closingDenoms, setClosingDenoms] = useState<DenominationLine[]>([]);
+  const [closingDenoms, setClosingDenoms] = useState<DenominationLine[]>([]);
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
   // Confirmación por diferencia
   const [diffConfirmOpen, setDiffConfirmOpen] = useState(false);
   const preparedClosureRef = useRef<{
@@ -367,6 +377,12 @@ export default function CashManagementPage() {
       setHistoryFilter(HISTORY_FILTER_ALL);
     }
   }, [cashState.recentSessions, historyFilter]);
+
+  useEffect(() => {
+    if (!historyModalOpen) {
+      setHistoryFilter(HISTORY_FILTER_ALL);
+    }
+  }, [historyModalOpen]);
 
   const normalizedCashRegisterCode = openingForm.cashRegisterCode.trim().toUpperCase();
   const selectedCashRegister = normalizedCashRegisterCode
@@ -987,6 +1003,16 @@ export default function CashManagementPage() {
                       </>
                     )}
                   </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-2xl"
+                    onClick={() => setHistoryModalOpen(true)}
+                  >
+                    <ListChecks className="mr-2 h-4 w-4" />
+                    Ver historial
+                  </Button>
                   {canOpenCash ? (
                     <Button
                       type="button"
@@ -1013,7 +1039,7 @@ export default function CashManagementPage() {
                   {canCloseCash ? (
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="destructive"
                       size="sm"
                       className="rounded-2xl"
                       onClick={() => openClosingModalWithContext()}
@@ -1213,93 +1239,160 @@ export default function CashManagementPage() {
             </Card>
           ) : null}
 
-          <Card className="rounded-3xl border bg-background/95 shadow-sm">
-            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="space-y-1">
-                <CardTitle className="text-lg font-semibold text-foreground">Historial reciente</CardTitle>
-                <p className="text-xs text-muted-foreground">Mostramos hasta 20 movimientos recientes.</p>
-              </div>
-              {historyFilterOptions.length > 1 ? (
-                <Combobox<string>
-                  value={historyFilter}
-                  onChange={(value) => setHistoryFilter(value)}
-                  options={historyFilterOptions}
-                  placeholder="Filtrar por caja"
-                  ariaLabel="Filtrar historial por caja"
-                  className="w-full sm:w-64"
-                />
-              ) : null}
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {cashState.loading ? (
-                <div className="flex items-center gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Consultando historial…
-                </div>
-              ) : cashState.recentSessions.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
-                  No se encontraron aperturas o cierres recientes.
-                </div>
-              ) : filteredRecentSessions.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
-                  No hay movimientos para la caja seleccionada.
-                </div>
-              ) : (
-                filteredRecentSessions.map((snapshot) => {
-                  const isClosed = snapshot.status === "CLOSED";
-                  const statusLabel = snapshot.status === "CLOSED" ? "Cerrada" : snapshot.status === "OPEN" ? "Abierta" : "Cancelada";
-                  const statusTone = snapshot.status === "CLOSED" ? "text-emerald-600" : snapshot.status === "OPEN" ? "text-amber-600" : "text-destructive";
-                  return (
-                    <div key={snapshot.id} className="space-y-4 rounded-2xl border border-muted-foreground/20 bg-background/95 p-5">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <p className="text-base font-semibold text-foreground">
-                            {snapshot.cashRegister.code} • {snapshot.cashRegister.name}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {snapshot.cashRegister.warehouseCode} • {snapshot.cashRegister.warehouseName}
-                          </p>
-                        </div>
-                        <span className={`text-sm font-semibold ${statusTone}`}>{statusLabel}</span>
-                      </div>
-                      <dl className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-                        <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
-                          <dt className="text-xs uppercase tracking-wide opacity-70">Apertura</dt>
-                          <dd className="font-medium text-foreground">{formatTimestampLocale(snapshot.openingAt)}</dd>
-                        </div>
-                        <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
-                          <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
-                          <dd className="font-medium text-foreground">{formatCurrency(snapshot.openingAmount ?? 0, { currency: defaultCurrency })}</dd>
-                        </div>
-                        <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
-                          <dt className="text-xs uppercase tracking-wide opacity-70">Cierre</dt>
-                          <dd className="font-medium text-foreground">{snapshot.closingAt ? formatTimestampLocale(snapshot.closingAt) : "Sin cierre"}</dd>
-                        </div>
-                      </dl>
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <Button type="button" variant="outline" size="sm" onClick={() => handleOpenOpeningReport(snapshot.id)}>
-                          <Download className="mr-2 h-4 w-4" />
-                          Reporte apertura (HTML)
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={!isClosed}
-                          onClick={() => handleOpenClosureReport(snapshot.id)}
-                        >
-                          <Download className="mr-2 h-4 w-4" />
-                          Reporte cierre (HTML)
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </CardContent>
-          </Card>
         </>
       )}
+
+      <Modal
+        open={historyModalOpen}
+        onClose={() => setHistoryModalOpen(false)}
+        title="Historial de caja"
+        description="Consulta aperturas y cierres recientes sin salir de la pantalla principal."
+        contentClassName="max-w-5xl"
+      >
+        <div className="space-y-4">
+          {historyFilterOptions.length > 1 ? (
+            <Combobox<string>
+              value={historyFilter}
+              onChange={(value) => setHistoryFilter(value)}
+              options={historyFilterOptions}
+              placeholder="Filtrar por caja"
+              ariaLabel="Filtrar historial por caja"
+              className="w-full sm:w-72"
+            />
+          ) : null}
+          {cashState.loading ? (
+            <div className="flex items-center gap-3 rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Consultando historial…
+            </div>
+          ) : cashState.recentSessions.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+              No se encontraron aperturas o cierres recientes.
+            </div>
+          ) : filteredRecentSessions.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-muted-foreground/30 bg-muted/20 p-4 text-sm text-muted-foreground">
+              No hay movimientos para la caja seleccionada.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {filteredRecentSessions.map((snapshot) => {
+                const isClosed = snapshot.status === "CLOSED";
+                const statusLabel = isClosed ? "Cerrada" : snapshot.status === "OPEN" ? "Abierta" : "Cancelada";
+                const statusTone = isClosed ? "text-emerald-600" : snapshot.status === "OPEN" ? "text-amber-600" : "text-destructive";
+                const finalAmount = snapshot.totals?.reportedAmount ?? snapshot.totals?.closingAmount ?? snapshot.closingAmount;
+                const differenceAmountRaw = snapshot.totals?.differenceAmount ?? null;
+                const differenceAbs = differenceAmountRaw != null ? Math.abs(differenceAmountRaw) : null;
+                const differenceTone =
+                  differenceAmountRaw == null
+                    ? "text-muted-foreground"
+                    : differenceAmountRaw === 0
+                      ? "text-muted-foreground"
+                      : differenceAmountRaw > 0
+                        ? "text-emerald-600"
+                        : "text-destructive";
+                const differenceLabel = (() => {
+                  if (differenceAmountRaw == null) {
+                    return isClosed ? "Sin desglose registrado" : "Pendiente de cierre";
+                  }
+                  if (differenceAmountRaw === 0) {
+                    return "Sin diferencias";
+                  }
+                  const formatted = formatCurrency(Math.abs(differenceAmountRaw), { currency: defaultCurrency });
+                  return differenceAmountRaw > 0 ? `Sobrante de ${formatted}` : `Faltante de ${formatted}`;
+                })();
+                const expectedAmount = snapshot.totals?.expectedAmount ?? null;
+                const reportedAmount = snapshot.totals?.reportedAmount ?? null;
+
+                return (
+                  <div key={snapshot.id} className="space-y-4 rounded-2xl border border-muted-foreground/20 bg-background/95 p-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="space-y-1">
+                        <p className="text-base font-semibold text-foreground">
+                          {snapshot.cashRegister.code} • {snapshot.cashRegister.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {snapshot.cashRegister.warehouseCode} • {snapshot.cashRegister.warehouseName}
+                        </p>
+                        <span className={`inline-flex w-fit items-center rounded-full bg-muted px-3 py-1 text-xs font-semibold ${statusTone}`}>
+                          {statusLabel}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">Saldo final</p>
+                        <p className="text-lg font-semibold text-foreground">
+                          {finalAmount != null
+                            ? formatCurrency(finalAmount, { currency: defaultCurrency })
+                            : "Pendiente"}
+                        </p>
+                        <p className={`text-xs font-semibold ${differenceTone}`}>{differenceLabel}</p>
+                        {differenceAbs != null && differenceAbs > 0 ? (
+                          <p className={`text-xs ${differenceTone}`}>
+                            Diferencia total: {formatCurrency(differenceAbs, { currency: defaultCurrency })}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <dl className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
+                      <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
+                        <dt className="text-xs uppercase tracking-wide opacity-70">Apertura</dt>
+                        <dd className="font-medium text-foreground">{formatTimestampLocale(snapshot.openingAt)}</dd>
+                      </div>
+                      <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
+                        <dt className="text-xs uppercase tracking-wide opacity-70">Monto inicial</dt>
+                        <dd className="font-medium text-foreground">{formatCurrency(snapshot.openingAmount ?? 0, { currency: defaultCurrency })}</dd>
+                      </div>
+                      <div className="rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3">
+                        <dt className="text-xs uppercase tracking-wide opacity-70">Cierre</dt>
+                        <dd className="font-medium text-foreground">{snapshot.closingAt ? formatTimestampLocale(snapshot.closingAt) : "Sin cierre"}</dd>
+                      </div>
+                    </dl>
+                    {expectedAmount != null || reportedAmount != null ? (
+                      <dl className="grid gap-3 rounded-2xl border border-muted-foreground/20 bg-muted/10 p-3 text-sm text-muted-foreground sm:grid-cols-3">
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide opacity-70">Esperado</dt>
+                          <dd className="font-medium text-foreground">
+                            {expectedAmount != null ? formatCurrency(expectedAmount, { currency: defaultCurrency }) : "Sin registro"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide opacity-70">Reportado</dt>
+                          <dd className="font-medium text-foreground">
+                            {reportedAmount != null ? formatCurrency(reportedAmount, { currency: defaultCurrency }) : "Sin registro"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide opacity-70">Diferencia</dt>
+                          <dd className={`font-medium ${differenceTone}`}>
+                            {differenceAmountRaw != null
+                              ? formatCurrency(differenceAmountRaw, { currency: defaultCurrency })
+                              : "Sin registro"}
+                          </dd>
+                        </div>
+                      </dl>
+                    ) : null}
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => handleOpenOpeningReport(snapshot.id)}>
+                        <Download className="mr-2 h-4 w-4" />
+                        Reporte apertura (HTML)
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!isClosed}
+                        onClick={() => handleOpenClosureReport(snapshot.id)}
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        Reporte cierre (HTML)
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </Modal>
 
       <Modal
         open={printModalOpen}

@@ -21,6 +21,9 @@ export type CashRegisterRecord = {
   notes: string | null;
   createdAt: string;
   updatedAt: string | null;
+  invoiceSequenceDefinitionId: number | null;
+  invoiceSequenceCode: string | null;
+  invoiceSequenceName: string | null;
 };
 
 export type CashRegisterSessionRecord = {
@@ -38,6 +41,8 @@ export type CashRegisterSessionRecord = {
   cashRegister: CashRegisterAssignment;
   closingUserId: number | null;
   totalsSnapshot: unknown;
+  invoiceSequenceStart?: string | null;
+  invoiceSequenceEnd?: string | null;
 };
 
 export type CashRegisterPaymentBreakdown = {
@@ -91,6 +96,12 @@ export interface UpdateCashRegisterInput {
   allowManualWarehouseOverride?: boolean;
   isActive?: boolean;
   notes?: string | null;
+  invoiceSequenceDefinitionId?: number | null;
+}
+
+export interface AssignInvoiceSequenceInput {
+  cashRegisterCode: string;
+  sequenceDefinitionId: number | null;
 }
 
 export interface OpenCashRegisterSessionInput {

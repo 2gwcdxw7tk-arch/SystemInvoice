@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { env } from "@/lib/env";
 import type { Prisma } from "@prisma/client";
 import { toCentralClosedDate, toCentralEndOfDay } from "@/lib/utils/date";
+import { sequenceService } from "@/lib/services/SequenceService";
 
 import type {
   MovementDirection,
@@ -94,10 +94,6 @@ function parseDateInput(value?: string, mode: "start" | "end" = "start"): Date {
     return mode === "start" ? toCentralClosedDate(today) : toCentralEndOfDay(today);
   }
   return mode === "start" ? toCentralClosedDate(trimmed) : toCentralEndOfDay(trimmed);
-}
-
-function generateTransactionCode(prefix: string): string {
-  return `${prefix}-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomUUID().slice(0, 4).toUpperCase()}`;
 }
 
 export class InventoryService {
@@ -240,7 +236,7 @@ export class InventoryService {
         name: warehouse.name,
       };
       const occurredAt = parseDateInput(input.occurred_at);
-      const transactionCode = generateTransactionCode("PUR");
+      const transactionCode = await sequenceService.generateInventoryCode("PURCHASE");
       const status: PurchaseStatus = input.status && ["PENDIENTE", "PARCIAL", "PAGADA"].includes(input.status) ? input.status : "PENDIENTE";
 
       const transactionResult = await this.inventoryTransactionRepository.createTransaction(
@@ -371,7 +367,7 @@ export class InventoryService {
         name: warehouse.name,
       };
       const occurredAt = parseDateInput(input.occurred_at);
-      const transactionCode = generateTransactionCode("CON");
+      const transactionCode = await sequenceService.generateInventoryCode("CONSUMPTION");
 
       const transactionResult = await this.inventoryTransactionRepository.createTransaction(
         {
@@ -544,7 +540,7 @@ export class InventoryService {
           continue;
         }
 
-        const transactionCode = generateTransactionCode("SAL");
+        const transactionCode = await sequenceService.generateInventoryCode("CONSUMPTION");
         const transactionResult = await this.inventoryTransactionRepository.createTransaction(
           {
             transaction_code: transactionCode,
@@ -705,7 +701,7 @@ export class InventoryService {
         name: toWarehouse.name,
       };
       const occurredAt = parseDateInput(input.occurred_at);
-      const transactionCode = generateTransactionCode("TRF");
+      const transactionCode = await sequenceService.generateInventoryCode("TRANSFER");
       const combinedNotes = [input.notes?.trim() || "", input.requested_by?.trim() ? `Solicitado por: ${input.requested_by.trim()}` : ""]
         .filter(Boolean)
         .join(" | ") || null;
@@ -1295,7 +1291,7 @@ export class InventoryService {
           code: warehouse.code,
           name: warehouse.name,
         };
-        const transactionCode = generateTransactionCode("REV");
+        const transactionCode = await sequenceService.generateInventoryCode("ADJUSTMENT");
         const trx = await this.inventoryTransactionRepository.createTransaction(
           {
             transaction_code: transactionCode,

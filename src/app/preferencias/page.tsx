@@ -10,7 +10,7 @@ import { useToast } from "@/components/ui/toast-provider";
 import { Combobox } from "@/components/ui/combobox";
 import type { CashRegisterAssignmentGroup, CashRegisterRecord } from "@/lib/services/cash-registers/types";
 
-const ALLOWED_TABS = ["unidades", "zonas", "clasificaciones", "alertas", "notificaciones", "cajas"] as const;
+const ALLOWED_TABS = ["unidades", "zonas", "clasificaciones", "alertas", "notificaciones", "cajas", "consecutivos"] as const;
 type TabKey = (typeof ALLOWED_TABS)[number];
 
 interface UnitRow {
@@ -119,12 +119,74 @@ interface FacturadorUserRow {
   isActive: boolean;
 }
 
+type SequenceScope = "INVOICE" | "INVENTORY";
+
+interface SequenceDefinitionRow {
+  id: number;
+  code: string;
+  name: string;
+  scope: SequenceScope;
+  prefix: string;
+  suffix: string;
+  padding: number;
+  startValue: number;
+  step: number;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string | null;
+  nextPreview?: string | null;
+}
+
+interface SequenceDefinitionFormState {
+  code: string;
+  name: string;
+  scope: SequenceScope;
+  prefix: string;
+  suffix: string;
+  padding: string;
+  startValue: string;
+  step: string;
+  isActive: boolean;
+}
+
+interface InventorySequenceRow {
+  transactionType: string;
+  label: string;
+  sequenceCode: string | null;
+  sequenceName: string | null;
+  nextPreview: string | null;
+}
+
+interface CashRegisterSequenceRow {
+  id: number;
+  code: string;
+  name: string;
+  warehouseCode: string;
+  warehouseName: string;
+  isActive: boolean;
+  sequenceCode: string | null;
+  sequenceName: string | null;
+  nextPreview: string | null;
+}
+
 const EMPTY_CASH_REGISTER_FORM: CashRegisterFormState = {
   code: "",
   name: "",
   warehouseCode: "",
   allowManualWarehouseOverride: false,
   notes: "",
+  isActive: true,
+};
+
+const EMPTY_SEQUENCE_FORM: SequenceDefinitionFormState = {
+  code: "",
+  name: "",
+  scope: "INVOICE",
+  prefix: "",
+  suffix: "",
+  padding: "6",
+  startValue: "1",
+  step: "1",
   isActive: true,
 };
 
@@ -140,6 +202,11 @@ const EMPTY_ALERT_FORM: AlertFormState = { name: "", description: "", threshold:
 const EMPTY_CHANNEL_FORM: ChannelFormState = { name: "", channelType: CHANNEL_TYPE_OPTIONS[0].value, target: "", preferences: "", isActive: true };
 const EMPTY_ZONE_FORM: ZoneFormState = { name: "", isActive: true };
 const EMPTY_CLASSIFICATION_FORM: ClassificationFormState = { code: "", name: "", parentFullCode: null, isActive: true };
+
+const SEQUENCE_SCOPE_OPTIONS = [
+  { value: "INVOICE" as SequenceScope, label: "Facturación" },
+  { value: "INVENTORY" as SequenceScope, label: "Inventario" },
+] as const;
 
 function sanitizeNumeric(value: string) {
   return value.replace(/[^0-9.,]/g, "");
@@ -208,6 +275,21 @@ export default function PreferenciasPage() {
 
   const [assignmentSelections, setAssignmentSelections] = useState<Record<number, string>>({});
 
+  const [sequenceDefinitions, setSequenceDefinitions] = useState<SequenceDefinitionRow[]>([]);
+  const [sequenceDefinitionsLoading, setSequenceDefinitionsLoading] = useState(false);
+  const [sequenceModalOpen, setSequenceModalOpen] = useState(false);
+  const [sequenceSaving, setSequenceSaving] = useState(false);
+  const [sequenceForm, setSequenceForm] = useState<SequenceDefinitionFormState>(EMPTY_SEQUENCE_FORM);
+  const [editingSequenceCode, setEditingSequenceCode] = useState<string | null>(null);
+
+  const [inventorySequences, setInventorySequences] = useState<InventorySequenceRow[]>([]);
+  const [inventorySequencesLoading, setInventorySequencesLoading] = useState(false);
+  const [inventorySelections, setInventorySelections] = useState<Record<string, string>>({});
+
+  const [cashRegisterSequences, setCashRegisterSequences] = useState<CashRegisterSequenceRow[]>([]);
+  const [cashRegisterSequencesLoading, setCashRegisterSequencesLoading] = useState(false);
+  const [cashRegisterSequenceSelections, setCashRegisterSequenceSelections] = useState<Record<number, string>>({});
+
   const unitsRequestedRef = useRef(false);
   const alertsRequestedRef = useRef(false);
   const channelsRequestedRef = useRef(false);
@@ -217,6 +299,9 @@ export default function PreferenciasPage() {
   const warehousesRequestedRef = useRef(false);
   const cashAssignmentsRequestedRef = useRef(false);
   const facturadoresRequestedRef = useRef(false);
+  const sequenceDefinitionsRequestedRef = useRef(false);
+  const inventorySequencesRequestedRef = useRef(false);
+  const cashRegisterSequencesRequestedRef = useRef(false);
 
   useEffect(() => {
     const applyHash = () => {
@@ -436,6 +521,63 @@ export default function PreferenciasPage() {
     }
   }, [toast]);
 
+  const loadSequenceDefinitions = useCallback(async (force = false) => {
+    if (sequenceDefinitionsRequestedRef.current && !force) return;
+    sequenceDefinitionsRequestedRef.current = true;
+    setSequenceDefinitionsLoading(true);
+    try {
+      const res = await fetch("/api/preferencias/consecutivos", { cache: "no-store", credentials: "include" });
+      if (!res.ok) throw new Error("No se pudieron cargar los consecutivos");
+      const data = (await res.json()) as { items?: SequenceDefinitionRow[] };
+      setSequenceDefinitions(Array.isArray(data.items) ? data.items : []);
+    } catch (error: unknown) {
+      sequenceDefinitionsRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron cargar los consecutivos";
+      toast({ variant: "error", title: "Consecutivos", description: message });
+      setSequenceDefinitions([]);
+    } finally {
+      setSequenceDefinitionsLoading(false);
+    }
+  }, [toast]);
+
+  const loadInventorySequences = useCallback(async (force = false) => {
+    if (inventorySequencesRequestedRef.current && !force) return;
+    inventorySequencesRequestedRef.current = true;
+    setInventorySequencesLoading(true);
+    try {
+      const res = await fetch("/api/preferencias/consecutivos/inventario", { cache: "no-store", credentials: "include" });
+      if (!res.ok) throw new Error("No se pudieron cargar las asignaciones de inventario");
+      const data = (await res.json()) as { items?: InventorySequenceRow[] };
+      setInventorySequences(Array.isArray(data.items) ? data.items : []);
+    } catch (error: unknown) {
+      inventorySequencesRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron cargar las asignaciones de inventario";
+      toast({ variant: "error", title: "Consecutivos", description: message });
+      setInventorySequences([]);
+    } finally {
+      setInventorySequencesLoading(false);
+    }
+  }, [toast]);
+
+  const loadCashRegisterSequences = useCallback(async (force = false) => {
+    if (cashRegisterSequencesRequestedRef.current && !force) return;
+    cashRegisterSequencesRequestedRef.current = true;
+    setCashRegisterSequencesLoading(true);
+    try {
+      const res = await fetch("/api/preferencias/consecutivos/cajas", { cache: "no-store", credentials: "include" });
+      if (!res.ok) throw new Error("No se pudieron cargar los consecutivos por caja");
+      const data = (await res.json()) as { items?: CashRegisterSequenceRow[] };
+      setCashRegisterSequences(Array.isArray(data.items) ? data.items : []);
+    } catch (error: unknown) {
+      cashRegisterSequencesRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron cargar los consecutivos por caja";
+      toast({ variant: "error", title: "Consecutivos", description: message });
+      setCashRegisterSequences([]);
+    } finally {
+      setCashRegisterSequencesLoading(false);
+    }
+  }, [toast]);
+
   useEffect(() => {
     void loadUnits(true);
   }, [loadUnits]);
@@ -463,6 +605,13 @@ export default function PreferenciasPage() {
     void loadFacturadores();
     void loadCashAssignments();
   }, [activeTab, loadWarehouses, loadCashRegisters, loadFacturadores, loadCashAssignments]);
+
+  useEffect(() => {
+    if (activeTab !== "consecutivos") return;
+    void loadSequenceDefinitions();
+    void loadInventorySequences();
+    void loadCashRegisterSequences();
+  }, [activeTab, loadSequenceDefinitions, loadInventorySequences, loadCashRegisterSequences]);
 
   const unitOptions = useMemo(
     () => units.map((unit) => ({ value: unit.code, label: `${unit.code} · ${unit.name}` })),
@@ -518,6 +667,30 @@ export default function PreferenciasPage() {
     [cashRegisters]
   );
 
+  const invoiceSequenceOptions = useMemo(
+    () =>
+      sequenceDefinitions
+        .filter((definition) => definition.scope === "INVOICE" && definition.isActive)
+        .map((definition) => ({
+          value: definition.code,
+          label: `${definition.code} · ${definition.name}`,
+          description: `${definition.prefix || ""}${definition.prefix ? "-" : ""}${definition.padding} dígitos${definition.suffix ? ` · ${definition.suffix}` : ""}`,
+        })),
+    [sequenceDefinitions]
+  );
+
+  const inventorySequenceOptions = useMemo(
+    () =>
+      sequenceDefinitions
+        .filter((definition) => definition.scope === "INVENTORY" && definition.isActive)
+        .map((definition) => ({
+          value: definition.code,
+          label: `${definition.code} · ${definition.name}`,
+          description: `${definition.prefix || ""}${definition.prefix ? "-" : ""}${definition.padding} dígitos${definition.suffix ? ` · ${definition.suffix}` : ""}`,
+        })),
+    [sequenceDefinitions]
+  );
+
   const cashAssignmentMap = useMemo(() => {
     const map = new Map<number, CashRegisterAssignmentGroup>();
     for (const group of cashAssignments) {
@@ -527,6 +700,9 @@ export default function PreferenciasPage() {
   }, [cashAssignments]);
 
   const formatStatus = (isActive: boolean) => (isActive ? "Activo" : "Inactivo");
+
+  const formatSequenceScopeLabel = (scope: SequenceScope) =>
+    scope === "INVOICE" ? "Facturación" : "Inventario";
 
   async function handleSaveUnit() {
     const code = unitForm.code.trim().toUpperCase();
@@ -808,6 +984,222 @@ export default function PreferenciasPage() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo remover la asignación";
       toast({ variant: "error", title: "Asignaciones", description: message });
+    }
+  };
+
+  const handleOpenCreateSequenceModal = () => {
+    setSequenceForm(EMPTY_SEQUENCE_FORM);
+    setEditingSequenceCode(null);
+    setSequenceModalOpen(true);
+  };
+
+  const handleOpenEditSequenceModal = (definition: SequenceDefinitionRow) => {
+    setEditingSequenceCode(definition.code);
+    setSequenceForm({
+      code: definition.code,
+      name: definition.name,
+      scope: definition.scope,
+      prefix: definition.prefix,
+      suffix: definition.suffix,
+      padding: String(definition.padding),
+      startValue: String(definition.startValue),
+      step: String(definition.step),
+      isActive: definition.isActive,
+    });
+    setSequenceModalOpen(true);
+  };
+
+  const handleSaveSequenceDefinition = async () => {
+    const trimmedCode = sequenceForm.code.trim().toUpperCase();
+    const trimmedName = sequenceForm.name.trim();
+    if (!editingSequenceCode && trimmedCode.length === 0) {
+      toast({ variant: "error", title: "Consecutivos", description: "Captura el código identificador" });
+      return;
+    }
+    if (!trimmedName) {
+      toast({ variant: "error", title: "Consecutivos", description: "Captura el nombre del consecutivo" });
+      return;
+    }
+
+    const paddingValue = Number.parseInt(sequenceForm.padding, 10);
+    if (!Number.isFinite(paddingValue) || paddingValue < 1 || paddingValue > 18) {
+      toast({ variant: "error", title: "Consecutivos", description: "El relleno debe estar entre 1 y 18" });
+      return;
+    }
+
+    const startValue = Number.parseInt(sequenceForm.startValue, 10);
+    if (!Number.isFinite(startValue) || startValue < 0) {
+      toast({ variant: "error", title: "Consecutivos", description: "El valor inicial debe ser un entero mayor o igual a cero" });
+      return;
+    }
+
+    const stepValue = Number.parseInt(sequenceForm.step, 10);
+    if (!Number.isFinite(stepValue) || stepValue < 1) {
+      toast({ variant: "error", title: "Consecutivos", description: "El incremento debe ser un entero positivo" });
+      return;
+    }
+
+    const prefix = sequenceForm.prefix.trim();
+    const suffix = sequenceForm.suffix.trim();
+
+    setSequenceSaving(true);
+    try {
+      if (editingSequenceCode) {
+        const res = await fetch("/api/preferencias/consecutivos", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            code: editingSequenceCode,
+            name: trimmedName,
+            prefix,
+            suffix,
+            padding: paddingValue,
+            startValue,
+            step: stepValue,
+            isActive: sequenceForm.isActive,
+          }),
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null);
+          throw new Error(payload?.message ?? "No se pudo actualizar el consecutivo");
+        }
+        toast({ variant: "success", title: "Consecutivos", description: "Consecutivo actualizado" });
+      } else {
+        const res = await fetch("/api/preferencias/consecutivos", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            code: trimmedCode,
+            name: trimmedName,
+            scope: sequenceForm.scope,
+            prefix,
+            suffix,
+            padding: paddingValue,
+            startValue,
+            step: stepValue,
+            isActive: sequenceForm.isActive,
+          }),
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null);
+          throw new Error(payload?.message ?? "No se pudo crear el consecutivo");
+        }
+        toast({ variant: "success", title: "Consecutivos", description: "Consecutivo creado" });
+      }
+
+      sequenceDefinitionsRequestedRef.current = false;
+      inventorySequencesRequestedRef.current = false;
+      cashRegisterSequencesRequestedRef.current = false;
+
+      await loadSequenceDefinitions(true);
+      await Promise.all([loadInventorySequences(true), loadCashRegisterSequences(true)]);
+
+      setSequenceModalOpen(false);
+      setSequenceForm(EMPTY_SEQUENCE_FORM);
+      setEditingSequenceCode(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo guardar el consecutivo";
+      toast({ variant: "error", title: "Consecutivos", description: message });
+    } finally {
+      setSequenceSaving(false);
+    }
+  };
+
+  const handleApplyInventorySequence = async (transactionType: string) => {
+    const selection = (inventorySelections[transactionType] ?? "").trim();
+    try {
+      const res = await fetch("/api/preferencias/consecutivos/inventario", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          transactionType,
+          sequenceCode: selection ? selection : null,
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.message ?? "No se pudo actualizar la asignación");
+      }
+      toast({ variant: "success", title: "Consecutivos", description: "Asignación de inventario actualizada" });
+      setInventorySelections((prev) => ({ ...prev, [transactionType]: "" }));
+      inventorySequencesRequestedRef.current = false;
+      await loadInventorySequences(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo actualizar la asignación";
+      toast({ variant: "error", title: "Consecutivos", description: message });
+    }
+  };
+
+  const handleClearInventorySequence = async (transactionType: string) => {
+    try {
+      const res = await fetch("/api/preferencias/consecutivos/inventario", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ transactionType, sequenceCode: null }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.message ?? "No se pudo limpiar la asignación");
+      }
+      toast({ variant: "success", title: "Consecutivos", description: "Asignación removida" });
+      setInventorySelections((prev) => ({ ...prev, [transactionType]: "" }));
+      inventorySequencesRequestedRef.current = false;
+      await loadInventorySequences(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo limpiar la asignación";
+      toast({ variant: "error", title: "Consecutivos", description: message });
+    }
+  };
+
+  const handleApplyCashRegisterSequence = async (registerId: number, cashRegisterCode: string) => {
+    const selection = (cashRegisterSequenceSelections[registerId] ?? "").trim();
+    try {
+      const res = await fetch("/api/preferencias/consecutivos/cajas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          cashRegisterCode,
+          sequenceCode: selection ? selection : null,
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.message ?? "No se pudo actualizar la caja");
+      }
+      toast({ variant: "success", title: "Consecutivos", description: "Caja actualizada" });
+      setCashRegisterSequenceSelections((prev) => ({ ...prev, [registerId]: "" }));
+      cashRegisterSequencesRequestedRef.current = false;
+      await loadCashRegisterSequences(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo actualizar la caja";
+      toast({ variant: "error", title: "Consecutivos", description: message });
+    }
+  };
+
+  const handleClearCashRegisterSequence = async (registerId: number, cashRegisterCode: string) => {
+    try {
+      const res = await fetch("/api/preferencias/consecutivos/cajas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ cashRegisterCode, sequenceCode: null }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.message ?? "No se pudo actualizar la caja");
+      }
+      toast({ variant: "success", title: "Consecutivos", description: "Consecutivo removido de la caja" });
+      setCashRegisterSequenceSelections((prev) => ({ ...prev, [registerId]: "" }));
+      cashRegisterSequencesRequestedRef.current = false;
+      await loadCashRegisterSequences(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo actualizar la caja";
+      toast({ variant: "error", title: "Consecutivos", description: message });
     }
   };
 
@@ -1837,6 +2229,363 @@ export default function PreferenciasPage() {
       </div>
     );
 
+    const renderSequenceDefinitions = () => (
+      <Card className="rounded-3xl border bg-background/95 shadow-sm">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="text-xl font-semibold">Máscaras de consecutivos</CardTitle>
+              <CardDescription>Controla la estructura de los consecutivos para facturación e inventario.</CardDescription>
+            </div>
+            <Button type="button" className="rounded-2xl" onClick={handleOpenCreateSequenceModal}>
+              Nuevo consecutivo
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="overflow-x-auto">
+            <table className="min-w-full table-auto text-left text-sm">
+              <thead className="border-b text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Código</th>
+                  <th className="px-3 py-2">Nombre</th>
+                  <th className="px-3 py-2">Ámbito</th>
+                  <th className="px-3 py-2">Prefijo</th>
+                  <th className="px-3 py-2">Sufijo</th>
+                  <th className="px-3 py-2">Relleno</th>
+                  <th className="px-3 py-2">Inicio</th>
+                  <th className="px-3 py-2">Paso</th>
+                  <th className="px-3 py-2">Siguiente</th>
+                  <th className="px-3 py-2">Estado</th>
+                  <th className="px-3 py-2">Actualizado</th>
+                  <th className="px-3 py-2 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {sequenceDefinitionsLoading ? (
+                  <tr>
+                    <td colSpan={12} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      Cargando consecutivos...
+                    </td>
+                  </tr>
+                ) : sequenceDefinitions.length === 0 ? (
+                  <tr>
+                    <td colSpan={12} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      Aún no hay consecutivos registrados.
+                    </td>
+                  </tr>
+                ) : (
+                  sequenceDefinitions.map((definition) => (
+                    <tr key={definition.id} className="hover:bg-muted/40">
+                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{definition.code}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-col">
+                          <span className="font-medium text-foreground">{definition.name}</span>
+                          <span className="text-xs text-muted-foreground">
+                            Creado {definition.createdAt ? new Date(definition.createdAt).toLocaleDateString() : "—"}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-xs">{formatSequenceScopeLabel(definition.scope)}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{definition.prefix || "—"}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{definition.suffix || "—"}</td>
+                      <td className="px-3 py-2">{definition.padding}</td>
+                      <td className="px-3 py-2">{definition.startValue}</td>
+                      <td className="px-3 py-2">{definition.step}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{definition.nextPreview ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+                            definition.isActive
+                              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                              : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {formatStatus(definition.isActive)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">
+                        {definition.updatedAt ? new Date(definition.updatedAt).toLocaleString() : "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex justify-end">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 rounded-xl px-3 text-xs"
+                            onClick={() => handleOpenEditSequenceModal(definition)}
+                          >
+                            Editar
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-end">
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => void loadSequenceDefinitions(true)}>
+              Refrescar
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+
+    const renderInventorySequences = () => (
+      <Card className="rounded-3xl border bg-background/95 shadow-sm">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="text-xl font-semibold">Consecutivos de inventario</CardTitle>
+              <CardDescription>Asigna la máscara correspondiente a cada tipo de movimiento.</CardDescription>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-2xl"
+              onClick={() => {
+                inventorySequencesRequestedRef.current = false;
+                void loadInventorySequences(true);
+              }}
+            >
+              Refrescar
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="overflow-x-auto">
+            <table className="min-w-full table-auto text-left text-sm">
+              <thead className="border-b text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Movimiento</th>
+                  <th className="px-3 py-2">Asignado</th>
+                  <th className="px-3 py-2">Siguiente</th>
+                  <th className="px-3 py-2">Seleccionar</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {inventorySequencesLoading ? (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      Cargando asignaciones...
+                    </td>
+                  </tr>
+                ) : inventorySequences.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      No hay asignaciones registradas.
+                    </td>
+                  </tr>
+                ) : (
+                  inventorySequences.map((assignment) => {
+                    const selection = inventorySelections[assignment.transactionType] ?? "";
+                    return (
+                      <tr key={assignment.transactionType} className="hover:bg-muted/40">
+                        <td className="px-3 py-2">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-foreground">{assignment.label}</span>
+                            <span className="font-mono text-xs text-muted-foreground">{assignment.transactionType}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          {assignment.sequenceName ? (
+                            <div className="flex flex-col text-sm">
+                              <span className="font-medium">{assignment.sequenceName}</span>
+                              <span className="font-mono text-xs text-muted-foreground">{assignment.sequenceCode}</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Sin asignar</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{assignment.nextPreview ?? "—"}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <Combobox
+                              value={selection || null}
+                              onChange={(value) =>
+                                setInventorySelections((prev) => ({
+                                  ...prev,
+                                  [assignment.transactionType]: value ?? "",
+                                }))
+                              }
+                              options={inventorySequenceOptions}
+                              placeholder={inventorySequenceOptions.length === 0 ? "Sin consecutivos" : "Selecciona"}
+                              emptyText="Sin coincidencias"
+                              disabled={inventorySequenceOptions.length === 0}
+                              ariaLabel={`Asignar consecutivo a ${assignment.label}`}
+                              dropdownClassName="z-[60]"
+                            />
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                className="rounded-2xl"
+                                disabled={inventorySequenceOptions.length === 0 && !selection}
+                                onClick={() => void handleApplyInventorySequence(assignment.transactionType)}
+                              >
+                                Asignar
+                              </Button>
+                              {assignment.sequenceCode ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="rounded-2xl"
+                                  onClick={() => void handleClearInventorySequence(assignment.transactionType)}
+                                >
+                                  Quitar
+                                </Button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    );
+
+    const renderCashSequenceAssignments = () => (
+      <Card className="rounded-3xl border bg-background/95 shadow-sm">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="text-xl font-semibold">Consecutivos por caja</CardTitle>
+              <CardDescription>Define qué máscara utilizará cada caja al emitir facturas.</CardDescription>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-2xl"
+              onClick={() => {
+                cashRegisterSequencesRequestedRef.current = false;
+                void loadCashRegisterSequences(true);
+              }}
+            >
+              Refrescar
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="overflow-x-auto">
+            <table className="min-w-full table-auto text-left text-sm">
+              <thead className="border-b text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Caja</th>
+                  <th className="px-3 py-2">Almacén</th>
+                  <th className="px-3 py-2">Consecutivo</th>
+                  <th className="px-3 py-2">Siguiente</th>
+                  <th className="px-3 py-2">Seleccionar</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {cashRegisterSequencesLoading ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      Cargando cajas...
+                    </td>
+                  </tr>
+                ) : cashRegisterSequences.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                      No hay cajas registradas.
+                    </td>
+                  </tr>
+                ) : (
+                  cashRegisterSequences.map((register) => {
+                    const selection = cashRegisterSequenceSelections[register.id] ?? "";
+                    const disabled = invoiceSequenceOptions.length === 0;
+                    return (
+                      <tr key={register.id} className="hover:bg-muted/40">
+                        <td className="px-3 py-2">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-foreground">{register.name}</span>
+                            <span className="font-mono text-xs text-muted-foreground">{register.code}</span>
+                            <span className="text-xs text-muted-foreground">{formatStatus(register.isActive)}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-sm">{register.warehouseName}</span>
+                            <span className="font-mono text-xs text-muted-foreground">{register.warehouseCode}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          {register.sequenceName ? (
+                            <div className="flex flex-col text-sm">
+                              <span className="font-medium">{register.sequenceName}</span>
+                              <span className="font-mono text-xs text-muted-foreground">{register.sequenceCode}</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Sin asignar</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{register.nextPreview ?? "—"}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <Combobox
+                              value={selection || null}
+                              onChange={(value) =>
+                                setCashRegisterSequenceSelections((prev) => ({
+                                  ...prev,
+                                  [register.id]: value ?? "",
+                                }))
+                              }
+                              options={invoiceSequenceOptions}
+                              placeholder={disabled ? "Sin consecutivos" : "Selecciona"}
+                              emptyText="Sin coincidencias"
+                              disabled={disabled}
+                              ariaLabel={`Asignar consecutivo a ${register.name}`}
+                              dropdownClassName="z-[60]"
+                            />
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                className="rounded-2xl"
+                                disabled={disabled && !selection}
+                                onClick={() => void handleApplyCashRegisterSequence(register.id, register.code)}
+                              >
+                                Asignar
+                              </Button>
+                              {register.sequenceCode ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="rounded-2xl"
+                                  onClick={() => void handleClearCashRegisterSequence(register.id, register.code)}
+                                >
+                                  Quitar
+                                </Button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    );
+
+    const renderSequenceManagement = () => (
+      <div className="space-y-6">
+        {renderSequenceDefinitions()}
+        {renderInventorySequences()}
+        {renderCashSequenceAssignments()}
+      </div>
+    );
+
   return (
     <section className="space-y-8 pb-16">
       <header className="space-y-2">
@@ -1868,6 +2617,9 @@ export default function PreferenciasPage() {
         <Button type="button" variant={activeTab === "cajas" ? "default" : "outline"} className="rounded-2xl" onClick={() => handleTabChange("cajas")}>
           Cajas
         </Button>
+        <Button type="button" variant={activeTab === "consecutivos" ? "default" : "outline"} className="rounded-2xl" onClick={() => handleTabChange("consecutivos")}>
+          Consecutivos
+        </Button>
       </div>
 
       {activeTab === "unidades" ? renderUnits() : null}
@@ -1876,6 +2628,151 @@ export default function PreferenciasPage() {
       {activeTab === "alertas" ? renderAlerts() : null}
       {activeTab === "notificaciones" ? renderChannels() : null}
       {activeTab === "cajas" ? renderCashManagement() : null}
+      {activeTab === "consecutivos" ? renderSequenceManagement() : null}
+
+      <Modal
+        open={sequenceModalOpen}
+        onClose={() => {
+          setSequenceModalOpen(false);
+          setSequenceForm(EMPTY_SEQUENCE_FORM);
+          setEditingSequenceCode(null);
+        }}
+        title={editingSequenceCode ? `Editar consecutivo (${editingSequenceCode})` : "Nuevo consecutivo"}
+        description="Configura el prefijo, relleno y secuencia que se aplicará al generar números consecutivos."
+        contentClassName="max-w-2xl"
+      >
+        <div className="grid gap-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Código</Label>
+              <Input
+                value={sequenceForm.code}
+                onChange={(event) =>
+                  setSequenceForm((prev) => ({
+                    ...prev,
+                    code: event.target.value.replace(/[^A-Za-z0-9_-]/g, "").toUpperCase(),
+                  }))
+                }
+                placeholder="FAC-2025"
+                maxLength={64}
+                disabled={!!editingSequenceCode}
+                className="rounded-2xl"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Ámbito</Label>
+              <Combobox
+                value={sequenceForm.scope}
+                onChange={(value) =>
+                  setSequenceForm((prev) => ({
+                    ...prev,
+                    scope: (value ?? prev.scope) as SequenceScope,
+                  }))
+                }
+                options={SEQUENCE_SCOPE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                disabled={!!editingSequenceCode}
+                ariaLabel="Ámbito del consecutivo"
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs uppercase text-muted-foreground">Nombre</Label>
+            <Input
+              value={sequenceForm.name}
+              onChange={(event) => setSequenceForm((prev) => ({ ...prev, name: event.target.value }))}
+              placeholder="Factura serie A"
+              maxLength={160}
+              className="rounded-2xl"
+            />
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Prefijo</Label>
+              <Input
+                value={sequenceForm.prefix}
+                onChange={(event) => setSequenceForm((prev) => ({ ...prev, prefix: event.target.value.toUpperCase() }))}
+                placeholder="FAC-"
+                maxLength={40}
+                className="rounded-2xl"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Sufijo</Label>
+              <Input
+                value={sequenceForm.suffix}
+                onChange={(event) => setSequenceForm((prev) => ({ ...prev, suffix: event.target.value.toUpperCase() }))}
+                placeholder="-POS"
+                maxLength={40}
+                className="rounded-2xl"
+              />
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Relleno (dígitos)</Label>
+              <Input
+                value={sequenceForm.padding}
+                onChange={(event) =>
+                  setSequenceForm((prev) => ({ ...prev, padding: event.target.value.replace(/[^0-9]/g, "") }))
+                }
+                placeholder="6"
+                maxLength={2}
+                className="rounded-2xl"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Inicio</Label>
+              <Input
+                value={sequenceForm.startValue}
+                onChange={(event) =>
+                  setSequenceForm((prev) => ({ ...prev, startValue: event.target.value.replace(/[^0-9]/g, "") }))
+                }
+                placeholder="1"
+                maxLength={12}
+                className="rounded-2xl"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Paso</Label>
+              <Input
+                value={sequenceForm.step}
+                onChange={(event) =>
+                  setSequenceForm((prev) => ({ ...prev, step: event.target.value.replace(/[^0-9]/g, "") }))
+                }
+                placeholder="1"
+                maxLength={4}
+                className="rounded-2xl"
+              />
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-muted bg-background"
+              checked={sequenceForm.isActive}
+              onChange={(event) => setSequenceForm((prev) => ({ ...prev, isActive: event.target.checked }))}
+            />
+            Consecutivo activo
+          </label>
+          <div className="flex flex-wrap gap-3">
+            <Button type="button" className="rounded-2xl" disabled={sequenceSaving} onClick={() => void handleSaveSequenceDefinition()}>
+              {sequenceSaving ? "Guardando..." : editingSequenceCode ? "Actualizar" : "Guardar"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-2xl"
+              onClick={() => {
+                setSequenceModalOpen(false);
+                setSequenceForm(EMPTY_SEQUENCE_FORM);
+                setEditingSequenceCode(null);
+              }}
+            >
+              Cerrar
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={unitModalOpen}

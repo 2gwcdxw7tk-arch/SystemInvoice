@@ -243,6 +243,61 @@ VALUES
 ON CONFLICT (code) DO NOTHING;
 
 -- ========================================================
+-- Tabla: app.sequence_definitions (máscaras de consecutivos)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.sequence_definitions (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code VARCHAR(64) NOT NULL UNIQUE,
+  name VARCHAR(160) NOT NULL,
+  scope VARCHAR(24) NOT NULL,
+  prefix VARCHAR(40) NOT NULL DEFAULT '',
+  suffix VARCHAR(40) NOT NULL DEFAULT '',
+  padding INTEGER NOT NULL DEFAULT 6 CHECK (padding >= 1 AND padding <= 18),
+  start_value BIGINT NOT NULL DEFAULT 1 CHECK (start_value >= 0),
+  step INTEGER NOT NULL DEFAULT 1 CHECK (step > 0),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_sequence_definitions_touch_updated_at ON app.sequence_definitions;
+CREATE TRIGGER trg_sequence_definitions_touch_updated_at
+BEFORE UPDATE ON app.sequence_definitions
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+-- ========================================================
+-- Tabla: app.sequence_counters (estado por alcance)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.sequence_counters (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sequence_definition_id INTEGER NOT NULL REFERENCES app.sequence_definitions(id) ON DELETE CASCADE,
+  scope_type VARCHAR(24) NOT NULL DEFAULT 'GLOBAL',
+  scope_key VARCHAR(80) NOT NULL DEFAULT '',
+  current_value BIGINT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_sequence_counters_scope UNIQUE (sequence_definition_id, scope_type, scope_key)
+);
+
+CREATE INDEX IF NOT EXISTS ix_sequence_counters_updated
+  ON app.sequence_counters (sequence_definition_id, updated_at DESC);
+
+-- ========================================================
+-- Tabla: app.inventory_sequence_settings (asignaciones por tipo)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.inventory_sequence_settings (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  transaction_type VARCHAR(24) NOT NULL UNIQUE,
+  sequence_definition_id INTEGER NOT NULL REFERENCES app.sequence_definitions(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_inventory_sequence_settings_touch_updated_at ON app.inventory_sequence_settings;
+CREATE TRIGGER trg_inventory_sequence_settings_touch_updated_at
+BEFORE UPDATE ON app.inventory_sequence_settings
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+-- ========================================================
 -- Tabla: app.cash_registers (cajas de facturación)
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.cash_registers (
@@ -253,6 +308,7 @@ CREATE TABLE IF NOT EXISTS app.cash_registers (
   allow_manual_warehouse_override BOOLEAN NOT NULL DEFAULT FALSE,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   notes VARCHAR(250),
+  invoice_sequence_definition_id INTEGER REFERENCES app.sequence_definitions(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -264,6 +320,12 @@ FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 
 CREATE INDEX IF NOT EXISTS ix_cash_registers_active
   ON app.cash_registers (is_active) INCLUDE (code, warehouse_id);
+
+CREATE INDEX IF NOT EXISTS ix_cash_registers_sequence
+  ON app.cash_registers (invoice_sequence_definition_id);
+
+ALTER TABLE app.cash_registers
+  ADD COLUMN IF NOT EXISTS invoice_sequence_definition_id INTEGER REFERENCES app.sequence_definitions(id) ON DELETE SET NULL;
 
 -- ========================================================
 -- Tabla: app.cash_register_users (asignación de cajas a usuarios admin)
@@ -298,6 +360,8 @@ CREATE TABLE IF NOT EXISTS app.cash_register_sessions (
   status VARCHAR(12) NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED', 'CANCELLED')),
   closing_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
   totals_snapshot JSONB,
+  invoice_sequence_start VARCHAR(60),
+  invoice_sequence_end VARCHAR(60),
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -317,6 +381,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_register_sessions_open_by_user
 
 CREATE INDEX IF NOT EXISTS ix_cash_register_sessions_register
   ON app.cash_register_sessions (cash_register_id, status);
+
+ALTER TABLE app.cash_register_sessions
+  ADD COLUMN IF NOT EXISTS invoice_sequence_start VARCHAR(60);
+
+ALTER TABLE app.cash_register_sessions
+  ADD COLUMN IF NOT EXISTS invoice_sequence_end VARCHAR(60);
 
 -- ========================================================
 -- Tabla: app.cash_register_session_payments (resumen por método)

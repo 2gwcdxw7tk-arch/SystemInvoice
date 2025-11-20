@@ -12,7 +12,7 @@ const paymentSchema = z.object({
 });
 
 const invoiceSchema = z.object({
-  invoice_number: z.string().trim().min(1).max(40),
+  invoice_number: z.string().trim().max(40).optional(),
   table_code: z.string().trim().max(40).nullable().optional(),
   waiter_code: z.string().trim().max(50).nullable().optional(),
   invoice_date: z
@@ -105,7 +105,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: "Fecha de factura inválida" }, { status: 400 });
     }
     const result = await invoiceService.createInvoice({
-      invoice_number: payload.invoice_number,
+      invoice_number: payload.invoice_number ?? null,
       table_code: payload.table_code ?? null,
       waiter_code: payload.waiter_code ?? null,
       invoiceDate,
@@ -130,15 +130,18 @@ export async function POST(request: NextRequest) {
       issuer_admin_user_id: issuerAdminId,
       cash_register_id: activeSession.cashRegister.cashRegisterId,
       cash_register_session_id: activeSession.id,
+      cash_register_code: activeSession.cashRegister.cashRegisterCode,
       cashRegisterWarehouseCode: activeSession.cashRegister.warehouseCode,
     });
 
     return NextResponse.json({ id: result.id, invoice_number: result.invoice_number }, { status: 201 });
   } catch (error) {
     console.error("POST /api/invoices error", error);
+    const message = error instanceof Error ? error.message : "No se pudo guardar la factura";
+    const status = /consecutivo|secuencia/i.test(message) ? 409 : 500;
     return NextResponse.json(
-      { success: false, message: "No se pudo guardar la factura" },
-      { status: 500 }
+      { success: false, message },
+      { status }
     );
   }
 }

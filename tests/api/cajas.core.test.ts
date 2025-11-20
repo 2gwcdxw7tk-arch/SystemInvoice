@@ -44,7 +44,22 @@ jest.mock('@/lib/services/CashRegisterService', () => ({
       },
       adminUserId: 10,
     })),
-    listRecentCashRegisterSessions: jest.fn(async () => ([{ id: 98, status: 'CLOSED', openingAmount: 50, openingAt: new Date().toISOString(), closingAmount: 60, closingAt: new Date().toISOString(), cashRegister: { cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' } }])),
+    listRecentCashRegisterSessions: jest.fn(async () => ([{
+      id: 98,
+      status: 'CLOSED',
+      openingAmount: 50,
+      openingAt: new Date().toISOString(),
+      closingAmount: 60,
+      closingAt: new Date().toISOString(),
+      totalsSnapshot: {
+        sessionId: 98,
+        closingAmount: 60,
+        expectedTotalAmount: 58,
+        reportedTotalAmount: 60,
+        differenceTotalAmount: 2,
+      },
+      cashRegister: { cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' }
+    }])),
     getCashRegisterClosureReport: jest.fn(async () => ({
       sessionId: 99,
       cashRegister: { cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' },
@@ -222,7 +237,16 @@ describe('Cajas operaciones', () => {
     });
     mockedCashRegisterService.getCashRegisterClosureReport.mockResolvedValueOnce({
       sessionId: 99,
-      cashRegister: { cashRegisterCode: 'CR-01', cashRegisterName: 'Principal', warehouseCode: 'ALM', warehouseName: 'Alm' },
+      cashRegister: {
+        cashRegisterId: 1,
+        cashRegisterCode: 'CR-01',
+        cashRegisterName: 'Principal',
+        allowManualWarehouseOverride: false,
+        warehouseId: 1,
+        warehouseCode: 'ALM',
+        warehouseName: 'Alm',
+        isDefault: true,
+      },
       openedByAdminId: 10,
       openingAmount: 100,
       openingAt: new Date().toISOString(),

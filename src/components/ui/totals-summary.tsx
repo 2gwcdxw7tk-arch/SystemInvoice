@@ -28,11 +28,11 @@ export function TotalsSummary({
             const showDivider = item.emphasize && (!prev || !prev.emphasize);
             const amount = Number.isFinite(item.amount as number) ? (item.amount as number) : 0;
             return (
-              <>
-                {showDivider ? <div key={`sep-${idx}`} className="col-span-2 my-2 border-t border-muted" /> : null}
-                <div key={`label-${idx}`} className={cn("pr-4 text-muted-foreground", item.emphasize && "font-semibold text-foreground")}>{item.label}</div>
-                <div key={`value-${idx}`} className={cn("text-right text-foreground tabular-nums", item.emphasize && "font-semibold")}>{formatCurrency(amount, { currency: item.currency || "local" })}</div>
-              </>
+              <span key={`summary-${idx}`} className="contents">
+                {showDivider ? <div className="col-span-2 my-2 border-t border-muted" /> : null}
+                <div className={cn("pr-4 text-muted-foreground", item.emphasize && "font-semibold text-foreground")}>{item.label}</div>
+                <div className={cn("text-right text-foreground tabular-nums", item.emphasize && "font-semibold")}>{formatCurrency(amount, { currency: item.currency || "local" })}</div>
+              </span>
             );
           })}
         </div>

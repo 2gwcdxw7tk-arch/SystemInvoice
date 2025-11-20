@@ -23,7 +23,6 @@ POST http://localhost:3000/api/invoices
 Content-Type: application/json
 
 {
-  "invoice_number": "F-TEST-1",
   "invoice_date": "2024-05-01",
   "table_code": "M-12",
   "waiter_code": "MESERO01",
@@ -43,6 +42,6 @@ Content-Type: application/json
 ```
 
 4. Espera respuesta 201 con `{ id, invoice_number }`.
-5. Si omites la apertura en el paso 2 recibirás 409 con el mensaje `"Debes abrir una caja antes de facturar"`.
+4. Espera respuesta 201 con `{ id, invoice_number }`. Si omites `invoice_number`, el servidor genera el folio usando el consecutivo configurado para la caja activa.
 6. Si proporcionaste `origin_order_id`, verifica que el pedido quede con estado `facturado` (`GET /api/orders` ya no debe devolverlo).
 7. Cambia a `MOCK_DATA=false` y configura `DB_CONNECTION_STRING` para validar inserciones reales.

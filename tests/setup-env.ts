@@ -2,6 +2,7 @@
 process.env.MOCK_DATA = process.env.MOCK_DATA || 'false';
 process.env.NEXT_APP_URL = process.env.NEXT_APP_URL || 'http://localhost:3000';
 process.env.NEXT_PUBLIC_COMPANY_NAME = process.env.NEXT_PUBLIC_COMPANY_NAME || 'Test Company';
+process.env.NEXT_PUBLIC_COMPANY_ADDRESS = process.env.NEXT_PUBLIC_COMPANY_ADDRESS || '123 Test Street';
 process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'abcdefghijklmnopqrstuvwxyz012345'; // 33 chars
 // Optional public currency settings for deterministic defaults
 process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE = process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || 'MXN';

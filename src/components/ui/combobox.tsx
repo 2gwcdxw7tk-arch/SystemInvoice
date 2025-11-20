@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -46,8 +47,16 @@ export function Combobox<T = string>({
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
   const listboxId = useId();
   const labelText = label || placeholder;
+  const [mounted, setMounted] = useState(false);
+  const [dropdownPosition, setDropdownPosition] = useState<{ top: number; left: number; width: number; maxHeight: number }>({
+    top: 0,
+    left: 0,
+    width: 0,
+    maxHeight: 256,
+  });
 
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -61,10 +70,17 @@ export function Combobox<T = string>({
   );
 
   useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
+
+  useEffect(() => {
     if (!open) return;
     const handleClickOutside = (event: MouseEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
+      const node = event.target as Node;
+      if (!containerRef.current?.contains(node) && !dropdownRef.current?.contains(node)) {
         setOpen(false);
+        buttonRef.current?.focus();
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -80,6 +96,63 @@ export function Combobox<T = string>({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [open]);
+
+  const updateDropdownPosition = useCallback(() => {
+    const button = buttonRef.current;
+    if (!open || !button) return;
+    const rect = button.getBoundingClientRect();
+    const baseWidth = Math.max(rect.width, 240);
+    const viewportPadding = 16;
+    const gap = 8;
+    const desiredMaxHeight = 320;
+    const minHeight = 96;
+
+    let left = rect.left;
+    if (left + baseWidth + viewportPadding > window.innerWidth) {
+      left = Math.max(viewportPadding, window.innerWidth - baseWidth - viewportPadding);
+    }
+
+    const bottomLimit = window.innerHeight - viewportPadding;
+    const topCandidate = rect.bottom + gap;
+    const availableSpace = bottomLimit - topCandidate;
+    let maxHeight = Math.min(desiredMaxHeight, Math.max(availableSpace, minHeight));
+
+    // Clamp dropdown to remain inside viewport without drifting demasiado lejos
+    const maxTop = bottomLimit - maxHeight;
+    let top = Math.min(topCandidate, maxTop);
+
+    if (top < viewportPadding) {
+      top = viewportPadding;
+      const available = bottomLimit - top;
+      if (available <= 0) {
+        maxHeight = Math.min(desiredMaxHeight, minHeight);
+      } else if (available < minHeight) {
+        maxHeight = available;
+      } else {
+        maxHeight = Math.min(desiredMaxHeight, available);
+      }
+    }
+
+    setDropdownPosition({
+      top,
+      left,
+      width: baseWidth,
+      maxHeight,
+    });
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updateDropdownPosition();
+
+    const handleScroll = () => updateDropdownPosition();
+    window.addEventListener("resize", handleScroll);
+    window.addEventListener("scroll", handleScroll, true);
+    return () => {
+      window.removeEventListener("resize", handleScroll);
+      window.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [open, updateDropdownPosition]);
 
   useEffect(() => {
     if (open) {
@@ -114,68 +187,86 @@ export function Combobox<T = string>({
         <ChevronDown className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
       </button>
 
-      {open && (
-        <div className={cn("absolute left-0 z-50 mt-2 w-full min-w-[240px] rounded-3xl border border-muted bg-background p-3 shadow-2xl", dropdownClassName)}>
-          {searchEnabled && options.length > 6 ? (
-            <div className="mb-2 flex items-center gap-2 rounded-2xl border border-muted bg-background px-2">
-              <Search className="h-3.5 w-3.5 text-muted-foreground" />
-              <input
-                type="text"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="h-9 w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
-                placeholder="Buscar..."
-              />
-            </div>
-          ) : null}
-          <ul
-            id={listboxId}
-            ref={listRef}
-            role="listbox"
-            className="max-h-64 overflow-y-auto pr-1 text-sm"
-          >
-            {filtered.length === 0 ? (
-              <li className="px-3 py-2 text-sm text-muted-foreground">{emptyText}</li>
-            ) : (
-              filtered.map((option) => {
-                const isSelected = value === option.value;
-                return (
-                  <li key={String(option.value)}
-                    role="option"
-                    aria-selected={isSelected}
-                    data-selected={isSelected}
-                    tabIndex={-1}
-                    onClick={() => {
-                      onChange(option.value);
-                      setOpen(false);
-                      buttonRef.current?.focus();
-                    }}
-                    className={cn(
-                      "group flex cursor-pointer items-center justify-between gap-2 rounded-2xl px-3 py-2 transition",
-                      isSelected ? "bg-primary text-primary-foreground" : "hover:bg-muted"
-                    )}
-                  >
-                    <div>
-                      <span className="block text-sm font-medium">{option.label}</span>
-                      {option.description ? (
-                        <span
-                          className={cn(
-                            "text-xs transition-colors",
-                            isSelected ? "text-primary-foreground/90" : "text-muted-foreground/80 group-hover:text-muted-foreground"
-                          )}
-                        >
-                          {option.description}
-                        </span>
-                      ) : null}
-                    </div>
-                    {isSelected ? <Check className="h-4 w-4" aria-hidden="true" /> : null}
-                  </li>
-                );
-              })
-            )}
-          </ul>
-        </div>
-      )}
+      {mounted && open && dropdownPosition.width > 0
+        ? createPortal(
+            <div
+              ref={dropdownRef}
+              className={cn(
+                "fixed z-[140] min-w-[240px] rounded-3xl border border-muted bg-background p-3 shadow-2xl",
+                dropdownClassName
+              )}
+              style={{
+                top: dropdownPosition.top,
+                left: dropdownPosition.left,
+                width: dropdownPosition.width,
+              }}
+            >
+              {searchEnabled && options.length > 6 ? (
+                <div className="mb-2 flex items-center gap-2 rounded-2xl border border-muted bg-background px-2">
+                  <Search className="h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    className="h-9 w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
+                    placeholder="Buscar..."
+                  />
+                </div>
+              ) : null}
+              <ul
+                id={listboxId}
+                ref={listRef}
+                role="listbox"
+                className="overflow-y-auto pr-1 text-sm"
+                style={{ maxHeight: dropdownPosition.maxHeight }}
+              >
+                {filtered.length === 0 ? (
+                  <li className="px-3 py-2 text-sm text-muted-foreground">{emptyText}</li>
+                ) : (
+                  filtered.map((option) => {
+                    const isSelected = value === option.value;
+                    return (
+                      <li
+                        key={String(option.value)}
+                        role="option"
+                        aria-selected={isSelected}
+                        data-selected={isSelected}
+                        tabIndex={-1}
+                        onClick={() => {
+                          onChange(option.value);
+                          setOpen(false);
+                          buttonRef.current?.focus();
+                        }}
+                        className={cn(
+                          "group flex cursor-pointer items-center justify-between gap-2 rounded-2xl px-3 py-2 transition",
+                          isSelected ? "bg-primary text-primary-foreground" : "hover:bg-muted"
+                        )}
+                      >
+                        <div>
+                          <span className="block text-sm font-medium">{option.label}</span>
+                          {option.description ? (
+                            <span
+                              className={cn(
+                                "text-xs transition-colors",
+                                isSelected
+                                  ? "text-primary-foreground/90"
+                                  : "text-muted-foreground/80 group-hover:text-muted-foreground"
+                              )}
+                            >
+                              {option.description}
+                            </span>
+                          ) : null}
+                        </div>
+                        {isSelected ? <Check className="h-4 w-4" aria-hidden="true" /> : null}
+                      </li>
+                    );
+                  })
+                )}
+              </ul>
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   );
 }
