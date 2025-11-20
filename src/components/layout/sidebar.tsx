@@ -104,9 +104,10 @@ interface SidebarProps {
   collapsed?: boolean;
   onToggleCollapse?: () => void;
   variant?: "desktop" | "mobile";
+  onNavigate?: () => void;
 }
 
-export function Sidebar({ collapsed = false, onToggleCollapse, variant = "desktop" }: SidebarProps) {
+export function Sidebar({ collapsed = false, onToggleCollapse, variant = "desktop", onNavigate }: SidebarProps) {
   const pathname = usePathname();
   const [currentHash, setCurrentHash] = useState<string>("#resumen");
   const session = useSession();
@@ -154,7 +155,12 @@ export function Sidebar({ collapsed = false, onToggleCollapse, variant = "deskto
                 event.preventDefault();
                 event.stopPropagation();
               }
-            : undefined;
+            : (variant === "mobile" && onNavigate)
+              ? () => {
+                  // Cerrar el drawer móvil al navegar
+                  onNavigate();
+                }
+              : undefined;
           const key = `${item.href.pathname}${item.href.hash ? `#${item.href.hash}` : ""}`;
           return (
             <Link key={key} href={item.href} aria-current={isActive ? "page" : undefined}

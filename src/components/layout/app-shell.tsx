@@ -11,6 +11,7 @@ import type { SessionPayload } from "@/lib/auth/session";
 import { SessionProvider, useSession } from "@/components/providers/session-provider";
 import { useToast } from "@/components/ui/toast-provider";
 import { isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
+import { useRef } from "react";
 
 const HIDE_CHROME_PATHS = new Set<string>(["/", "/meseros/comandas"]);
 const FACTURADOR_ALLOWED_PATHS = ["/dashboard", "/facturacion", "/facturas", "/caja", "/reportes"] as const;
@@ -32,6 +33,8 @@ function AppShellInner({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { toast } = useToast();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const touchStartXRef = useRef<number | null>(null);
   const session = useSession();
 
   const hideNavigation = !pathname || HIDE_CHROME_PATHS.has(pathname);
@@ -54,6 +57,24 @@ function AppShellInner({ children }: { children: ReactNode }) {
     router.replace("/facturacion");
   }, [navigationRestricted, pathname, router, toast]);
 
+  // Escucha el evento global para abrir el menú móvil desde el header
+  useEffect(() => {
+    const handler = () => setMobileNavOpen(true);
+    window.addEventListener("open-mobile-nav", handler as EventListener);
+    return () => window.removeEventListener("open-mobile-nav", handler as EventListener);
+  }, []);
+
+  // Bloquear scroll del body cuando el drawer móvil está abierto
+  useEffect(() => {
+    if (mobileNavOpen) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = prev;
+      };
+    }
+  }, [mobileNavOpen]);
+
   return hideNavigation ? (
     <>
       <SiteHeader />
@@ -64,6 +85,58 @@ function AppShellInner({ children }: { children: ReactNode }) {
   ) : (
     <>
       <SiteHeader />
+      {/* Drawer de navegación móvil (deslizable) */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden" aria-modal="true" role="dialog">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-background/60 backdrop-blur-sm transition-opacity duration-200"
+            onClick={() => setMobileNavOpen(false)}
+          />
+          {/* Panel */}
+          <div
+            className={cn(
+              "absolute left-0 top-0 h-full w-[18rem] sm:w-[20rem] border-r bg-background shadow-2xl",
+              "transform transition-transform duration-300",
+              mobileNavOpen ? "translate-x-0" : "-translate-x-full"
+            )}
+            onTouchStart={(e) => {
+              touchStartXRef.current = e.touches[0]?.clientX ?? null;
+            }}
+            onTouchMove={(e) => {
+              const startX = touchStartXRef.current;
+              const x = e.touches[0]?.clientX ?? 0;
+              if (startX != null) {
+                const dx = x - startX;
+                if (dx > 70) {
+                  setMobileNavOpen(false);
+                  touchStartXRef.current = null;
+                }
+              }
+            }}
+            onTouchEnd={() => {
+              touchStartXRef.current = null;
+            }}
+          >
+            <div className="flex h-full flex-col p-2">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-semibold text-muted-foreground">Menú</span>
+                <button
+                  type="button"
+                  onClick={() => setMobileNavOpen(false)}
+                  className="text-sm text-muted-foreground hover:underline"
+                  aria-label="Cerrar menú"
+                >
+                  Cerrar
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <Sidebar variant="mobile" collapsed={false} onNavigate={() => setMobileNavOpen(false)} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div
         className={cn(
           "min-h-screen overflow-x-hidden lg:grid lg:gap-4",
