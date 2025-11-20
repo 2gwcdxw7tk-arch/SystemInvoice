@@ -207,6 +207,22 @@ export default function CashManagementPage() {
   const [printModalOpen, setPrintModalOpen] = useState(false);
   const [printUrl, setPrintUrl] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [iframeLoading, setIframeLoading] = useState(false);
+  const [iframeError, setIframeError] = useState<string | null>(null);
+
+  const openPrintModal = useCallback((rawUrl: string) => {
+    try {
+      const absolute = new URL(rawUrl, window.location.origin).href;
+      setIframeLoading(true);
+      setIframeError(null);
+      setPrintUrl(absolute);
+      setPrintModalOpen(true);
+    } catch {
+      setIframeError("URL de reporte inválida");
+      setPrintUrl(null);
+      setPrintModalOpen(true);
+    }
+  }, []);
 
   const loadCashSession = useCallback(async () => {
     if (!canAccess) {
@@ -451,8 +467,7 @@ export default function CashManagementPage() {
       });
       setOpeningDenoms([]);
       if (data?.report_url) {
-        setPrintUrl(String(data.report_url));
-        setPrintModalOpen(true);
+        openPrintModal(String(data.report_url));
       }
       await loadCashSession();
     } catch (error) {
@@ -464,16 +479,12 @@ export default function CashManagementPage() {
   }, [currentAdminId, isAdmin, loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, openingForm.operatorAdminUserId, openingDenoms, toast]);
 
   const handleOpenOpeningReport = useCallback((sessionId: number) => {
-    const url = `/api/cajas/aperturas/${sessionId}/reporte?format=html`;
-    setPrintUrl(url);
-    setPrintModalOpen(true);
-  }, []);
+    openPrintModal(`/api/cajas/aperturas/${sessionId}/reporte?format=html`);
+  }, [openPrintModal]);
 
   const handleOpenClosureReport = useCallback((sessionId: number) => {
-    const url = `/api/cajas/cierres/${sessionId}/reporte?format=html`;
-    setPrintUrl(url);
-    setPrintModalOpen(true);
-  }, []);
+    openPrintModal(`/api/cajas/cierres/${sessionId}/reporte?format=html`);
+  }, [openPrintModal]);
 
   const addClosingPayment = useCallback(() => {
     setClosingForm((prev) => ({
@@ -616,8 +627,7 @@ export default function CashManagementPage() {
       setClosingForm({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments(), targetSessionId: null });
       await loadCashSession();
       if (data?.report_url) {
-        setPrintUrl(String(data.report_url));
-        setPrintModalOpen(true);
+        openPrintModal(String(data.report_url));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo cerrar la caja";
@@ -1142,14 +1152,14 @@ export default function CashManagementPage() {
 
       <Modal
         open={printModalOpen}
-        onClose={() => { setPrintModalOpen(false); setPrintUrl(null); }}
+        onClose={() => { setPrintModalOpen(false); setPrintUrl(null); setIframeLoading(false); setIframeError(null); }}
         title="Imprimir reporte de caja"
         description="Vista preliminar del reporte. Puedes imprimir o abrir en pestaña."
         contentClassName="max-w-5xl"
       >
         {printUrl ? (
           <div className="space-y-3">
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button
                 type="button"
                 onClick={() => {
@@ -1161,15 +1171,70 @@ export default function CashManagementPage() {
                     window.open(printUrl, "_blank", "noopener,noreferrer");
                   }
                 }}
+                disabled={!!iframeError || iframeLoading}
               >
-                Imprimir
+                {iframeLoading ? "Cargando…" : "Imprimir"}
               </Button>
               <Button type="button" variant="outline" asChild>
                 <a href={printUrl} target="_blank" rel="noreferrer noopener">Abrir en pestaña</a>
               </Button>
+              {iframeError ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (!printUrl) return;
+                    setIframeLoading(true);
+                    setIframeError(null);
+                    try {
+                      const reloaded = new URL(printUrl);
+                      reloaded.searchParams.set("_ts", Date.now().toString());
+                      setPrintUrl(reloaded.href);
+                    } catch {
+                      setIframeError("No se pudo recargar el reporte");
+                      setIframeLoading(false);
+                    }
+                  }}
+                >
+                  Reintentar
+                </Button>
+              ) : null}
             </div>
             <div className="h-[70vh] overflow-hidden rounded-2xl border">
-              <iframe ref={iframeRef} src={printUrl} title="Reporte de caja" className="h-full w-full" />
+              {iframeError ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-sm">
+                  <p className="font-semibold text-destructive">{iframeError}</p>
+                  <p className="text-muted-foreground">Abre en una pestaña para más detalles o reintenta.</p>
+                </div>
+              ) : (
+                <iframe
+                  ref={iframeRef}
+                  src={printUrl}
+                  title="Reporte de caja"
+                  className="h-full w-full"
+                  onLoad={() => {
+                    setIframeLoading(false);
+                    try {
+                      const doc = iframeRef.current?.contentDocument;
+                      const ct = doc?.contentType || "";
+                      if (ct && !/html/i.test(ct)) {
+                        const bodyText = doc?.body?.innerText?.trim() || "";
+                        if (bodyText.startsWith("{") && bodyText.includes("\"success\":false")) {
+                          setIframeError("Error al cargar el reporte. Verifica permisos.");
+                        } else if (!bodyText) {
+                          setIframeError("Contenido vacío del reporte.");
+                        }
+                      }
+                    } catch {
+                      /* noop */
+                    }
+                  }}
+                  onError={() => {
+                    setIframeLoading(false);
+                    setIframeError("No se pudo cargar el iframe del reporte");
+                  }}
+                />
+              )}
             </div>
           </div>
         ) : (
