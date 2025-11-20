@@ -125,6 +125,15 @@ const paymentMethodOptions: ComboboxOption<PaymentMethod>[] = [
 
 const HISTORY_FILTER_ALL = "__ALL__";
 
+type LoadCashSessionResult = {
+  activeSession: CashRegisterActiveSession | null;
+  cashRegisters: CashRegisterAssignmentOption[];
+  defaultCashRegisterId: number | null;
+  recentSessions: CashRegisterSessionSnapshot[];
+  operators: CashRegisterOperatorOption[];
+  overview: CashRegisterOverviewRegister[];
+};
+
 const formatTimestampLocale = (value: string | null | undefined): string => {
   if (!value) return "Sin registro";
   const date = new Date(value);
@@ -224,10 +233,10 @@ export default function CashManagementPage() {
     }
   }, []);
 
-  const loadCashSession = useCallback(async () => {
+  const loadCashSession = useCallback(async (): Promise<LoadCashSessionResult | null> => {
     if (!canAccess) {
       setCashState((prev) => ({ ...prev, loading: false }));
-      return;
+      return null;
     }
     setCashState((prev) => ({ ...prev, loading: true }));
     try {
@@ -245,14 +254,18 @@ export default function CashManagementPage() {
         ? data.overview.registers
         : [];
 
-      setCashState({
-        loading: false,
+      const payload: LoadCashSessionResult = {
         activeSession: (data?.activeSession ?? null) as CashRegisterActiveSession | null,
         cashRegisters: assignments,
         defaultCashRegisterId: typeof data?.defaultCashRegisterId === "number" ? data.defaultCashRegisterId : null,
         recentSessions,
         operators,
         overview,
+      };
+
+      setCashState({
+        loading: false,
+        ...payload,
       });
       setCashError(null);
 
@@ -267,15 +280,31 @@ export default function CashManagementPage() {
         cashRegisterCode: prev.cashRegisterCode || preferred?.cashRegisterCode || "",
         operatorAdminUserId: prev.operatorAdminUserId ?? fallbackOperatorId ?? null,
       }));
+
+      return payload;
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo obtener la información de la caja";
-      setCashState((prev) => ({ ...prev, loading: false, activeSession: null }));
+      setCashState({
+        loading: false,
+        activeSession: null,
+        cashRegisters: [],
+        defaultCashRegisterId: null,
+        recentSessions: [],
+        operators: [],
+        overview: [],
+      });
+      setOpeningForm((prev) => ({
+        ...prev,
+        cashRegisterCode: "",
+        operatorAdminUserId: isAdmin ? prev.operatorAdminUserId ?? currentAdminId : currentAdminId,
+      }));
       setCashError(message);
       toast({
         variant: "error",
         title: "Caja",
         description: message,
       });
+      return null;
     }
   }, [canAccess, currentAdminId, isAdmin, toast]);
 
@@ -469,17 +498,67 @@ export default function CashManagementPage() {
         operatorAdminUserId: resolvedOperatorId,
       });
       setOpeningDenoms([]);
-      if (data?.report_url) {
-        openPrintModal(String(data.report_url));
+      const reportUrl = data?.report_url ? String(data.report_url) : null;
+      const openedSession = (data?.session ?? null) as CashRegisterActiveSession | null;
+      if (openedSession) {
+        setCashState((prev) => {
+          const snapshot: CashRegisterSessionSnapshot = {
+            id: openedSession.id,
+            status: "OPEN",
+            openingAmount: openedSession.openingAmount,
+            openingAt: openedSession.openingAt,
+            closingAmount: null,
+            closingAt: null,
+            cashRegister: {
+              code: openedSession.cashRegister.cashRegisterCode,
+              name: openedSession.cashRegister.cashRegisterName,
+              warehouseCode: openedSession.cashRegister.warehouseCode,
+              warehouseName: openedSession.cashRegister.warehouseName,
+            },
+          };
+          const filteredRecent = prev.recentSessions.filter((sessionRow) => sessionRow.id !== openedSession.id);
+          const nextRecent = [snapshot, ...filteredRecent].slice(0, 20);
+          const operatorMeta = prev.operators.find((operator) => operator.adminUserId === resolvedOperatorId) ?? null;
+          const fallbackUsername = operatorMeta?.username ?? session?.sub ?? String(resolvedOperatorId);
+          const fallbackDisplay =
+            operatorMeta?.displayName?.trim() || operatorMeta?.username || session?.name || fallbackUsername;
+          const nextOverview = prev.overview.map((register) => {
+            if (register.cashRegisterCode !== openedSession.cashRegister.cashRegisterCode) {
+              return register;
+            }
+            return {
+              ...register,
+              activeSession: {
+                id: openedSession.id,
+                adminUserId: resolvedOperatorId,
+                adminUsername: fallbackUsername,
+                adminDisplayName: fallbackDisplay,
+                openingAt: openedSession.openingAt,
+                openingAmount: openedSession.openingAmount,
+              },
+            };
+          });
+          return {
+            ...prev,
+            loading: false,
+            activeSession: openedSession,
+            recentSessions: nextRecent,
+            overview: nextOverview,
+          };
+        });
+        setCashError(null);
       }
       await loadCashSession();
+      if (reportUrl) {
+        openPrintModal(reportUrl);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo abrir la caja";
       toast({ variant: "error", title: "Caja", description: message });
     } finally {
       setOpeningSubmitting(false);
     }
-  }, [currentAdminId, isAdmin, loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, openingForm.operatorAdminUserId, openingDenoms, toast, openPrintModal]);
+  }, [currentAdminId, isAdmin, loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, openingForm.operatorAdminUserId, openingDenoms, session?.name, session?.sub, toast, openPrintModal]);
 
   const handleOpenOpeningReport = useCallback((sessionId: number) => {
     openPrintModal(`/api/cajas/aperturas/${sessionId}/reporte?format=html`);
@@ -632,10 +711,59 @@ export default function CashManagementPage() {
       }
       setClosingModalOpen(false);
       setClosingForm({ closingAmount: "", closingNotes: "", payments: createInitialClosingPayments(), targetSessionId: null });
+      setClosingDenoms([]);
+      const reportUrl = data?.report_url ? String(data.report_url) : null;
+      const summary = (data?.summary ?? null) as
+        | {
+            sessionId: number;
+            openingAmount: number;
+            openingAt: string;
+            closingAmount: number | null;
+            closingAt: string | null;
+            cashRegister: {
+              cashRegisterCode: string;
+              cashRegisterName: string;
+              warehouseCode: string;
+              warehouseName: string;
+            };
+          }
+        | null;
+      const closingSessionId = summary?.sessionId ?? sessionId;
+      setCashState((prev) => {
+        const filteredRecent = prev.recentSessions.filter((snapshot) => snapshot.id !== closingSessionId);
+        const snapshot: CashRegisterSessionSnapshot | null = summary
+          ? {
+              id: summary.sessionId,
+              status: "CLOSED",
+              openingAmount: summary.openingAmount,
+              openingAt: summary.openingAt,
+              closingAmount: summary.closingAmount ?? null,
+              closingAt: summary.closingAt ?? null,
+              cashRegister: {
+                code: summary.cashRegister.cashRegisterCode,
+                name: summary.cashRegister.cashRegisterName,
+                warehouseCode: summary.cashRegister.warehouseCode,
+                warehouseName: summary.cashRegister.warehouseName,
+              },
+            }
+          : null;
+        const nextRecent = snapshot ? [snapshot, ...filteredRecent].slice(0, 20) : filteredRecent;
+        const nextOverview = prev.overview.map((register) =>
+          register.activeSession?.id === closingSessionId ? { ...register, activeSession: null } : register
+        );
+        const nextActiveSession = prev.activeSession && prev.activeSession.id === closingSessionId ? null : prev.activeSession;
+        return {
+          ...prev,
+          loading: false,
+          activeSession: nextActiveSession,
+          recentSessions: nextRecent,
+          overview: nextOverview,
+        };
+      });
+      setCashError(null);
       await loadCashSession();
-      // Después de refrescar sesión activa, abrir el reporte si existe
-      if (data?.report_url) {
-        openPrintModal(String(data.report_url));
+      if (reportUrl) {
+        openPrintModal(reportUrl);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo cerrar la caja";

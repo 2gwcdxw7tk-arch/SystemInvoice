@@ -1781,7 +1781,7 @@ export default function PreferenciasPage() {
                             </div>
                           )}
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 align-top">
                           <div className="flex flex-col gap-2">
                             <Combobox
                               value={selection || null}
@@ -1796,6 +1796,7 @@ export default function PreferenciasPage() {
                               emptyText="Sin coincidencias"
                               disabled={disableActions}
                               ariaLabel={`Asignar caja a ${user.displayName ?? user.username}`}
+                              dropdownClassName="z-[60]"
                             />
                             <Button
                               type="button"

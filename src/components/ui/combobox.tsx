@@ -21,6 +21,7 @@ interface ComboboxProps<T = string> {
   emptyText?: string;
   label?: string;
   ariaLabel?: string;
+  dropdownClassName?: string;
 }
 
 function optionToString<T>(option: ComboboxOption<T>) {
@@ -38,6 +39,7 @@ export function Combobox<T = string>({
   emptyText = "Sin resultados",
   label,
   ariaLabel,
+  dropdownClassName,
 }: ComboboxProps<T>) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -113,7 +115,7 @@ export function Combobox<T = string>({
       </button>
 
       {open && (
-        <div className="absolute left-0 z-50 mt-2 w-full min-w-[240px] rounded-3xl border border-muted bg-background p-3 shadow-2xl">
+        <div className={cn("absolute left-0 z-50 mt-2 w-full min-w-[240px] rounded-3xl border border-muted bg-background p-3 shadow-2xl", dropdownClassName)}>
           {searchEnabled && options.length > 6 ? (
             <div className="mb-2 flex items-center gap-2 rounded-2xl border border-muted bg-background px-2">
               <Search className="h-3.5 w-3.5 text-muted-foreground" />

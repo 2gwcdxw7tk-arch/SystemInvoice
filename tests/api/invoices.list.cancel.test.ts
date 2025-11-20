@@ -1,7 +1,17 @@
 import { NextRequest } from 'next/server';
 
 // Forzar modo mock en servicios
-jest.mock('@/lib/env', () => ({ env: { useMockData: true } }));
+jest.mock('@/lib/env', () => {
+  const actual = jest.requireActual<typeof import('@/lib/env')>('@/lib/env');
+  return {
+    env: {
+      ...actual.env,
+      useMockData: true,
+      MOCK_DATA: true,
+      isProduction: false,
+    },
+  };
+});
 
 // Mock de sesión/admin para rutas
 jest.mock('@/lib/auth/session', () => ({
@@ -47,6 +57,44 @@ describe('Invoices API - list and cancel (mock mode)', () => {
   // Importar handlers después de aplicar los mocks
   const { GET: ListGET, POST: InvoicesPOST } = require('@/app/api/invoices/route');
   const { GET: DetailGET, PATCH: CancelPATCH } = require('@/app/api/invoices/[invoiceId]/route');
+
+  const buildNextRequest = (url: string, init?: RequestInit) => {
+    const request = new Request(url, init) as unknown as NextRequest;
+    (request as any).cookies = {
+      get: () => ({ value: 'mock-session' }),
+    };
+    return request;
+  };
+
+  it('rechaza la factura si los pagos no cubren el total', async () => {
+    const payload = {
+      invoice_number: 'TEST-INV-PENDING',
+      invoice_date: new Date().toISOString().slice(0, 10),
+      table_code: 'M-02',
+      waiter_code: 'W-02',
+      origin_order_id: null,
+      subtotal: 200,
+      service_charge: 0,
+      vat_amount: 30,
+      vat_rate: 0.15,
+      total_amount: 230,
+      currency_code: 'NIO',
+      items: [{ article_code: 'A-2', description: 'Prod 2', quantity: 1, unit_price: 200, unit: 'RETAIL' }],
+      payments: [{ method: 'CASH', amount: 100 }],
+    };
+
+    const request = buildNextRequest('http://localhost/api/invoices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const response = await InvoicesPOST(request);
+    expect(response.status).toBe(409);
+    const json: any = await response.json();
+    expect(String(json.message).toLowerCase()).toContain('saldo pendiente');
+  });
+
   it('creates, lists, shows detail and cancels an invoice', async () => {
     // 1) Crear factura
     const payload = {
@@ -65,11 +113,11 @@ describe('Invoices API - list and cancel (mock mode)', () => {
       payments: [ { method: 'CASH', amount: 115 } ],
     };
 
-    const postReq = new Request('http://localhost/api/invoices', {
+    const postReq = buildNextRequest('http://localhost/api/invoices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    }) as unknown as NextRequest;
+    });
     const postRes = await InvoicesPOST(postReq);
     expect(postRes.status).toBe(201);
     const postJson: any = await postRes.json();
@@ -78,7 +126,7 @@ describe('Invoices API - list and cancel (mock mode)', () => {
     const id: number = postJson.id;
 
     // 2) Listar
-    const listReq = new Request('http://localhost/api/invoices?page=1&pageSize=20', { method: 'GET' }) as unknown as NextRequest;
+    const listReq = buildNextRequest('http://localhost/api/invoices?page=1&pageSize=20', { method: 'GET' });
     const listRes = await ListGET(listReq);
     expect(listRes.status).toBe(200);
     const listJson: any = await listRes.json();
@@ -86,18 +134,18 @@ describe('Invoices API - list and cancel (mock mode)', () => {
     expect(listJson.items.some((it: any) => it.invoice_number === 'TEST-INV-1')).toBe(true);
 
     // 3) Detalle
-    const detReq = new Request(`http://localhost/api/invoices/${id}`, { method: 'GET' }) as unknown as NextRequest;
+    const detReq = buildNextRequest(`http://localhost/api/invoices/${id}`, { method: 'GET' });
     const detRes = await DetailGET(detReq, { params: Promise.resolve({ invoiceId: String(id) }) });
     expect(detRes.status).toBe(200);
     const detJson: any = await detRes.json();
     expect(detJson.invoice.invoice_number).toBe('TEST-INV-1');
 
     // 4) Anular
-    const patchReq = new Request(`http://localhost/api/invoices/${id}`, {
+    const patchReq = buildNextRequest(`http://localhost/api/invoices/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'ANULADA' }),
-    }) as unknown as NextRequest;
+    });
     const patchRes = await CancelPATCH(patchReq, { params: Promise.resolve({ invoiceId: String(id) }) });
     expect(patchRes.status).toBe(200);
     const patchJson: any = await patchRes.json();

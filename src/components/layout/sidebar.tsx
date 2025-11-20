@@ -143,7 +143,7 @@ export function Sidebar({ collapsed = false, onToggleCollapse, variant = "deskto
         </div>
       )}
 
-      <nav className="flex-1 space-y-1 overflow-y-auto overflow-x-hidden pr-1">
+      <nav className="flex-1 space-y-1 overflow-x-hidden pr-1">
         {navItems.map((item) => {
           const Icon = item.icon;
           const itemHash = item.href.hash ? `#${item.href.hash}` : null;

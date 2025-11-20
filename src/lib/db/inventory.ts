@@ -8,6 +8,7 @@ import { query, withTransaction } from "@/lib/db/postgres";
 import { getArticleByCode, ArticleDetail } from "@/lib/db/articles";
 import { getKitComponents } from "@/lib/db/articleKits";
 import { getWarehouseByCode, listWarehouses } from "@/lib/db/warehouses";
+import { toCentralClosedDate, toCentralEndOfDay } from "@/lib/utils/date";
 
 type MovementDirection = "IN" | "OUT";
 export type TransactionType = "PURCHASE" | "CONSUMPTION" | "ADJUSTMENT" | "TRANSFER";
@@ -458,15 +459,13 @@ function toNumber(value: NumericLike | undefined | null, fallback = 0): number {
   return num;
 }
 
-function parseDateInput(value?: string): Date {
-  if (!value) return new Date();
-  const normalized = value.includes("T") ? value : `${value}T00:00:00`;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) {
-    throw new Error("Fecha inválida");
+function parseDateInput(value?: string, mode: "start" | "end" = "start"): Date {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    const today = new Date();
+    return mode === "start" ? toCentralClosedDate(today) : toCentralEndOfDay(today);
   }
-  date.setHours(0, 0, 0, 0);
-  return date;
+  return mode === "start" ? toCentralClosedDate(trimmed) : toCentralEndOfDay(trimmed);
 }
 
 function iso(date: Date): string {
@@ -1803,8 +1802,8 @@ export async function listTransfers(filters: TransferFilter = {}): Promise<Trans
       rows = rows.filter((tx) => tx.occurred_at >= fromIso);
     }
     if (filters.to) {
-      const upper = parseDateInput(filters.to);
-      const upperIso = new Date(upper.getTime() + 24 * 60 * 60 * 1000).toISOString();
+      const upper = parseDateInput(filters.to, "end");
+      const upperIso = new Date(upper.getTime() + 1).toISOString();
       rows = rows.filter((tx) => tx.occurred_at < upperIso);
     }
     if (filters.article) {
@@ -1845,12 +1844,14 @@ export async function listTransfers(filters: TransferFilter = {}): Promise<Trans
     conditions.push(`dest.to_code IS NOT NULL AND UPPER(dest.to_code) = $${params.length}`);
   }
   if (filters.from) {
-    params.push(filters.from);
-    conditions.push(`t.occurred_at::date >= $${params.length}`);
+    const from = parseDateInput(filters.from);
+    params.push(from.toISOString());
+    conditions.push(`t.occurred_at >= $${params.length}::timestamptz`);
   }
   if (filters.to) {
-    params.push(filters.to);
-    conditions.push(`t.occurred_at::date <= $${params.length}`);
+    const to = parseDateInput(filters.to, "end");
+    params.push(to.toISOString());
+    conditions.push(`t.occurred_at <= $${params.length}::timestamptz`);
   }
   if (filters.article) {
     params.push(`%${filters.article.toUpperCase()}%`);
@@ -1955,8 +1956,8 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
       rows = rows.filter((row) => row.occurred_at >= from);
     }
     if (filters.to) {
-      const to = parseDateInput(filters.to);
-      const upper = new Date(to.getTime() + 24 * 60 * 60 * 1000).toISOString();
+      const to = parseDateInput(filters.to, "end");
+      const upper = new Date(to.getTime() + 1).toISOString();
       rows = rows.filter((row) => row.occurred_at < upper);
     }
     rows.sort((a, b) => {
@@ -2035,12 +2036,14 @@ export async function listKardex(filters: KardexFilter = {}): Promise<KardexMove
     clauses.push(`UPPER(w.code) = $${params.length}`);
   }
   if (filters.from) {
-    params.push(filters.from);
-    clauses.push(`t.occurred_at::date >= $${params.length}`);
+    const from = parseDateInput(filters.from);
+    params.push(from.toISOString());
+    clauses.push(`t.occurred_at >= $${params.length}::timestamptz`);
   }
   if (filters.to) {
-    params.push(filters.to);
-    clauses.push(`t.occurred_at::date <= $${params.length}`);
+    const to = parseDateInput(filters.to, "end");
+    params.push(to.toISOString());
+    clauses.push(`t.occurred_at <= $${params.length}::timestamptz`);
   }
 
   const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -2253,8 +2256,8 @@ export async function listPurchases(filters: PurchaseListFilter = {}): Promise<P
       rows = rows.filter((tx) => tx.occurred_at >= from);
     }
     if (filters.to) {
-      const to = parseDateInput(filters.to);
-      const upper = new Date(to.getTime() + 24 * 60 * 60 * 1000).toISOString();
+      const to = parseDateInput(filters.to, "end");
+      const upper = new Date(to.getTime() + 1).toISOString();
       rows = rows.filter((tx) => tx.occurred_at < upper);
     }
     rows.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
@@ -2282,12 +2285,14 @@ export async function listPurchases(filters: PurchaseListFilter = {}): Promise<P
     clauses.push(`t.status = $${params.length}`);
   }
   if (filters.from) {
-    params.push(filters.from);
-    clauses.push(`t.occurred_at::date >= $${params.length}`);
+    const from = parseDateInput(filters.from);
+    params.push(from.toISOString());
+    clauses.push(`t.occurred_at >= $${params.length}::timestamptz`);
   }
   if (filters.to) {
-    params.push(filters.to);
-    clauses.push(`t.occurred_at::date <= $${params.length}`);
+    const to = parseDateInput(filters.to, "end");
+    params.push(to.toISOString());
+    clauses.push(`t.occurred_at <= $${params.length}::timestamptz`);
   }
 
   const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -2375,12 +2380,14 @@ export async function listConsumptions(filters: ConsumptionListFilter = {}): Pro
     )`);
   }
   if (filters.from) {
-    params.push(filters.from);
-    clauses.push(`t.occurred_at::date >= $${params.length}`);
+    const from = parseDateInput(filters.from);
+    params.push(from.toISOString());
+    clauses.push(`t.occurred_at >= $${params.length}::timestamptz`);
   }
   if (filters.to) {
-    params.push(filters.to);
-    clauses.push(`t.occurred_at::date <= $${params.length}`);
+    const to = parseDateInput(filters.to, "end");
+    params.push(to.toISOString());
+    clauses.push(`t.occurred_at <= $${params.length}::timestamptz`);
   }
 
   const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";

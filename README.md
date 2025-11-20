@@ -22,6 +22,12 @@ Toda la persistencia vive ahora sobre Prisma y se organiza en tres capas:
 
 El modo demo se conserva gracias a los servicios: cada servicio dispone de un contexto in-memory que emula la base sin tocar PostgreSQL cuando `MOCK_DATA=true`. Esto evita duplicar lógica y mantiene la paridad entre pruebas y producción.
 
+### Zona horaria y normalización de fechas
+
+- Todos los campos de fecha (sin componente horario) se guardan a las `00:00:00` en la zona horaria de Centroamérica (UTC-6). Para garantizarlo, usa los utilitarios de `src/lib/utils/date.ts` (`toCentralClosedDate` y `toCentralEndOfDay`).
+- Las columnas de auditoría continúan almacenando la hora exacta, pero ahora siempre se convierten con el desplazamiento -6 para conservar el valor real en la base.
+- Evita crear nuevos `Date` con desplazamientos manuales; centraliza cualquier parsing/normalización en los helpers anteriores para mantener consistencia entre facturas, movimientos de inventario y reportes.
+
 ### Estado del plan de migración
 
 La migración de módulos legacy (`src/lib/db/*.ts`) a repositorios Prisma ya concluyó para:
@@ -161,7 +167,7 @@ Respuesta exitosa:
 Validaciones clave:
 - `invoice_number` único.
 - El endpoint devuelve `409` si el administrador tiene rol `FACTURADOR` pero no existe una apertura de caja `OPEN` asociada a su usuario.
-- Suma de `payments.amount` puede ser mayor, igual o menor que `total_amount` (permite cambio o saldo). El cálculo del cambio/pending balance se realiza en el cliente.
+- La suma de `payments.amount` debe ser mayor o igual que `total_amount`. Si queda saldo pendiente el endpoint devuelve `409`; se permite excedente para calcular el cambio en el cliente.
 - `vat_rate` acepta porcentaje decimal (ej. 0.15) generado desde `NEXT_PUBLIC_VAT_RATE` y puede ser 0 si el cliente es exento (checkbox UI).
 - Servicio se calcula en el cliente con `NEXT_PUBLIC_SERVICE_RATE` cuando se activa el toggle "Con cargo".
 - `customer_name` y `customer_tax_id` permiten personalizar la identificación fiscal en la factura y ticket.

@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client"; // Type-only Prisma namespace for 
 import { inventoryService } from "@/lib/services/InventoryService";
 import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
 import type { IInvoiceRepository, InvoiceInsertResult, InvoicePersistenceInput } from "@/lib/repositories/invoices/IInvoiceRepository";
+import { toCentralClosedDate, toCentralEndOfDay } from "@/lib/utils/date";
 
 export class InvoiceRepository implements IInvoiceRepository {
   private readonly prisma: PrismaClient;
@@ -30,12 +31,14 @@ export class InvoiceRepository implements IInvoiceRepository {
         }
       }
 
+      const normalizedInvoiceDate = toCentralClosedDate(data.invoiceDate);
+
       const invoice = await tx.invoices.create({
         data: {
           invoice_number: data.invoice_number,
           table_code: tableCode,
           waiter_code: waiterCode,
-          invoice_date: data.invoiceDate,
+          invoice_date: normalizedInvoiceDate,
           origin_order_id: data.originOrderId,
           status: 'FACTURADA',
           subtotal: data.subtotal,
@@ -104,7 +107,7 @@ export class InvoiceRepository implements IInvoiceRepository {
         await inventoryService.registerInvoiceMovements({
           invoiceId,
           invoiceNumber: data.invoice_number,
-          invoiceDate: data.invoiceDate,
+          invoiceDate: normalizedInvoiceDate,
           tableCode: tableCode ?? null,
           customerName: data.customer_name ?? null,
           lines: movementLines,
@@ -263,8 +266,8 @@ export class InvoiceRepository implements IInvoiceRepository {
     const page = Math.max(1, Number(params.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(params.pageSize ?? 20)));
     const skip = (page - 1) * pageSize;
-    const from = params.from ? new Date(params.from.includes("T") ? params.from : `${params.from}T00:00:00`) : undefined;
-    const to = params.to ? new Date(params.to.includes("T") ? params.to : `${params.to}T23:59:59.999`) : undefined;
+    const from = params.from ? toCentralClosedDate(params.from) : undefined;
+    const to = params.to ? toCentralEndOfDay(params.to) : undefined;
     const where: Prisma.invoicesWhereInput = {};
     if (from || to) {
       where.invoice_date = { gte: from ?? undefined, lte: to ?? undefined };

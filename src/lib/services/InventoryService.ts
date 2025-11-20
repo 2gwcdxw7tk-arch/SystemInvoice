@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { env } from "@/lib/env";
 import type { Prisma } from "@prisma/client";
+import { toCentralClosedDate, toCentralEndOfDay } from "@/lib/utils/date";
 
 import type {
   MovementDirection,
@@ -86,15 +87,13 @@ function toNumber(value: NumericLike | undefined | null, fallback = 0): number {
   return num;
 }
 
-function parseDateInput(value?: string): Date {
-  if (!value) return new Date();
-  const normalized = value.includes("T") ? value : `${value}T00:00:00`;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) {
-    throw new Error("Fecha inválida");
+function parseDateInput(value?: string, mode: "start" | "end" = "start"): Date {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    const today = new Date();
+    return mode === "start" ? toCentralClosedDate(today) : toCentralEndOfDay(today);
   }
-  date.setHours(0, 0, 0, 0);
-  return date;
+  return mode === "start" ? toCentralClosedDate(trimmed) : toCentralEndOfDay(trimmed);
 }
 
 function generateTransactionCode(prefix: string): string {
@@ -911,7 +910,7 @@ export class InventoryService {
   async listTransfers(_filters?: TransferFilter): Promise<TransferListItem[]> {
     const filters = _filters ?? {};
     const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
-    const toDate = filters.to ? parseDateInput(filters.to) : undefined;
+    const toDate = filters.to ? parseDateInput(filters.to, "end") : undefined;
 
     const txs = await this.prisma.inventory_transactions.findMany({
       where: {
@@ -987,7 +986,7 @@ export class InventoryService {
       .map((code) => code.trim().toUpperCase())
       .filter((code) => code.length > 0);
     const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
-    const toDate = filters.to ? parseDateInput(filters.to) : undefined;
+    const toDate = filters.to ? parseDateInput(filters.to, "end") : undefined;
 
     const rows = await this.prisma.inventory_movements.findMany({
       where: {
@@ -1152,7 +1151,7 @@ export class InventoryService {
   async listPurchases(_filters?: PurchaseListFilter): Promise<PurchaseListItem[]> {
     const filters = _filters ?? {};
     const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
-    const toDate = filters.to ? parseDateInput(filters.to) : undefined;
+    const toDate = filters.to ? parseDateInput(filters.to, "end") : undefined;
 
     const txs = await this.prisma.inventory_transactions.findMany({
       where: {
@@ -1191,7 +1190,7 @@ export class InventoryService {
   async listConsumptions(_filters?: ConsumptionListFilter): Promise<ConsumptionMovementRow[]> {
     const filters = _filters ?? {};
     const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
-    const toDate = filters.to ? parseDateInput(filters.to) : undefined;
+    const toDate = filters.to ? parseDateInput(filters.to, "end") : undefined;
 
     const rows = await this.prisma.inventory_movements.findMany({
       where: {

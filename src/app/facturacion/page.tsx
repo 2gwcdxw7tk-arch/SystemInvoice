@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1973,6 +1973,7 @@ function FacturacionWorkspace({
 }) {
   const vatRate = VAT_RATE;
   const serviceRate = SERVICE_RATE;
+  const router = useRouter();
   const modeTitle = mode === "sin-pedido" ? "Facturación sin pedido" : "Facturación con pedido";
   const [orders, setOrders] = useState<TableOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -2136,6 +2137,29 @@ function FacturacionWorkspace({
   const [printDocument, setPrintDocument] = useState<string | null>(null);
   const [printTitle, setPrintTitle] = useState<string>("Ticket listo para imprimir");
   const [printReady, setPrintReady] = useState(false);
+  const manualExitNavigationRef = useRef<{ href: string; external: boolean } | null>(null);
+  const [manualExitModalOpen, setManualExitModalOpen] = useState(false);
+  const requestManualExitConfirmation = useCallback((target: { href: string; external: boolean }) => {
+    manualExitNavigationRef.current = target;
+    setManualExitModalOpen(true);
+  }, []);
+  const proceedManualExit = useCallback(() => {
+    const target = manualExitNavigationRef.current;
+    manualExitNavigationRef.current = null;
+    setManualExitModalOpen(false);
+    if (!target) {
+      return;
+    }
+    if (target.external) {
+      window.location.href = target.href;
+      return;
+    }
+    router.push(target.href);
+  }, [router]);
+  const cancelManualExit = useCallback(() => {
+    manualExitNavigationRef.current = null;
+    setManualExitModalOpen(false);
+  }, []);
   const printFrameRef = useRef<HTMLIFrameElement | null>(null);
 
   const closePrintModal = useCallback(() => {
@@ -2560,18 +2584,6 @@ function FacturacionWorkspace({
     if (!shouldWarnOnManualExit) {
       return;
     }
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = MANUAL_EXIT_WARNING;
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [shouldWarnOnManualExit]);
-
-  useEffect(() => {
-    if (!shouldWarnOnManualExit) {
-      return;
-    }
     const handleAnchorNavigation = (event: MouseEvent) => {
       if (event.defaultPrevented) {
         return;
@@ -2607,14 +2619,21 @@ function FacturacionWorkspace({
       if (sameLocation) {
         return;
       }
-      const allowNavigation = window.confirm(MANUAL_EXIT_WARNING);
-      if (!allowNavigation) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const isExternal = url.origin !== window.location.origin;
+      const normalizedHref = isExternal ? url.toString() : `${url.pathname}${url.search}${url.hash}`;
+      requestManualExitConfirmation({ href: normalizedHref, external: isExternal });
     };
     document.addEventListener("click", handleAnchorNavigation, true);
     return () => document.removeEventListener("click", handleAnchorNavigation, true);
+  }, [requestManualExitConfirmation, shouldWarnOnManualExit]);
+
+  useEffect(() => {
+    if (!shouldWarnOnManualExit) {
+      manualExitNavigationRef.current = null;
+      setManualExitModalOpen(false);
+    }
   }, [shouldWarnOnManualExit]);
 
   const addItemToInvoice = useCallback(
@@ -2851,6 +2870,7 @@ function FacturacionWorkspace({
    const totalDue = summary?.total ?? 0;
   const changeDue = Math.max(amountReceivedNumber - totalDue, 0);
   const pendingBalance = Math.max(totalDue - amountReceivedNumber, 0);
+  const hasPendingBalance = Number(pendingBalance.toFixed(2)) > 0;
 
   // (resaltado de disponibilidad removido)
 
@@ -2894,6 +2914,11 @@ function FacturacionWorkspace({
   toast({ variant: "warning", title: "Facturación", description: "Agrega al menos un producto antes de generar la factura." });
   return { id: null, invoiceNumber: null };
     }
+    if (hasPendingBalance) {
+      toast({ variant: "warning", title: "Pago incompleto", description: "Registra los pagos pendientes antes de guardar la factura." });
+      return { id: null, invoiceNumber: null };
+    }
+
     const normalizedTableCode = isDraft
       ? null
       : (selectedOrder!.tableId ?? null);
@@ -2957,6 +2982,10 @@ function FacturacionWorkspace({
   const handlePrint = async () => {
     if (!summary) return;
     if (!isDraft && !selectedOrder) return;
+    if (hasPendingBalance) {
+      toast({ variant: "warning", title: "Pago incompleto", description: "Registra el saldo pendiente antes de imprimir el ticket." });
+      return;
+    }
     const manualFlowActive = isDraft;
     const invoiceItems = itemsForSummary;
     const invoiceSummary = summary;
@@ -3442,7 +3471,7 @@ function FacturacionWorkspace({
              <div className="rounded-2xl bg-muted/40 p-4 text-foreground space-y-2">
                <div className="flex justify-between text-lg font-bold"><span>Total</span><span>{formatCurrency(totalDue, { currency: "local" })}</span></div>
                <div className="flex justify-between text-base font-semibold"><span>Cambio</span><span>{formatCurrency(changeDue, { currency: "local" })}</span></div>
-               <div className={cn("flex justify-between text-base font-semibold", pendingBalance > 0 ? "text-destructive" : "text-muted-foreground")}> <span>Saldo pendiente</span><span>{formatCurrency(pendingBalance, { currency: "local" })}</span></div>
+               <div className={cn("flex justify-between text-base font-semibold", hasPendingBalance ? "text-destructive" : "text-muted-foreground")}> <span>Saldo pendiente</span><span>{formatCurrency(pendingBalance, { currency: "local" })}</span></div>
              </div>
 
            </CardContent>
@@ -3452,7 +3481,7 @@ function FacturacionWorkspace({
                 type="button"
                 className="w-full gap-2 rounded-2xl sm:flex-1"
                 onClick={handlePrint}
-                disabled={!summary || itemsForSummary.length === 0 || (mustHaveOpenCashSession && !cashSessionState.activeSession)}
+                disabled={!summary || itemsForSummary.length === 0 || hasPendingBalance || (mustHaveOpenCashSession && !cashSessionState.activeSession)}
               >
                 <Printer className="h-4 w-4" /> Imprimir ticket
               </Button>
@@ -3474,6 +3503,28 @@ function FacturacionWorkspace({
 
        {/* Vista previa eliminada: se imprime directamente al presionar el botón */}
       </section>
+
+      <Modal
+        open={manualExitModalOpen}
+        onClose={cancelManualExit}
+        title="Descartar factura manual"
+        description="Se perderán los productos capturados en la factura manual si abandonas esta pantalla."
+        contentClassName="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Confirma si deseas salir sin guardar. Esta acción borra los artículos y notas ingresados hasta ahora.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={cancelManualExit}>
+              Seguir facturando
+            </Button>
+            <Button type="button" variant="destructive" className="rounded-2xl" onClick={proceedManualExit}>
+              Salir ahora
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={printModalOpen}

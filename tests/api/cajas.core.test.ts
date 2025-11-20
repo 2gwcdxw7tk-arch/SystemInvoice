@@ -150,7 +150,6 @@ describe('Cajas operaciones', () => {
     const res = await AperturasPOST(req);
     const body = await res.json();
     if (![200, 201].includes(res.status)) {
-      // eslint-disable-next-line no-console
       console.error('Apertura body', body);
     }
     expect([200,201]).toContain(res.status);
@@ -190,7 +189,6 @@ describe('Cajas operaciones', () => {
     const res = await CierresPOST(req);
     const body = await res.json();
     if (res.status !== 200) {
-      // eslint-disable-next-line no-console
       console.error('Cierre body', body);
     }
     expect(res.status).toBe(200);
@@ -273,7 +271,6 @@ describe('Cajas operaciones', () => {
     const res = await CierresPOST(req);
     const body = await res.json();
     if (res.status !== 200) {
-      // eslint-disable-next-line no-console
       console.error('Cierre cerrado body', body);
     }
     expect(res.status).toBe(200);

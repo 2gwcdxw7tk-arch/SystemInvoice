@@ -21,12 +21,13 @@
   - Update `README.md`, `.github/copilot-instructions.md`, and `.github/prompts/plan-sistemaFacturacion.prompt.md` with every significant change.
 
 ## Domain Patterns
-- **Facturación**: Flows are separated by `mode` in `src/app/facturacion/page.tsx`. Extend the existing switch instead of creating new routes.
+- **Facturación**: Flows are separated by `mode` in `src/app/facturacion/page.tsx`. Extiende el switch existente en lugar de crear rutas nuevas. Ninguna factura puede emitirse ni imprimirse cuando el saldo pendiente sea distinto de 0; la UI y el backend devuelven advertencia si falta registrar pagos.
 - **Facturas – Anulación**: Las facturas no se borran. La anulación cambia `invoices.status` a `ANULADA` y registra `cancelled_at`. El backend revierte movimientos de inventario al anular.
 - **Price Lists**: Use `useRef` caches (`catalogRequestedRef`, `articlesRequestedRef`) to manage fetch guards. Extend these guards instead of duplicating fetch logic.
 - **Authentication**: Use `adminUserService` and `waiterService`. Add new operations in services/repositories before modifying handlers.
 - **Tables**: Use `TableService` (`src/lib/services/TableService.ts`) to manage table catalog, reservations, waiter snapshots and table state. API routes under `/api/tables/**` y `/api/meseros/tables/**` must consume this service (no `db/tables`).
 - **Monetary Values**: Always use `getCurrencyFormatter` or `formatCurrency` to ensure consistent formatting.
+- **Fechas**: Normaliza todas las fechas de negocio a medianoche UTC-6 usando `toCentralClosedDate`/`toCentralEndOfDay` (`src/lib/utils/date.ts`). Las columnas de auditoría pueden conservar la hora exacta pero siempre calculada con el mismo desfase.
 - **Article–Warehouse Associations**: Use `ArticleWarehouseService` for listing/associating/desasociating bodegas de un artículo y para marcar bodega primaria. Este servicio sincroniza `articles.default_warehouse_id` y lo consumen `InventoryService` y los movimientos de venta. Nunca acceder directamente a tablas desde handlers.
 - **Environment Variables**: Usa una sola cadena de conexión para toda la app: `DB_CONNECTION_STRING`. Prisma y el runtime leen de la misma variable (se acepta `DATABASE_URL` solo como alias de compatibilidad si faltara). Lee variables a nivel de módulo y memorizalas cuando se reutilicen (e.g., `NEXT_PUBLIC_VAT_RATE`, `DEFAULT_PRICE_LIST_CODE`, `DEFAULT_SALES_WAREHOUSE_CODE`). `NEXT_PUBLIC_CLIENT_LOGO_URL` controla el logotipo mostrado en login y barra superior.
 - **Enlaces absolutos**: Usa `env.appUrl` (derivado de `NEXT_APP_URL`) para construir URLs de reportes u otras rutas públicas en los handlers; evita depender de `request.nextUrl.origin` para no terminar con `0.0.0.0` en producción.

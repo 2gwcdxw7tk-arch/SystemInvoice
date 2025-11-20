@@ -100,7 +100,7 @@ const responseSchema = z.object({
 export async function GET(request: NextRequest) {
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   const session = await parseSessionCookie(rawSession);
-  if (!session || session.role !== "admin") {
+  if (!session) {
     return NextResponse.json({ success: false, message: "Autenticación requerida" }, { status: 401 });
   }
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
 import { invoiceService } from "@/lib/services/InvoiceService";
+import { toCentralClosedDate } from "@/lib/utils/date";
 
 const paymentSchema = z.object({
   method: z.enum(["CASH", "CARD", "TRANSFER", "OTHER"]),
@@ -46,25 +47,11 @@ function parseInvoiceDate(value: string): Date {
   if (!normalized) {
     throw new Error("Fecha vacía");
   }
-
-  const dateOnlyMatch = /^\d{4}-\d{2}-\d{2}$/.test(normalized);
-  if (dateOnlyMatch) {
-    const [year, month, day] = normalized.split("-").map((part) => Number(part));
-    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-      throw new Error("Fecha inválida");
-    }
-    const date = new Date(year, month - 1, day, 12, 0, 0, 0);
-    if (Number.isNaN(date.getTime())) {
-      throw new Error("Fecha inválida");
-    }
-    return date;
-  }
-
-  const parsed = new Date(normalized.includes("T") ? normalized : `${normalized}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) {
+  try {
+    return toCentralClosedDate(normalized);
+  } catch {
     throw new Error("Fecha inválida");
   }
-  return parsed;
 }
 
 export async function POST(request: NextRequest) {
@@ -102,6 +89,15 @@ export async function POST(request: NextRequest) {
 
   try {
     const payload = parsed.data;
+    const paymentsTotal = payload.payments.reduce((acc, payment) => acc + payment.amount, 0);
+    const missingAmount = Math.max(Math.round((payload.total_amount - paymentsTotal) * 100) / 100, 0);
+    if (missingAmount > 0) {
+      return NextResponse.json(
+        { success: false, message: "No puedes guardar la factura con saldo pendiente. Registra el cobro completo antes de continuar." },
+        { status: 409 }
+      );
+    }
+
     let invoiceDate: Date;
     try {
       invoiceDate = parseInvoiceDate(payload.invoice_date);
