@@ -10,6 +10,7 @@ import {
   CashRegisterSessionRecord,
   CreateCashRegisterInput,
   CashDenominationLine,
+  DenominationKind,
   ExpectedPayment,
   ReportedPayment,
   UpdateCashRegisterInput,
@@ -90,12 +91,25 @@ function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterR
 }
 
 function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_default?: boolean }): CashRegisterSessionRecord {
-  const openingDenoms: CashDenominationLine[] | null = Array.isArray(session.opening_denominations)
-    ? (session.opening_denominations as Array<{ currency: string; value: number; qty: number; kind?: string }>)
-    : null;
-  const closingDenoms: CashDenominationLine[] | null = Array.isArray(session.closing_denominations)
-    ? (session.closing_denominations as Array<{ currency: string; value: number; qty: number; kind?: string }>)
-    : null;
+  const normalizeDenoms = (input: unknown): CashDenominationLine[] | null => {
+    if (!Array.isArray(input)) return null;
+    return (input as Array<{ currency: unknown; value: unknown; qty: unknown; kind?: unknown }>)
+      .map((d) => {
+        const rawKind = typeof d.kind === "string" ? d.kind.toUpperCase() : undefined;
+        const allowed: DenominationKind[] = ["COIN", "BILL", "OTHER"];
+        const kind = (rawKind && (allowed as readonly string[]).includes(rawKind)) ? (rawKind as DenominationKind) : undefined;
+        const currency = typeof d.currency === "string" ? d.currency.trim().toUpperCase() : "";
+        const value = Number(d.value);
+        const qty = Number(d.qty);
+        if (!currency || !Number.isFinite(value) || value < 0 || !Number.isFinite(qty) || qty < 0) {
+          return null;
+        }
+        return { currency, value, qty, kind } as CashDenominationLine;
+      })
+      .filter((x): x is CashDenominationLine => x !== null);
+  };
+  const openingDenoms = normalizeDenoms(session.opening_denominations);
+  const closingDenoms = normalizeDenoms(session.closing_denominations);
   return {
     id: Number(session.id),
     status: session.status as "OPEN" | "CLOSED" | "CANCELLED",

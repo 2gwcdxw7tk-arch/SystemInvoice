@@ -331,34 +331,6 @@ export default function CashManagementPage() {
     openingForm.operatorAdminUserId != null
       ? cashState.operators.find((operator) => operator.adminUserId === openingForm.operatorAdminUserId) ?? null
       : null;
-  const closableSessions = useMemo<ComboboxOption<number>[]>(() => {
-    const options: ComboboxOption<number>[] = [];
-    if (cashState.activeSession) {
-      options.push({
-        value: cashState.activeSession.id,
-        label: `${cashState.activeSession.cashRegister.cashRegisterCode} • ${cashState.activeSession.cashRegister.cashRegisterName}`,
-        description: `Propia • ${formatTimestampLocale(cashState.activeSession.openingAt)}`,
-      });
-    }
-    if (isAdmin) {
-      for (const register of cashState.overview) {
-        if (!register.activeSession) continue;
-        options.push({
-          value: register.activeSession.id,
-          label: `${register.cashRegisterCode} • ${register.cashRegisterName}`,
-          description: `${register.activeSession.adminDisplayName?.trim() || register.activeSession.adminUsername} • ${formatTimestampLocale(register.activeSession.openingAt)}`,
-        });
-      }
-    }
-    const seen = new Set<number>();
-    return options.filter((option) => {
-      if (seen.has(option.value)) {
-        return false;
-      }
-      seen.add(option.value);
-      return true;
-    });
-  }, [cashState.activeSession, cashState.overview, isAdmin]);
   const closingTarget = useMemo(() => {
     const sessionId = closingForm.targetSessionId ?? cashState.activeSession?.id ?? null;
     if (sessionId == null) {

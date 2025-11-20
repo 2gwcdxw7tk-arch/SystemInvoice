@@ -142,7 +142,7 @@ export function Sidebar({ collapsed = false, onToggleCollapse, variant = "deskto
         </div>
       )}
 
-      <nav className="flex-1 space-y-1 overflow-y-auto pr-1">
+      <nav className="flex-1 space-y-1 overflow-y-auto overflow-x-hidden pr-1">
         {navItems.map((item) => {
           const Icon = item.icon;
           const itemHash = item.href.hash ? `#${item.href.hash}` : null;
@@ -160,6 +160,8 @@ export function Sidebar({ collapsed = false, onToggleCollapse, variant = "deskto
             <Link key={key} href={item.href} aria-current={isActive ? "page" : undefined}
               tabIndex={isDisabled ? -1 : undefined}
               aria-disabled={isDisabled || undefined}
+              aria-label={collapsed ? item.label : undefined}
+              title={collapsed ? `${item.label} – ${item.description}` : undefined}
               onClick={handleClick}
               prefetch={!isDisabled}
               className={cn(
@@ -173,7 +175,7 @@ export function Sidebar({ collapsed = false, onToggleCollapse, variant = "deskto
             >
               <Icon className="h-5 w-5" />
               {!collapsed && (
-                <span className="flex min-w-0 flex-1 flex-col">
+                <span className="flex min-w-0 flex-1 flex-col" aria-hidden={collapsed ? true : undefined}>
                   <span className="truncate text-sm font-semibold text-foreground">{item.label}</span>
                   <span className="text-xs text-muted-foreground/80 line-clamp-2 leading-snug">{item.description}</span>
                 </span>

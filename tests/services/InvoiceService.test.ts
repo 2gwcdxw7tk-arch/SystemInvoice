@@ -5,8 +5,11 @@ import { OrderService } from '@/lib/services/orders/OrderService';
 // Mock para el repositorio de facturas
 const mockInvoiceRepository: jest.Mocked<IInvoiceRepository> = {
   createInvoice: jest.fn(),
-  deleteInvoice: jest.fn(),
+  updateInvoiceStatus: jest.fn(),
   getInvoiceByNumber: jest.fn(),
+  getInvoiceBasicById: jest.fn(),
+  getInvoiceDetailById: jest.fn(),
+  listInvoices: jest.fn(),
 };
 
 // Mock para OrderService

@@ -154,7 +154,6 @@ export async function GET(request: NextRequest) {
   const q = url.searchParams.get("q") ?? undefined;
   const table_code = url.searchParams.get("table") ?? undefined;
   const waiter_code = url.searchParams.get("waiter") ?? undefined;
-  const status = url.searchParams.get("status") ?? undefined;
   const page = url.searchParams.get("page") ?? undefined;
   const pageSize = url.searchParams.get("pageSize") ?? undefined;
 
@@ -165,7 +164,6 @@ export async function GET(request: NextRequest) {
       q: q || undefined,
       table_code,
       waiter_code,
-      status: status || undefined,
       page: page ? Number(page) : undefined,
       pageSize: pageSize ? Number(pageSize) : undefined,
     });
