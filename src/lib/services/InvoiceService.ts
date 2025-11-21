@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { toCentralClosedDate } from "@/lib/utils/date";
 import { inventoryService } from "@/lib/services/InventoryService";
 import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
@@ -183,7 +184,7 @@ export class InvoiceService {
       const rec = mockInvoices.find((i) => i.id === invoiceId);
       if (rec && rec.status !== "ANULADA") {
         rec.status = "ANULADA";
-        rec.cancelled_at = new Date().toISOString();
+        rec.cancelled_at = toCentralClosedDate(new Date()).toISOString();
       }
       return;
     }
@@ -194,7 +195,8 @@ export class InvoiceService {
     // Revertir movimientos de inventario referenciados por el número de factura
     await inventoryService.reverseInvoiceMovements({ invoiceNumber: basic.invoice_number });
     // Marcar factura como ANULADA (soft-cancel)
-    await this.invoiceRepository.updateInvoiceStatus(invoiceId, "ANULADA", new Date());
+    const cancellationDate = toCentralClosedDate(new Date());
+    await this.invoiceRepository.updateInvoiceStatus(invoiceId, "ANULADA", cancellationDate);
   }
 
   private async createInvoiceMock(

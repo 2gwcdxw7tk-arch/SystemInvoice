@@ -984,6 +984,39 @@ export class InventoryService {
     const fromDate = filters.from ? parseDateInput(filters.from) : undefined;
     const toDate = filters.to ? parseDateInput(filters.to, "end") : undefined;
 
+    const openingBalances = new Map<string, number>();
+    if (fromDate) {
+      const priorMovements = await this.prisma.inventory_movements.findMany({
+        where: {
+          ...(articleCodes.length > 0
+            ? { articles_inventory_movements_article_idToarticles: { article_code: { in: articleCodes } } }
+            : {}),
+          ...(warehouseCodes.length > 0 ? { warehouses: { code: { in: warehouseCodes } } } : {}),
+          inventory_transactions: {
+            occurred_at: {
+              lt: fromDate,
+            },
+          },
+        },
+        select: {
+          direction: true,
+          quantity_retail: true,
+          warehouses: { select: { code: true } },
+          articles_inventory_movements_article_idToarticles: { select: { article_code: true } },
+        },
+      });
+
+      for (const movement of priorMovements) {
+        const articleCode = movement.articles_inventory_movements_article_idToarticles.article_code;
+        const warehouseCode = movement.warehouses.code;
+        const key = `${articleCode}__${warehouseCode}`;
+        const qtyRetail = Number(movement.quantity_retail);
+        const delta = movement.direction === "IN" ? qtyRetail : -qtyRetail;
+        const previous = openingBalances.get(key) ?? 0;
+        openingBalances.set(key, previous + delta);
+      }
+    }
+
     const rows = await this.prisma.inventory_movements.findMany({
       where: {
         ...(articleCodes.length > 0
@@ -1033,7 +1066,7 @@ export class InventoryService {
       },
     });
 
-    const balances = new Map<string, number>();
+    const balances = new Map<string, number>(openingBalances);
     const result: KardexMovementRow[] = [];
     for (const r of rows) {
       const trx = r.inventory_transactions;
