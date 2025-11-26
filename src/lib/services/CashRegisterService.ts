@@ -28,6 +28,7 @@ function cloneAssignment(assignment: CashRegisterAssignment): CashRegisterAssign
 function cloneSession(session: CashRegisterSessionRecord): CashRegisterSessionRecord {
   return {
     ...session,
+    idRaw: session.idRaw,
     cashRegister: cloneAssignment(session.cashRegister),
   };
 }
@@ -430,9 +431,13 @@ export class CashRegisterService {
     return this.repository.listCashRegisterSessionsForAdmin(adminUserId, options);
   }
 
-  async getCashRegisterSessionById(sessionId: number): Promise<CashRegisterSessionRecord | null> {
+  async getCashRegisterSessionById(sessionId: number | string): Promise<CashRegisterSessionRecord | null> {
     if (env.useMockData && this.mockSessions) {
-      const session = this.mockSessions.get(sessionId);
+      const numericId = typeof sessionId === "string" ? Number(sessionId) : sessionId;
+      if (!Number.isFinite(numericId)) {
+        return null;
+      }
+      const session = this.mockSessions.get(numericId);
       return session ? cloneSession(session) : null;
     }
     return this.repository.getCashRegisterSessionById(sessionId);
@@ -528,6 +533,7 @@ export class CashRegisterService {
       const nowIso = new Date().toISOString();
       const newSession: CashRegisterSessionRecord = {
         id,
+        idRaw: String(id),
         status: "OPEN",
         adminUserId: input.adminUserId,
         openingAmount: Number(input.openingAmount.toFixed(2)),
@@ -677,7 +683,7 @@ export class CashRegisterService {
     });
   }
 
-  async getCashRegisterClosureReport(sessionId: number): Promise<CashRegisterReport | null> {
+  async getCashRegisterClosureReport(sessionId: number | string): Promise<CashRegisterReport | null> {
     const session = await this.getCashRegisterSessionById(sessionId);
     if (!session) {
       return null;

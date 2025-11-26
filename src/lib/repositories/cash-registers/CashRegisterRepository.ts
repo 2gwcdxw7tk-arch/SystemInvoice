@@ -84,6 +84,24 @@ function normalizeCode(value: string): string {
   return value.trim().toUpperCase();
 }
 
+function normalizeSessionId(value: number | string): bigint {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed || !/^[0-9]+$/.test(trimmed)) {
+      throw new Error("Identificador de sesión inválido");
+    }
+    return BigInt(trimmed);
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error("Identificador de sesión inválido");
+  }
+  const integer = Math.trunc(value);
+  if (integer <= 0) {
+    throw new Error("Identificador de sesión inválido");
+  }
+  return BigInt(integer);
+}
+
 function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterRecord {
   return {
     id: Number(register.id),
@@ -125,6 +143,7 @@ function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_def
   const closingDenoms = normalizeDenoms(session.closing_denominations);
   return {
     id: Number(session.id),
+    idRaw: session.id.toString(),
     status: session.status as "OPEN" | "CLOSED" | "CANCELLED",
     adminUserId: Number(session.admin_user_id),
     openingAmount: Number(session.opening_amount),
@@ -631,9 +650,10 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     }));
   }
 
-  async getCashRegisterSessionById(sessionId: number): Promise<CashRegisterSessionRecord | null> {
+  async getCashRegisterSessionById(sessionId: number | string): Promise<CashRegisterSessionRecord | null> {
+    const normalizedId = normalizeSessionId(sessionId);
     const session = await this.prisma.cash_register_sessions.findUnique({
-      where: { id: BigInt(sessionId) },
+      where: { id: normalizedId },
       include: {
         cash_registers: {
           include: {
@@ -645,7 +665,35 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       },
     });
 
-    if (!session || !session.cash_registers || !session.cash_registers.warehouses) return null;
+    if (!session) return null;
+
+    // Ensure we always have a cash_registers object with a warehouse fallback so callers
+    // (like report endpoints) don't fail when related rows were removed o son incompletos.
+    const fallbackWarehouse = { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } as const;
+    let sessionWithRelations: CashRegisterSessionWithRelations;
+
+    if (session.cash_registers && session.cash_registers.warehouses) {
+      sessionWithRelations = session;
+    } else if (session.cash_registers) {
+      sessionWithRelations = {
+        ...session,
+        cash_registers: {
+          ...session.cash_registers,
+          warehouses: session.cash_registers.warehouses ?? { ...fallbackWarehouse },
+        },
+      };
+    } else {
+      sessionWithRelations = {
+        ...session,
+        cash_registers: {
+          id: session.cash_register_id,
+          code: "UNKNOWN",
+          name: "Unknown",
+          allow_manual_warehouse_override: false,
+          warehouses: { ...fallbackWarehouse },
+        },
+      };
+    }
 
     // Simulate is_default from cash_register_users for mapping
     const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
@@ -658,7 +706,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       select: { is_default: true },
     });
 
-    return mapSessionToRecord({ ...session, is_default: cashRegisterUser?.is_default ?? false });
+    return mapSessionToRecord({ ...sessionWithRelations, is_default: cashRegisterUser?.is_default ?? false });
   }
 
   async openCashRegisterSession(params: {
@@ -894,12 +942,13 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     });
   }
 
-  async getCashRegisterClosureReport(sessionId: number): Promise<{
+  async getCashRegisterClosureReport(sessionId: number | string): Promise<{
     session: CashRegisterSessionRecord;
     payments: ExpectedPayment[];
     totalInvoices: number;
   } | null> {
-    const session = await this.getCashRegisterSessionById(sessionId);
+    const normalizedId = normalizeSessionId(sessionId);
+    const session = await this.getCashRegisterSessionById(normalizedId.toString());
     if (!session) {
       return null;
     }
@@ -908,7 +957,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       by: ["payment_method"],
       where: {
         invoices: {
-          cash_register_session_id: BigInt(sessionId),
+          cash_register_session_id: normalizedId,
         },
       },
       _sum: { amount: true },
@@ -922,21 +971,23 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     }));
 
     const totalInvoices = await this.prisma.invoices.count({
-      where: { cash_register_session_id: BigInt(sessionId) },
+      where: { cash_register_session_id: normalizedId },
     });
 
     return { session, payments, totalInvoices };
   }
 
-  async updateSessionInvoiceSequenceRange(sessionId: number, invoiceLabel: string): Promise<void> {
+  async updateSessionInvoiceSequenceRange(sessionId: number | string, invoiceLabel: string): Promise<void> {
     const trimmed = invoiceLabel.trim();
     if (!trimmed) {
       throw new Error("El consecutivo de factura no puede estar vacío");
     }
 
+    const normalizedId = normalizeSessionId(sessionId);
+
     await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const current = await tx.cash_register_sessions.findUnique({
-        where: { id: BigInt(sessionId) },
+        where: { id: normalizedId },
         select: {
           id: true,
           invoice_sequence_start: true,

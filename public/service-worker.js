@@ -1,4 +1,4 @@
-const CACHE_NAME = "facturador-shell-v1";
+const CACHE_NAME = "facturador-shell-v2";
 const ASSETS = [
   "/",
   "/dashboard",
@@ -35,6 +35,23 @@ self.addEventListener("message", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") {
+    return;
+  }
+
+  const url = new URL(event.request.url);
+  const isSameOrigin = url.origin === self.location.origin;
+  const isApiRequest = isSameOrigin && url.pathname.startsWith("/api/");
+  const isStaticAsset = isSameOrigin && ASSETS.includes(url.pathname);
+
+  if (isApiRequest) {
+    // Las APIs siempre deben dar datos frescos; solo hacemos fallback si estamos offline.
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  if (!isStaticAsset) {
     return;
   }
 

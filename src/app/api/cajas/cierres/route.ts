@@ -112,7 +112,9 @@ export async function POST(request: NextRequest) {
         success: true,
         already_closed: true,
         summary: report,
-        report_url: `${baseUrl}/api/cajas/cierres/${report.sessionId}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
+        report_url: `${baseUrl}/api/cajas/cierres/${encodeURIComponent(
+          (report.sessionIdRaw ?? report.sessionId.toString()).trim()
+        )}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
       }, { status: 200 });
     }
     // Permitimos diferencias; el reporte y las tablas almacenan difference_amount
@@ -146,7 +148,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       summary: refreshed ?? summary,
-      report_url: `${baseUrl}/api/cajas/cierres/${summary.sessionId}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
+      report_url: `${baseUrl}/api/cajas/cierres/${encodeURIComponent(
+        (summary.sessionIdRaw ?? summary.sessionId.toString()).trim()
+      )}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
     }, { status: 200 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "No se pudo cerrar la caja";
@@ -171,7 +175,9 @@ export async function POST(request: NextRequest) {
             {
               success: true,
               already_closed: true,
-              report_url: `${baseUrl}/api/cajas/cierres/${existingReport.sessionId}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
+              report_url: `${baseUrl}/api/cajas/cierres/${encodeURIComponent(
+                (existingReport.sessionIdRaw ?? existingReport.sessionId.toString()).trim()
+              )}/reporte?format=html&token=${encodeURIComponent(reportToken)}`,
             },
             { status: 200 }
           );

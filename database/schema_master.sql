@@ -324,9 +324,6 @@ CREATE INDEX IF NOT EXISTS ix_cash_registers_active
 CREATE INDEX IF NOT EXISTS ix_cash_registers_sequence
   ON app.cash_registers (invoice_sequence_definition_id);
 
-ALTER TABLE app.cash_registers
-  ADD COLUMN IF NOT EXISTS invoice_sequence_definition_id INTEGER REFERENCES app.sequence_definitions(id) ON DELETE SET NULL;
-
 -- ========================================================
 -- Tabla: app.cash_register_users (asignación de cajas a usuarios admin)
 -- ========================================================
@@ -382,12 +379,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_register_sessions_open_by_user
 CREATE INDEX IF NOT EXISTS ix_cash_register_sessions_register
   ON app.cash_register_sessions (cash_register_id, status);
 
-ALTER TABLE app.cash_register_sessions
-  ADD COLUMN IF NOT EXISTS invoice_sequence_start VARCHAR(60);
-
-ALTER TABLE app.cash_register_sessions
-  ADD COLUMN IF NOT EXISTS invoice_sequence_end VARCHAR(60);
-
 -- ========================================================
 -- Tabla: app.cash_register_session_payments (resumen por método)
 -- ========================================================
@@ -433,27 +424,6 @@ CREATE TABLE IF NOT EXISTS app.invoices (
   UNIQUE (invoice_number)
 );
 
-ALTER TABLE app.invoices
-  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
-
-ALTER TABLE app.invoices
-  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
-
-ALTER TABLE app.invoices
-  ADD COLUMN IF NOT EXISTS cash_register_session_id BIGINT REFERENCES app.cash_register_sessions(id) ON DELETE SET NULL;
-
-ALTER TABLE app.invoices
-  ADD COLUMN IF NOT EXISTS cash_register_id INTEGER REFERENCES app.cash_registers(id) ON DELETE SET NULL;
-
-ALTER TABLE app.invoices
-  ADD COLUMN IF NOT EXISTS issuer_admin_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL;
-
-ALTER TABLE app.invoices
-  ADD COLUMN IF NOT EXISTS waiter_code VARCHAR(50) REFERENCES app.waiters(code) ON DELETE SET NULL;
-
-ALTER TABLE app.invoices
-  ADD COLUMN IF NOT EXISTS table_code VARCHAR(40) REFERENCES app.tables(id) ON DELETE SET NULL;
-
 DROP TRIGGER IF EXISTS trg_invoices_touch_updated_at ON app.invoices;
 CREATE TRIGGER trg_invoices_touch_updated_at
 BEFORE UPDATE ON app.invoices
@@ -487,9 +457,6 @@ CREATE TABLE IF NOT EXISTS app.invoice_payments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-ALTER TABLE app.invoice_payments
-  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
-
 CREATE INDEX IF NOT EXISTS ix_invoice_payments_invoice_id
   ON app.invoice_payments (invoice_id);
 
@@ -512,12 +479,6 @@ CREATE TABLE IF NOT EXISTS app.invoice_items (
   UNIQUE (invoice_id, line_number)
 );
 
-ALTER TABLE app.invoice_items
-  ADD COLUMN IF NOT EXISTS article_code VARCHAR(40);
-
-ALTER TABLE app.invoice_items
-  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
-
 CREATE INDEX IF NOT EXISTS ix_invoice_items_invoice
   ON app.invoice_items (invoice_id);
 
@@ -533,10 +494,11 @@ CREATE VIEW app.invoice_items_movements AS
 SELECT
   ii.id AS item_id,
   COALESCE(ii.quantity, 0) AS quantity,
-  COALESCE(ii.line_total, 0) AS total_amount,
-  COALESCE(i.invoice_date, i.created_at) AS created_at
+  ii.line_total,
+  i.invoice_date AS created_at
 FROM app.invoice_items ii
-INNER JOIN app.invoices i ON i.id = ii.invoice_id;
+INNER JOIN app.invoices i ON i.id = ii.invoice_id
+WHERE i.status = 'FACTURADA';
 
 -- ========================================================
 -- Tabla: app.roles y asignación de permisos
@@ -941,21 +903,6 @@ CREATE TABLE IF NOT EXISTS app.price_lists (
   updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
-ALTER TABLE app.price_lists
-  ADD COLUMN IF NOT EXISTS description VARCHAR(200);
-
-ALTER TABLE app.price_lists
-  ADD COLUMN IF NOT EXISTS currency_code VARCHAR(3) NOT NULL DEFAULT 'NIO';
-
-ALTER TABLE app.price_lists
-  ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE;
-
-ALTER TABLE app.price_lists
-  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
-
-ALTER TABLE app.price_lists
-  ALTER COLUMN currency_code TYPE VARCHAR(3);
-
 DROP TRIGGER IF EXISTS trg_price_lists_touch_updated_at ON app.price_lists;
 CREATE TRIGGER trg_price_lists_touch_updated_at
 BEFORE UPDATE ON app.price_lists
@@ -982,12 +929,6 @@ CREATE TABLE IF NOT EXISTS app.article_prices (
 
 CREATE INDEX IF NOT EXISTS ix_article_prices_keys
   ON app.article_prices (article_id, price_list_id, start_date DESC) INCLUDE (price);
-
-ALTER TABLE app.article_prices
-  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
-
-ALTER TABLE app.article_prices
-  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
 
 DROP TRIGGER IF EXISTS trg_article_prices_touch_updated_at ON app.article_prices;
 CREATE TRIGGER trg_article_prices_touch_updated_at
@@ -1047,8 +988,14 @@ CREATE TABLE IF NOT EXISTS app.inventory_transactions (
   authorized_by VARCHAR(80),
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(80),
-  total_amount NUMERIC(18,2)
+  total_amount NUMERIC(18,2),
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+DROP TRIGGER IF EXISTS trg_inventory_transactions_touch_updated_at ON app.inventory_transactions;
+CREATE TRIGGER trg_inventory_transactions_touch_updated_at
+BEFORE UPDATE ON app.inventory_transactions
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 
 CREATE INDEX IF NOT EXISTS ix_inventory_transactions_type
   ON app.inventory_transactions (transaction_type, occurred_at DESC);

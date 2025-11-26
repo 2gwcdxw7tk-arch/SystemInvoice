@@ -53,6 +53,9 @@ function buildOpeningHtml(params: {
 }): string {
   const { session, operatorName, operatorUsername, issuerName, issuerUsername, generatedAt } = params;
   const cashRegister = session.cashRegister;
+  const sessionIdLabel = typeof session.idRaw === "string" && session.idRaw.trim().length > 0
+    ? session.idRaw.trim()
+    : String(session.id);
   const openingNotes = session.openingNotes?.trim() ? session.openingNotes.trim() : "Sin notas";
   const closingStatus = session.status === "CLOSED" ? formatDateTime(session.closingAt) : "Sin cierre";
   const denominations = Array.isArray(session.openingDenominations) ? session.openingDenominations : [];
@@ -208,7 +211,7 @@ function buildOpeningHtml(params: {
             </tr>
             <tr>
               <th>ID de sesión</th>
-              <td>#${session.id}</td>
+              <td>#${escapeHtml(sessionIdLabel)}</td>
             </tr>
             <tr>
               <th>Fecha de generación</th>
@@ -229,10 +232,13 @@ function buildOpeningHtml(params: {
 
 export async function GET(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId: rawSessionId } = await context.params;
-  const sessionId = Number(rawSessionId);
-  if (!Number.isFinite(sessionId) || sessionId <= 0) {
+  const normalizedSessionId = typeof rawSessionId === "string" ? rawSessionId.trim() : "";
+  if (!/^[0-9]+$/.test(normalizedSessionId)) {
     return NextResponse.json({ success: false, message: "Identificador de sesión inválido" }, { status: 400 });
   }
+
+  const sessionIdNumeric = Number(normalizedSessionId);
+  const sessionIdIsSafe = Number.isSafeInteger(sessionIdNumeric) && sessionIdNumeric > 0;
 
   const format = request.nextUrl.searchParams.get("format");
   if (format && format.toLowerCase() !== "html") {
@@ -249,7 +255,20 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     return NextResponse.json({ success: false, message: "Autenticación requerida" }, { status: 401 });
   }
 
-  if (reportToken && (reportToken.reportType !== "opening" || reportToken.sessionId !== sessionId)) {
+  const tokenMismatch = (() => {
+    if (!reportToken) {
+      return false;
+    }
+    if (reportToken.reportType !== "opening") {
+      return true;
+    }
+    if (sessionIdIsSafe) {
+      return reportToken.sessionId !== sessionIdNumeric;
+    }
+    return reportToken.sessionId.toString() !== normalizedSessionId;
+  })();
+
+  if (tokenMismatch) {
     return NextResponse.json({ success: false, message: "Token de acceso inválido" }, { status: 403 });
   }
 
@@ -269,7 +288,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     return NextResponse.json({ success: false, message: "No tienes permisos para consultar aperturas" }, { status: 403 });
   }
 
-  const sessionRecord = await cashRegisterService.getCashRegisterSessionById(sessionId);
+  const sessionRecord = await cashRegisterService.getCashRegisterSessionById(normalizedSessionId);
   if (!sessionRecord) {
     return NextResponse.json({ success: false, message: "No se encontró la sesión solicitada" }, { status: 404 });
   }

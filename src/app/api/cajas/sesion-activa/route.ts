@@ -11,6 +11,7 @@ const responseSchema = z.object({
   activeSession: z
     .object({
       id: z.number(),
+      idRaw: z.string().optional(),
       status: z.enum(["OPEN", "CLOSED", "CANCELLED"]),
       openingAmount: z.number(),
       openingAt: z.string(),
@@ -40,6 +41,7 @@ const responseSchema = z.object({
   recentSessions: z.array(
     z.object({
       id: z.number(),
+      idRaw: z.string().optional(),
       status: z.enum(["OPEN", "CLOSED", "CANCELLED"]),
       openingAmount: z.number(),
       openingAt: z.string(),
@@ -94,6 +96,7 @@ const responseSchema = z.object({
           activeSession: z
             .object({
               id: z.number(),
+              idRaw: z.string().optional(),
               adminUserId: z.number(),
               adminUsername: z.string(),
               adminDisplayName: z.string().nullable(),
@@ -278,6 +281,7 @@ export async function GET(request: NextRequest) {
           activeSession: activeSessionRecord
             ? {
                 id: activeSessionRecord.id,
+                idRaw: activeSessionRecord.idRaw ?? activeSessionRecord.id.toString(),
                 adminUserId: activeSessionRecord.adminUserId,
                 adminUsername: sessionOperator?.username ?? String(activeSessionRecord.adminUserId),
                 adminDisplayName:
@@ -329,6 +333,7 @@ export async function GET(request: NextRequest) {
       activeSession: currentSession
         ? {
             id: currentSession.id,
+            idRaw: currentSession.idRaw ?? currentSession.id.toString(),
             status: currentSession.status,
             openingAmount: currentSession.openingAmount,
             openingAt: currentSession.openingAt,
@@ -347,6 +352,7 @@ export async function GET(request: NextRequest) {
         assignmentsResolved.find((register) => register.isDefault)?.cashRegisterId ?? null,
       recentSessions: recentSessions.map((session) => ({
         id: session.id,
+        idRaw: session.idRaw ?? session.id.toString(),
         status: session.status,
         openingAmount: session.openingAmount,
         openingAt: session.openingAt,
@@ -384,6 +390,7 @@ export async function GET(request: NextRequest) {
     activeSession: currentSession
       ? {
           id: currentSession.id,
+          idRaw: currentSession.idRaw ?? currentSession.id.toString(),
           status: currentSession.status,
           openingAmount: currentSession.openingAmount,
           openingAt: currentSession.openingAt,
@@ -401,6 +408,7 @@ export async function GET(request: NextRequest) {
     defaultCashRegisterId: assignments.find((register) => register.isDefault)?.cashRegisterId ?? null,
       recentSessions: recentSessions.map((session) => ({
         id: session.id,
+        idRaw: session.idRaw ?? session.id.toString(),
         status: session.status,
         openingAmount: session.openingAmount,
         openingAt: session.openingAt,

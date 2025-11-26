@@ -78,6 +78,9 @@ function buildHtml(params: {
   const differenceClass = report.differenceTotalAmount === 0 ? "neutral" : report.differenceTotalAmount > 0 ? "positive" : "negative";
   const sessionStatus: SessionStatus = report.closingAt ? "CLOSED" : "OPEN";
   const differenceLabel = report.differenceTotalAmount === 0 ? "Sin diferencia" : report.differenceTotalAmount > 0 ? "Excedente" : "Faltante";
+  const sessionIdLabel = typeof report.sessionIdRaw === "string" && report.sessionIdRaw.trim().length > 0
+    ? report.sessionIdRaw.trim()
+    : String(report.sessionId);
 
   const paymentsRows = report.payments.length > 0
     ? report.payments
@@ -252,7 +255,7 @@ function buildHtml(params: {
           <tbody>
             <tr>
               <th>Sesión #</th>
-              <td>${report.sessionId}</td>
+              <td>${escapeHtml(sessionIdLabel)}</td>
             </tr>
             <tr>
               <th>Cajero apertura</th>
@@ -322,16 +325,32 @@ function buildHtml(params: {
 
 export async function GET(request: NextRequest, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId: rawSessionId } = await context.params;
-  const sessionId = Number(rawSessionId);
-  if (!Number.isFinite(sessionId) || sessionId <= 0) {
+  const normalizedSessionId = typeof rawSessionId === "string" ? rawSessionId.trim() : "";
+  if (!/^[0-9]+$/.test(normalizedSessionId)) {
     return NextResponse.json({ success: false, message: "Identificador de sesión inválido" }, { status: 400 });
   }
+
+  const sessionIdNumeric = Number(normalizedSessionId);
+  const sessionIdIsSafe = Number.isSafeInteger(sessionIdNumeric) && sessionIdNumeric > 0;
 
   const format = (request.nextUrl.searchParams.get("format") || "html").toLowerCase();
 
   const tokenRaw = request.nextUrl.searchParams.get("token") ?? undefined;
   const reportToken = tokenRaw ? await verifyReportAccessToken(tokenRaw).catch(() => null) : null;
-  if (reportToken && (reportToken.reportType !== "closure" || reportToken.sessionId !== sessionId)) {
+  const tokenMismatch = (() => {
+    if (!reportToken) {
+      return false;
+    }
+    if (reportToken.reportType !== "closure") {
+      return true;
+    }
+    if (sessionIdIsSafe) {
+      return reportToken.sessionId !== sessionIdNumeric;
+    }
+    return reportToken.sessionId.toString() !== normalizedSessionId;
+  })();
+
+  if (tokenMismatch) {
     return NextResponse.json({ success: false, message: "Token de acceso inválido" }, { status: 403 });
   }
 
@@ -357,7 +376,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     return NextResponse.json({ success: false, message: "No tienes permisos para consultar reportes de caja" }, { status: 403 });
   }
 
-  const report = await cashRegisterService.getCashRegisterClosureReport(sessionId);
+  const report = await cashRegisterService.getCashRegisterClosureReport(normalizedSessionId);
   if (!report) {
     return NextResponse.json({ success: false, message: "No se encontró la sesión solicitada" }, { status: 404 });
   }

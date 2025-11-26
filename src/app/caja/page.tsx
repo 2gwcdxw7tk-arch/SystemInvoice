@@ -43,6 +43,7 @@ interface CashRegisterAssignmentOption {
 
 interface CashRegisterActiveSession {
   id: number;
+  idRaw?: string;
   status: "OPEN" | "CLOSED" | "CANCELLED";
   openingAmount: number;
   openingAt: string;
@@ -65,6 +66,7 @@ interface CashRegisterSessionTotals {
 
 interface CashRegisterSessionSnapshot {
   id: number;
+  idRaw?: string;
   status: "OPEN" | "CLOSED" | "CANCELLED";
   openingAmount: number;
   openingAt: string;
@@ -97,6 +99,7 @@ interface CashRegisterOverviewRegister {
   assignments: Array<{ adminUserId: number; username: string; displayName: string | null; isDefault: boolean }>;
   activeSession: {
     id: number;
+    idRaw?: string;
     adminUserId: number;
     adminUsername: string;
     adminDisplayName: string | null;
@@ -520,6 +523,7 @@ export default function CashManagementPage() {
         setCashState((prev) => {
           const snapshot: CashRegisterSessionSnapshot = {
             id: openedSession.id,
+            idRaw: openedSession.idRaw ?? openedSession.id.toString(),
             status: "OPEN",
             openingAmount: openedSession.openingAmount,
             openingAt: openedSession.openingAt,
@@ -546,6 +550,7 @@ export default function CashManagementPage() {
               ...register,
               activeSession: {
                 id: openedSession.id,
+                  idRaw: openedSession.idRaw ?? openedSession.id.toString(),
                 adminUserId: resolvedOperatorId,
                 adminUsername: fallbackUsername,
                 adminDisplayName: fallbackDisplay,
@@ -576,13 +581,37 @@ export default function CashManagementPage() {
     }
   }, [currentAdminId, isAdmin, loadCashSession, openingForm.cashRegisterCode, openingForm.openingAmount, openingForm.openingNotes, openingForm.operatorAdminUserId, openingDenoms, session?.name, session?.sub, toast, openPrintModal]);
 
-  const handleOpenOpeningReport = useCallback((sessionId: number) => {
-    openPrintModal(`/api/cajas/aperturas/${sessionId}/reporte?format=html`);
-  }, [openPrintModal]);
+  const handleOpenOpeningReport = useCallback(
+    (sessionId: number | string, sessionIdRaw?: string | null) => {
+      const idSegment = (() => {
+        if (typeof sessionIdRaw === "string" && sessionIdRaw.trim().length > 0) {
+          return sessionIdRaw.trim();
+        }
+        if (typeof sessionId === "string") {
+          return sessionId.trim();
+        }
+        return String(sessionId);
+      })();
+      openPrintModal(`/api/cajas/aperturas/${idSegment}/reporte?format=html`);
+    },
+    [openPrintModal]
+  );
 
-  const handleOpenClosureReport = useCallback((sessionId: number) => {
-    openPrintModal(`/api/cajas/cierres/${sessionId}/reporte?format=html`);
-  }, [openPrintModal]);
+  const handleOpenClosureReport = useCallback(
+    (sessionId: number | string, sessionIdRaw?: string | null) => {
+      const idSegment = (() => {
+        if (typeof sessionIdRaw === "string" && sessionIdRaw.trim().length > 0) {
+          return sessionIdRaw.trim();
+        }
+        if (typeof sessionId === "string") {
+          return sessionId.trim();
+        }
+        return String(sessionId);
+      })();
+      openPrintModal(`/api/cajas/cierres/${idSegment}/reporte?format=html`);
+    },
+    [openPrintModal]
+  );
 
   const addClosingPayment = useCallback(() => {
     setClosingForm((prev) => ({
@@ -732,6 +761,7 @@ export default function CashManagementPage() {
       const summary = (data?.summary ?? null) as
         | {
             sessionId: number;
+            sessionIdRaw?: string;
             openingAmount: number;
             openingAt: string;
             closingAmount: number | null;
@@ -745,11 +775,25 @@ export default function CashManagementPage() {
           }
         | null;
       const closingSessionId = summary?.sessionId ?? sessionId;
+      const closingSessionIdRaw =
+        summary && typeof summary.sessionIdRaw === "string" && summary.sessionIdRaw.trim().length > 0
+          ? summary.sessionIdRaw.trim()
+          : null;
       setCashState((prev) => {
-        const filteredRecent = prev.recentSessions.filter((snapshot) => snapshot.id !== closingSessionId);
+        const filteredRecent = prev.recentSessions.filter((snapshot) => {
+          const sameByNumber = snapshot.id === closingSessionId;
+          const sameByRaw = closingSessionIdRaw ? snapshot.idRaw === closingSessionIdRaw : false;
+          return !(sameByNumber || sameByRaw);
+        });
         const snapshot: CashRegisterSessionSnapshot | null = summary
           ? {
               id: summary.sessionId,
+              idRaw:
+                typeof summary.sessionIdRaw === "string" && summary.sessionIdRaw.trim().length > 0
+                  ? summary.sessionIdRaw.trim()
+                  : summary.sessionId != null
+                    ? summary.sessionId.toString()
+                    : undefined,
               status: "CLOSED",
               openingAmount: summary.openingAmount,
               openingAt: summary.openingAt,
@@ -765,9 +809,18 @@ export default function CashManagementPage() {
           : null;
         const nextRecent = snapshot ? [snapshot, ...filteredRecent].slice(0, 20) : filteredRecent;
         const nextOverview = prev.overview.map((register) =>
-          register.activeSession?.id === closingSessionId ? { ...register, activeSession: null } : register
+          register.activeSession &&
+          (register.activeSession.id === closingSessionId ||
+            (closingSessionIdRaw ? register.activeSession.idRaw === closingSessionIdRaw : false))
+            ? { ...register, activeSession: null }
+            : register
         );
-        const nextActiveSession = prev.activeSession && prev.activeSession.id === closingSessionId ? null : prev.activeSession;
+        const nextActiveSession =
+          prev.activeSession &&
+          (prev.activeSession.id === closingSessionId ||
+            (closingSessionIdRaw ? prev.activeSession.idRaw === closingSessionIdRaw : false))
+            ? null
+            : prev.activeSession;
         return {
           ...prev,
           loading: false,
@@ -1030,7 +1083,7 @@ export default function CashManagementPage() {
                       variant="outline"
                       size="sm"
                       className="rounded-2xl"
-                      onClick={() => handleOpenOpeningReport(activeSession.id)}
+                      onClick={() => handleOpenOpeningReport(activeSession.id, activeSession.idRaw)}
                     >
                       <Download className="mr-2 h-4 w-4" />
                       Reporte apertura
@@ -1200,7 +1253,12 @@ export default function CashManagementPage() {
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                onClick={() => handleOpenOpeningReport(register.activeSession!.id)}
+                                onClick={() =>
+                                  handleOpenOpeningReport(
+                                    register.activeSession!.id,
+                                    register.activeSession!.idRaw
+                                  )
+                                }
                               >
                                 <Download className="mr-2 h-4 w-4" />
                                 Reporte apertura
@@ -1371,7 +1429,12 @@ export default function CashManagementPage() {
                       </dl>
                     ) : null}
                     <div className="flex flex-wrap justify-end gap-2">
-                      <Button type="button" variant="outline" size="sm" onClick={() => handleOpenOpeningReport(snapshot.id)}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleOpenOpeningReport(snapshot.id, snapshot.idRaw)}
+                      >
                         <Download className="mr-2 h-4 w-4" />
                         Reporte apertura (HTML)
                       </Button>
@@ -1380,7 +1443,7 @@ export default function CashManagementPage() {
                         variant="outline"
                         size="sm"
                         disabled={!isClosed}
-                        onClick={() => handleOpenClosureReport(snapshot.id)}
+                        onClick={() => handleOpenClosureReport(snapshot.id, snapshot.idRaw)}
                       >
                         <Download className="mr-2 h-4 w-4" />
                         Reporte cierre (HTML)
@@ -1539,7 +1602,7 @@ export default function CashManagementPage() {
                 variant="outline"
                 onClick={() => {
                   setOpeningModalOpen(false);
-                  handleOpenOpeningReport(activeSession.id);
+                  handleOpenOpeningReport(activeSession.id, activeSession.idRaw);
                 }}
               >
                 <Download className="mr-2 h-4 w-4" />

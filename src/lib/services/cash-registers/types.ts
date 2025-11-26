@@ -28,6 +28,8 @@ export type CashRegisterRecord = {
 
 export type CashRegisterSessionRecord = {
   id: number;
+  /** Identificador original en texto para preservar precisión cuando proviene de columnas BigInt. */
+  idRaw?: string;
   status: "OPEN" | "CLOSED" | "CANCELLED";
   adminUserId: number;
   openingAmount: number;
@@ -55,6 +57,7 @@ export type CashRegisterPaymentBreakdown = {
 
 export type CashRegisterClosureSummary = {
   sessionId: number;
+  sessionIdRaw?: string;
   cashRegister: CashRegisterAssignment;
   openedByAdminId: number;
   openingAmount: number;

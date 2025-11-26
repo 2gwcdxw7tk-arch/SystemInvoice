@@ -26,7 +26,7 @@ export interface ICashRegisterRepository {
   setDefaultCashRegisterForAdmin(params: { adminUserId: number; cashRegisterCode: string }): Promise<void>;
   getActiveCashRegisterSessionByAdmin(adminUserId: number): Promise<CashRegisterSessionRecord | null>;
   listCashRegisterSessionsForAdmin(adminUserId: number, options?: { limit?: number }): Promise<CashRegisterSessionRecord[]>;
-  getCashRegisterSessionById(sessionId: number): Promise<CashRegisterSessionRecord | null>;
+  getCashRegisterSessionById(sessionId: number | string): Promise<CashRegisterSessionRecord | null>;
   openCashRegisterSession(params: {
     adminUserId: number;
     cashRegisterCode: string;
@@ -46,10 +46,10 @@ export interface ICashRegisterRepository {
     closingDenominations?: Array<{ currency: string; value: number; qty: number; kind?: string }>;
   }): Promise<CashRegisterClosureSummary>;
   listActiveCashRegisterSessions(): Promise<CashRegisterSessionRecord[]>;
-  getCashRegisterClosureReport(sessionId: number): Promise<{
+  getCashRegisterClosureReport(sessionId: number | string): Promise<{
     session: CashRegisterSessionRecord;
     payments: ExpectedPayment[];
     totalInvoices: number;
   } | null>;
-  updateSessionInvoiceSequenceRange(sessionId: number, invoiceLabel: string): Promise<void>;
+  updateSessionInvoiceSequenceRange(sessionId: number | string, invoiceLabel: string): Promise<void>;
 }

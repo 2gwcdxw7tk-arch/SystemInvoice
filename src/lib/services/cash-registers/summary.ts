@@ -55,6 +55,7 @@ export function buildClosureSummary(params: {
 
   return {
     sessionId: params.session.id,
+    sessionIdRaw: params.session.idRaw,
     cashRegister: params.session.cashRegister,
     openedByAdminId: params.session.adminUserId,
     openingAmount: params.session.openingAmount,
