@@ -9,6 +9,8 @@ jest.mock('@/lib/env', () => {
       useMockData: true,
       MOCK_DATA: true,
       isProduction: false,
+      features: { ...actual.env.features, isRestaurant: true, retailModeEnabled: false },
+      publicFeatures: { ...actual.env.publicFeatures, isRestaurant: true, retailModeEnabled: false },
     },
   };
 });

@@ -1,5 +1,7 @@
 # Plan de implementación – Bandera `EsRestaurante` y límite de cajas licenciadas
 
+> Última actualización: 30 nov 2025
+
 ## 1. Objetivos generales
 - **Configurar la plataforma para operar fuera del vertical de restaurantes** mediante una bandera (`EsRestaurante`) que oculte y deshabilite flujos exclusivos (mesas, meseros, facturación con pedido y tableros asociados).
 - **Habilitar un flujo retail basado en catálogo de clientes y cuentas por cobrar** cuando `EsRestaurante=false`, reforzando la captura de cliente, ventas a crédito y seguimiento de saldos pendientes.
@@ -33,9 +35,10 @@
 - **`src/app/caja/page.tsx`**: añadir UI para mostrar el límite configurado y mensajes claros cuando la API devuelva error por sobrepasar la licencia.
 - **`src/app/cuentas-por-cobrar/**`** (existente o nuevo módulo): destacar la lista de clientes, saldos y acciones para aplicar pagos que provienen de facturas retail.
 - **Dashboard básico de CxC**: presentar aging simplificado (0-30/31-60/61-90/90+) y alertas de clientes al 80% del límite de crédito usando los datos existentes, además de accesos rápidos a gestiones y disputas.
-- **Permisos/roles**: todo nuevo módulo (clientes, cuentas por cobrar, payment terms) debe definirse en el mismo esquema de permisos por usuario existente (`menu.*`, `cxp.*`, etc.), incluirse en el seed y mostrarse/ocultarse en la UI en función tanto del permiso como de `env.features.isRestaurant`. Cuando la bandera esté en `true`, estos módulos permanecen ocultos y deshabilitados aunque el usuario tenga permisos.
+- **Permisos/roles**: todo nuevo módulo (clientes, cuentas por cobrar, payment terms) debe definirse en el mismo esquema de permisos por usuario existente (`menu.*`, `cxp.*`, etc.), incluirse en el seed y mostrarse/ocultarse en la UI en función tanto del permiso como de `env.features.isRestaurant`. Ya se registraron los códigos `menu.cxc.view`, `customers.manage`, `payment-terms.manage`, `customer.documents.manage`, `customer.documents.apply`, `customer.credit.manage`, `customer.collections.manage` y `customer.disputes.manage` (asignados al rol `ADMINISTRADOR` y expuestos en `MOCK_ROLE_PERMISSIONS`); el middleware exige `menu.cxc.view` para `/cuentas-por-cobrar`. Cuando la bandera esté en `true`, estos módulos permanecen ocultos y deshabilitados aunque el usuario tenga permisos.
 
 ### 4.3 Base de datos / Prisma
+> **Avance 2025-11-28**: La migración `20251128101500_cxc_core_tables` ya crea `payment_terms`, `customers`, `customer_documents`, `customer_document_applications`, `customer_credit_lines`, `collection_logs`, `customer_disputes` y enlaza `invoices` con `customer_id`, `payment_term_id` y `due_date`. Esta sección mantiene el desglose funcional para guiar los servicios y APIs que explotarán dichas tablas.
 - **Catálogo de clientes**: nueva tabla `customers` con campos básicos (RFC/NIT, razón social, contacto, límite de crédito, estatus) y timestamps, más `payment_term_id` para enlazar la condición de pago asignada. Debe contar con migración Prisma y actualización de `schema_master.sql`.
 - **Catálogo de condiciones de pago**: nueva tabla `payment_terms` (CRUD completo) con columnas `id`, `code`, `description`, `days` (0=contado, 15/30/60/90/120, etc.), `is_active`. Los clientes referencian esta tabla y las facturas a crédito calculan la fecha de vencimiento sumando `days` a la fecha de emisión cuando sea >0.
 - **Líneas de crédito**: tabla `customer_credit_lines` para mantener límite asignado, saldo disponible, porcentaje usado y banderas de bloqueo automático cuando la cartera vencida supere umbrales. Debe rastrear revisiones y usuarios responsables.
@@ -107,6 +110,8 @@
 | Sesiones abiertas `>= límite` | Abrir nueva sesión | Rechazado con `409`, la UI muestra modal con instrucciones para cerrar otra caja. |
 | Cajas desactivadas | Abrir sesión | No aplica (no se asignan a operadores). |
 
+> **Avance 28-nov-2025**: Se incorporaron los conteos en `CashRegisterRepository`, las validaciones de límite en `CashRegisterService` (creación, activación y aperturas) y mensajes consistentes "Se alcanzó el tope de cajas licenciadas (N)", cubiertos por la prueba `tests/api/caja.license-limit.test.ts`.
+
 ### 5.3 Facturación en modo retail (`isRestaurant=false`)
 | Escenario | Comportamiento |
 | --- | --- |
@@ -132,3 +137,20 @@
 - Al trabajar con mocks (`MOCK_DATA=true`), replicar los mismos límites para evitar diferencias entre ambientes.
 - Mensajes al usuario deben seguir el estilo de modal/toast propio (nunca `alert`).
 - Investigar y documentar mejores prácticas de CxC (orden de aplicación, retenciones fiscales, notas de crédito) para asegurar que la lógica siga los estándares contables locales.
+
+## 8. Cierre del bloque Créditos y CxC (30 nov 2025)
+
+### Resultado
+- Se completó la cadena Facturación ↔ CxC en modo retail: las facturas exigen `customer_id`, generan documentos espejo y actualizan líneas de crédito y aging en el dashboard.
+- Los servicios y endpoints de líneas de crédito, gestiones y disputas operan con validaciones de permisos y flag, tanto en PostgreSQL como en modo mock.
+- El límite de cajas licenciadas está integrado con mensajes consistentes en UI/API y cuenta con pruebas automatizadas para creación, activación y sesiones.
+
+### Evidencias
+- Suites en `tests/api/caja.license-limit.test.ts`, `tests/api/invoices.retail.cxc.test.ts`, `tests/api/cxc.credit-lines.test.ts` y `tests/api/cxc.document-applications.test.ts` cubren los flujos críticos.
+- Documentación sincronizada (`README.md`, `.github/copilot-instructions.md`, `.github/prompts/plan-sistemaFacturacion.prompt.md`, `docs/investigacion-cxc.md`, `docs/checklist-esrestaurante-cajas.md`).
+- Checklist actualizado a estado **Completado** para los rubros DOC-02 y DOC-03.
+
+### Próximos pasos sugeridos
+- Monitorear métricas de crédito y aging en los entornos piloto durante el primer mes en producción.
+- Evaluar automatizaciones adicionales (intereses moratorios, alertas avanzadas) reutilizando la base de servicios instalada.
+- Revisar periódicamente la configuración de licencias para instaladores que requieran escalamiento de cajas.

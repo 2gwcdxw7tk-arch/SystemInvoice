@@ -2,14 +2,15 @@
 
 _Fase 3 · Noviembre 2025_
 
-## 0. Estado actual (17 nov 2025)
-- **Prisma centralizado**: `prisma/schema.prisma` alineado con `database/schema_master.sql`. Cliente expuesto en `src/lib/db/prisma.ts` y usado por repositorios (artículos, kits, órdenes, alertas, cajas, roles, zonas de mesas, etc.).
-- **Flujo de facturación migrado**: `InvoiceRepository` + `InvoiceService` activos; `/api/invoices` delega a servicios.
-- **Repositorios y servicios migrados**: `src/lib/repositories/**` y `src/lib/services/**` cubren artículos, kits, órdenes, cajas, roles, zonas/mesas y reportes. Inventario ya expone listados completos (compras, consumos, traspasos, kardex y existencias) mediante Prisma; listas de precios en consolidación.
-- **Endpoints delegando a servicios**: `/api/articulos`, `/api/precios`, `/api/unidades`, `/api/roles/**`, `/api/tables/**`, `/api/meseros/**`, `/api/cajas/**`, `/api/reportes/**` consumen servicios. Inventario avanza con endpoints clave desacoplados.
-- **Modo MOCK operativo**: `RepositoryFactory` decide implementaciones Prisma/Mock a partir de `MOCK_DATA`. Los servicios mantienen el mismo contrato en ambos modos.
-- **Reportes con impresión HTML**: `/api/reportes/**` y reportes de caja soportan `format=html`. En UI se imprime mediante modal con iframe tanto en `/reportes` como en `/caja` (aperturas/cierres).
-- **Calidad automatizada**: Lint (`npm run lint`), typecheck (`npm run typecheck`) y suites Jest ampliadas (134 tests) cubren endpoints y servicios principales. Política: toda nueva funcionalidad debe incluir tests.
+## 0. Estado actual (28 nov 2025)
+- **Prisma centralizado**: `prisma/schema.prisma` alineado con `database/schema_master.sql`. Cliente expuesto en `src/lib/db/prisma.ts` y usado por repositorios (artículos, kits, órdenes, alertas, cajas, roles, zonas de mesas, secuencias, CxC, etc.).
+- **Facturación y cajas**: `InvoiceService`, `InventoryService` y `CashRegisterService` operan 100% sobre Prisma/mocks. `/api/invoices` mantiene validaciones de caja abierta y genera consumos automáticos.
+- **Inventario y precios**: listados de compras/consumos/traspasos/kárdex/existencias funcionan vía `InventoryService`; `PriceListService` expone `/api/precios` y `ArticleService` resuelve precios con `items[].price.base_price`.
+- **Restaurante**: `TableService` + `WaiterService` atienden `/api/tables/**` y `/api/meseros/**`; UI de mesas/meseros sincroniza comandas mediante `OrderService`.
+- **Reportes imprimibles**: `/api/reportes/**` y reportes de caja soportan `format=html` y se consumen desde modales con iframe.
+- **Cuentas por cobrar retail**: migración `20251128101500_cxc_core_tables` y repositorios/servicios (`PaymentTermService`, `CustomerService`, `CustomerDocumentService`, `CustomerDocumentApplicationService`) expuestos vía `/api/preferencias/terminos-pago`, `/api/cxc/clientes`, `/api/cxc/documentos` y `/api/cxc/documentos/aplicaciones`, protegidos con `requireCxCPermissions` y respetando `MOCK_DATA`.
+- **Permisos y entorno**: `NEXT_PUBLIC_ES_RESTAURANTE=false` habilita CxC y requiere los permisos `menu.cxc.view`, `customers.manage`, `payment-terms.manage`, `customer.documents.manage`, `customer.documents.apply`, `customer.credit.manage`, `customer.collections.manage`, `customer.disputes.manage`.
+- **Calidad automatizada**: `npm run lint`, `npm run typecheck` y suites Jest (>=134 tests) cubren endpoints principales; nuevas features deben incluir pruebas API/servicio.
 
 ## 1. Resumen ejecutivo
 - Sustituiremos el acceso SQL manual por Prisma para obtener un modelo de datos tipado y centralizado.
@@ -88,12 +89,12 @@ src/lib/services/
 - Tiempo de onboarding a un nuevo flujo reducido a < 0.5 jornada (medido vía encuestas internas).
 
 ## 8. Próximos pasos inmediatos
-1. **Inventariar y priorizar módulos pendientes**: documentar el estado de cada archivo en `src/lib/db` (cajas, inventario, auth, precios, reportes, mesas, unidades, bodegas, etc.) para definir el orden de migración.
-2. **Consolidar listas de precios**: crear `PriceListRepository`/servicio, normalizar lectura de precios vigentes y preparar UI en `/precios`.
-3. **Portar inventario y dependencias**: mover `inventory.ts`, `warehouses.ts`, `articles.ts` y `articleKits.ts` hacia repositorios/servicios especializados, asegurando que `InvoiceService` y `/api/inventario/**` queden desacoplados de SQL crudo.
-4. **Implementar RepositoryFactory y pruebas**: exponer `getRepositories(env.useMockData)` que devuelva implementaciones Prisma o Mock, mover los stores en memoria existentes y añadir suites unitarias para los servicios migrados (`npm run lint`, `npm run typecheck`, `npm run test:services`).
+1. **Fortalecer CxC**: completar vistas UI retail, exponer reportes espejo y profundizar en pruebas unitarias/API para `PaymentTermService`, `CustomerService` y `CustomerDocument*( )`.
+2. **Resiliencia de secuencias**: auditar `SequenceService` para folios de inventario/venta, agregar alertas cuando falte asignación y documentar flujos de recuperación.
+3. **Autenticación pendiente**: concluir `AuthRepository/Service` para cerrar dependencias residuales y documentar la transición en `docs/migracion-prisma.md`.
+4. **Observabilidad y métricas**: capturar p95 en `/api/invoices`, `/api/cxc/**` y publicar resultados en CI junto con `npm run test`.
 
-## 9. Inventario y foco de cierre (17 nov 2025)
+## 9. Inventario y foco de cierre (28 nov 2025)
 
 | Área                    | Estado actual                                  | Acción |
 |-------------------------|-----------------------------------------------|--------|
@@ -104,7 +105,9 @@ src/lib/services/
 | Reportes (ventas, etc.) | ✅ ReportService + `format=html` en endpoints  | Retirar legacy remanente gradualmente |
 | Unidades/Roles          | ✅ Migrado                                     | N/A    |
 | Inventario              | ✅ Completo (compras/consumos/traspasos/kardex/existencias) | Validar rendimiento/índices |
-| Listas de precios       | ⚠️ Parcial                                    | Consolidar PriceListRepository/Service |
+| Listas de precios       | ✅ PriceListService operativo, UI en `/precios` | Añadir pruebas adicionales |
 | Autenticación           | ⚠️ Parcial                                    | Completar AuthRepository/Service |
+| Cuentas por cobrar      | ✅ Servicios y endpoints con permisos dedicados | Ampliar pruebas + UI retail |
+| Secuencias              | ✅ SequenceService + endpoints de preferencias | Añadir monitoreo de folios |
 
 Este estado refleja la migración en curso, la adopción de reportes HTML con impresión en modal y la estandarización de pruebas. Toda nueva funcionalidad debe incluir tests (unitarios y/o API) y actualizar README + `.github/copilot-instructions.md` + este documento.

@@ -1,7 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileBarChart, Loader2, RefreshCw, Search, ShieldQuestion, Table2, TrendingUp, Users, Printer } from "lucide-react";
+import {
+  BarChart3,
+  FileBarChart,
+  FileStack,
+  Loader2,
+  NotebookPen,
+  Printer,
+  RefreshCw,
+  Search,
+  ShieldQuestion,
+  Table2,
+  TrendingUp,
+  Users,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +36,10 @@ import type {
   SalesSummaryResult,
   TopItemRow,
   WaiterPerformanceRow,
+  CxcSummaryResult,
+  CxcDueAnalysisResult,
+  CxcAgingResult,
+  CxcStatementResult,
 } from "@/lib/db/reports";
 
 type FetchState<T> = {
@@ -30,7 +47,17 @@ type FetchState<T> = {
   data: T | null;
 };
 
-type ReportId = "sales" | "waiters" | "topItems" | "inventory" | "purchases" | "invoiceStatus";
+type ReportId =
+  | "sales"
+  | "waiters"
+  | "topItems"
+  | "inventory"
+  | "purchases"
+  | "invoiceStatus"
+  | "cxcSummary"
+  | "cxcDue"
+  | "cxcAging"
+  | "cxcStatement";
 
 type ArticlePickerOption = {
   code: string;
@@ -74,6 +101,26 @@ const reportOptions: Array<{ id: ReportId; label: string; description: string }>
     id: "invoiceStatus",
     label: "Estado de facturación",
     description: "Seguimiento de cobranza y saldos pendientes.",
+  },
+  {
+    id: "cxcSummary",
+    label: "CxC – Resumen",
+    description: "Saldo global de clientes, estatus y principales riesgos de crédito.",
+  },
+  {
+    id: "cxcDue",
+    label: "CxC – Vencimientos",
+    description: "Análisis de vencimiento por bucket y documentos con mayor riesgo.",
+  },
+  {
+    id: "cxcAging",
+    label: "CxC – Antigüedad",
+    description: "Antigüedad de saldos por cliente con distribución por rangos.",
+  },
+  {
+    id: "cxcStatement",
+    label: "CxC – Estado de cuenta",
+    description: "Detalle cronológico de movimientos para un cliente específico.",
   },
 ];
 
@@ -162,11 +209,30 @@ const invoiceStatusLabels: Record<string, string> = {
   PARCIAL: "Parcial",
   VENCIDA: "Vencida",
   CANCELADA: "Cancelada",
+  CANCELADO: "Cancelado",
   ANULADA: "Anulada",
   BORRADOR: "Borrador",
   EMITIDA: "Emitida",
   PROGRAMADA: "Programada",
   RECHAZADA: "Rechazada",
+};
+
+const creditStatusLabels: Record<string, string> = {
+  ACTIVE: "Activo",
+  ON_HOLD: "En revisión",
+  BLOCKED: "Bloqueado",
+};
+
+const documentTypeLabels: Record<string, string> = {
+  INVOICE: "Factura",
+  DEBIT_NOTE: "Nota de débito",
+  CREDIT_NOTE: "Nota de crédito",
+  RECEIPT: "Recibo",
+  PAYMENT: "Pago",
+  ADJUSTMENT: "Ajuste",
+  CHARGE: "Cargo",
+  REFUND: "Reembolso",
+  BALANCE_FORWARD: "Saldo inicial",
 };
 
 function translateTransactionType(value: string): string {
@@ -206,6 +272,28 @@ function translateInvoiceStatus(value: string): string {
   const normalized = value.toUpperCase();
   if (invoiceStatusLabels[normalized]) return invoiceStatusLabels[normalized];
   return "Estatus personalizado";
+}
+
+function translateCreditStatus(value: string | null | undefined): string {
+  if (!value) return "Sin estatus";
+  const normalized = value.toUpperCase();
+  if (creditStatusLabels[normalized]) return creditStatusLabels[normalized];
+  return normalized;
+}
+
+function translateDocumentType(value: string | null | undefined): string {
+  if (!value) return "Documento";
+  const normalized = value.toUpperCase();
+  if (documentTypeLabels[normalized]) return documentTypeLabels[normalized];
+  return normalized.replace(/_/g, " ");
+}
+
+function sanitizeCsv(value: string): string {
+  return value
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean)
+    .join(",");
 }
 
 function todayISO(): string {
@@ -256,6 +344,10 @@ export default function ReportesPage() {
     inventory: false,
     purchases: false,
     invoiceStatus: false,
+    cxcSummary: false,
+    cxcDue: false,
+    cxcAging: false,
+    cxcStatement: false,
   });
 
   const [salesFilters, setSalesFilters] = useState({
@@ -308,6 +400,40 @@ export default function ReportesPage() {
     waiterCode: "",
   });
   const [invoiceStatusState, setInvoiceStatusState] = useState<FetchState<InvoiceStatusResult>>({ loading: false, data: null });
+
+  const [cxcSummaryFilters, setCxcSummaryFilters] = useState({
+    from: defaultFrom,
+    to: defaultTo,
+    customer: "",
+    status: "",
+    documentTypes: "",
+  });
+  const [cxcSummaryState, setCxcSummaryState] = useState<FetchState<CxcSummaryResult>>({ loading: false, data: null });
+
+  const [cxcDueFilters, setCxcDueFilters] = useState({
+    from: defaultFrom,
+    to: defaultTo,
+    customer: "",
+    includeFuture: true,
+  });
+  const [cxcDueState, setCxcDueState] = useState<FetchState<CxcDueAnalysisResult>>({ loading: false, data: null });
+
+  const [cxcAgingFilters, setCxcAgingFilters] = useState({
+    from: defaultFrom,
+    to: defaultTo,
+    customer: "",
+    limit: "50",
+  });
+  const [cxcAgingState, setCxcAgingState] = useState<FetchState<CxcAgingResult>>({ loading: false, data: null });
+
+  const [cxcStatementFilters, setCxcStatementFilters] = useState({
+    from: defaultFrom,
+    to: defaultTo,
+    customerCode: "",
+    customerId: "",
+    includeApplications: true,
+  });
+  const [cxcStatementState, setCxcStatementState] = useState<FetchState<CxcStatementResult>>({ loading: false, data: null });
 
   const [warehouseOptions, setWarehouseOptions] = useState<WarehouseOption[]>([]);
   const [warehousesLoading, setWarehousesLoading] = useState(false);
@@ -468,6 +594,110 @@ export default function ReportesPage() {
     }
   }, [invoiceStatusFilters, toast]);
 
+  const fetchCxcSummary = useCallback(async () => {
+    if (!cxcSummaryFilters.from || !cxcSummaryFilters.to) {
+      toast({ variant: "warning", title: "CxC", description: "Selecciona el rango de fechas" });
+      return;
+    }
+    setCxcSummaryState((prev) => ({ ...prev, loading: true }));
+    const statusParam = sanitizeCsv(cxcSummaryFilters.status);
+    const documentTypesParam = sanitizeCsv(cxcSummaryFilters.documentTypes);
+    try {
+      const query = buildQuery({
+        from: cxcSummaryFilters.from,
+        to: cxcSummaryFilters.to,
+        customer: cxcSummaryFilters.customer || undefined,
+        status: statusParam || undefined,
+        document_types: documentTypesParam || undefined,
+      });
+      const response = await fetch(`/api/reportes/cxc/resumen?${query}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.message ?? "No se pudo consultar el reporte de CxC");
+      setCxcSummaryState({ loading: false, data: payload.report as CxcSummaryResult });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "No se pudo consultar el reporte de CxC";
+      toast({ variant: "error", title: "CxC", description: message });
+      setCxcSummaryState({ loading: false, data: null });
+    }
+  }, [cxcSummaryFilters, toast]);
+
+  const fetchCxcDue = useCallback(async () => {
+    if (!cxcDueFilters.from || !cxcDueFilters.to) {
+      toast({ variant: "warning", title: "CxC", description: "Selecciona el rango de fechas" });
+      return;
+    }
+    setCxcDueState((prev) => ({ ...prev, loading: true }));
+    try {
+      const query = buildQuery({
+        from: cxcDueFilters.from,
+        to: cxcDueFilters.to,
+        customer: cxcDueFilters.customer || undefined,
+        include_future: cxcDueFilters.includeFuture ? "1" : "0",
+      });
+      const response = await fetch(`/api/reportes/cxc/vencimientos?${query}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.message ?? "No se pudo consultar el análisis de vencimientos");
+      setCxcDueState({ loading: false, data: payload.report as CxcDueAnalysisResult });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "No se pudo consultar el análisis de vencimientos";
+      toast({ variant: "error", title: "CxC", description: message });
+      setCxcDueState({ loading: false, data: null });
+    }
+  }, [cxcDueFilters, toast]);
+
+  const fetchCxcAging = useCallback(async () => {
+    if (!cxcAgingFilters.from || !cxcAgingFilters.to) {
+      toast({ variant: "warning", title: "CxC", description: "Selecciona el rango de fechas" });
+      return;
+    }
+    setCxcAgingState((prev) => ({ ...prev, loading: true }));
+    try {
+      const query = buildQuery({
+        from: cxcAgingFilters.from,
+        to: cxcAgingFilters.to,
+        customer: cxcAgingFilters.customer || undefined,
+        limit: cxcAgingFilters.limit || undefined,
+      });
+      const response = await fetch(`/api/reportes/cxc/antiguedad?${query}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.message ?? "No se pudo consultar la antigüedad de saldos");
+      setCxcAgingState({ loading: false, data: payload.report as CxcAgingResult });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "No se pudo consultar la antigüedad de saldos";
+      toast({ variant: "error", title: "CxC", description: message });
+      setCxcAgingState({ loading: false, data: null });
+    }
+  }, [cxcAgingFilters, toast]);
+
+  const fetchCxcStatement = useCallback(async () => {
+    if (!cxcStatementFilters.from || !cxcStatementFilters.to) {
+      toast({ variant: "warning", title: "CxC", description: "Selecciona el rango de fechas" });
+      return;
+    }
+    if (!cxcStatementFilters.customerCode && !cxcStatementFilters.customerId) {
+      toast({ variant: "warning", title: "CxC", description: "Indica el código o ID del cliente" });
+      return;
+    }
+    setCxcStatementState((prev) => ({ ...prev, loading: true }));
+    try {
+      const query = buildQuery({
+        from: cxcStatementFilters.from,
+        to: cxcStatementFilters.to,
+        customer_code: cxcStatementFilters.customerCode || undefined,
+        customer_id: cxcStatementFilters.customerId || undefined,
+        include_applications: cxcStatementFilters.includeApplications ? "1" : "0",
+      });
+      const response = await fetch(`/api/reportes/cxc/estado-cuenta?${query}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.message ?? "No se pudo consultar el estado de cuenta");
+      setCxcStatementState({ loading: false, data: payload.report as CxcStatementResult });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "No se pudo consultar el estado de cuenta";
+      toast({ variant: "error", title: "CxC", description: message });
+      setCxcStatementState({ loading: false, data: null });
+    }
+  }, [cxcStatementFilters, toast]);
+
   const loadWarehouses = useCallback(async () => {
     setWarehousesLoading(true);
     try {
@@ -526,6 +756,14 @@ export default function ReportesPage() {
           return fetchPurchases();
         case "invoiceStatus":
           return fetchInvoiceStatus();
+        case "cxcSummary":
+          return fetchCxcSummary();
+        case "cxcDue":
+          return fetchCxcDue();
+        case "cxcAging":
+          return fetchCxcAging();
+        case "cxcStatement":
+          return fetchCxcStatement();
         default:
           return Promise.resolve();
       }
@@ -537,6 +775,10 @@ export default function ReportesPage() {
       fetchInventory,
       fetchPurchases,
       fetchInvoiceStatus,
+      fetchCxcSummary,
+      fetchCxcDue,
+      fetchCxcAging,
+      fetchCxcStatement,
     ]
   );
 
@@ -628,6 +870,54 @@ export default function ReportesPage() {
           });
           break;
         }
+        case "cxcSummary": {
+          base = "/api/reportes/cxc/resumen";
+          const statusCsv = sanitizeCsv(cxcSummaryFilters.status);
+          const documentTypesCsv = sanitizeCsv(cxcSummaryFilters.documentTypes);
+          query = buildQuery({
+            from: cxcSummaryFilters.from,
+            to: cxcSummaryFilters.to,
+            customer: cxcSummaryFilters.customer || undefined,
+            status: statusCsv || undefined,
+            document_types: documentTypesCsv || undefined,
+            format: "html",
+          });
+          break;
+        }
+        case "cxcDue": {
+          base = "/api/reportes/cxc/vencimientos";
+          query = buildQuery({
+            from: cxcDueFilters.from,
+            to: cxcDueFilters.to,
+            customer: cxcDueFilters.customer || undefined,
+            include_future: cxcDueFilters.includeFuture ? "1" : "0",
+            format: "html",
+          });
+          break;
+        }
+        case "cxcAging": {
+          base = "/api/reportes/cxc/antiguedad";
+          query = buildQuery({
+            from: cxcAgingFilters.from,
+            to: cxcAgingFilters.to,
+            customer: cxcAgingFilters.customer || undefined,
+            limit: cxcAgingFilters.limit || undefined,
+            format: "html",
+          });
+          break;
+        }
+        case "cxcStatement": {
+          base = "/api/reportes/cxc/estado-cuenta";
+          query = buildQuery({
+            from: cxcStatementFilters.from,
+            to: cxcStatementFilters.to,
+            customer_code: cxcStatementFilters.customerCode || undefined,
+            customer_id: cxcStatementFilters.customerId || undefined,
+            include_applications: cxcStatementFilters.includeApplications ? "1" : "0",
+            format: "html",
+          });
+          break;
+        }
         default:
           return;
       }
@@ -642,6 +932,10 @@ export default function ReportesPage() {
       inventoryFilters,
       purchasesFilters,
       invoiceStatusFilters,
+      cxcSummaryFilters,
+      cxcDueFilters,
+      cxcAgingFilters,
+      cxcStatementFilters,
     ]
   );
 
@@ -782,6 +1076,12 @@ export default function ReportesPage() {
     }
     return undefined;
   }, [articleModalTarget]);
+
+  const formatDaysDeltaLabel = (days: number): string => {
+    if (days > 0) return `${days} días vencido`;
+    if (days < 0) return `${Math.abs(days)} días restantes`;
+    return "Vence hoy";
+  };
 
   return (
   <section className="space-y-10 pb-16">
@@ -1604,6 +1904,597 @@ export default function ReportesPage() {
           ) : (
             <p className="text-sm text-muted-foreground">Ejecuta el reporte para conocer el estado de la facturación.</p>
           )}
+          </CardContent>
+        </Card>
+      ) : null}
+      {activeReport === "cxcSummary" ? (
+        <Card className="rounded-3xl border bg-background/95 shadow-sm">
+          <CardHeader className="space-y-1">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <FileBarChart className="h-4 w-4" />
+              <span className="text-xs uppercase tracking-wide">CxC</span>
+            </div>
+            <CardTitle className="text-xl">Resumen general</CardTitle>
+            <CardDescription>Saldo agregado, distribución por estatus y principales clientes con riesgo crediticio.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-5">
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
+                <DatePicker value={cxcSummaryFilters.from} onChange={(value) => setCxcSummaryFilters((prev) => ({ ...prev, from: value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
+                <DatePicker value={cxcSummaryFilters.to} onChange={(value) => setCxcSummaryFilters((prev) => ({ ...prev, to: value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
+                <Input
+                  value={cxcSummaryFilters.customer}
+                  onChange={(event) => setCxcSummaryFilters((prev) => ({ ...prev, customer: event.target.value }))}
+                  placeholder="Nombre, código o RFC"
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Estatus (CSV)</Label>
+                <Input
+                  value={cxcSummaryFilters.status}
+                  onChange={(event) => setCxcSummaryFilters((prev) => ({ ...prev, status: event.target.value.toUpperCase() }))}
+                  placeholder="PENDIENTE,PAGADO..."
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Tipos (CSV)</Label>
+                <Input
+                  value={cxcSummaryFilters.documentTypes}
+                  onChange={(event) => setCxcSummaryFilters((prev) => ({ ...prev, documentTypes: event.target.value.toUpperCase() }))}
+                  placeholder="INVOICE,DEBIT_NOTE..."
+                  className="rounded-2xl"
+                />
+              </div>
+            </div>
+            <div className="md:flex md:justify-end">
+              <Button type="button" className="rounded-2xl" onClick={() => void fetchCxcSummary()} disabled={cxcSummaryState.loading}>
+                {cxcSummaryState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Consultar
+              </Button>
+              <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintModal("cxcSummary")}>
+                <Printer className="mr-2 h-4 w-4" /> Imprimir
+              </Button>
+            </div>
+
+            {cxcSummaryState.data ? (
+              <>
+                <p className="text-xs text-muted-foreground">Generado {formatDateTime(cxcSummaryState.data.generatedAt)}</p>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="rounded-3xl bg-muted/40 p-5">
+                    <p className="text-xs uppercase text-muted-foreground">Clientes con saldo</p>
+                    <p className="text-3xl font-semibold text-foreground">{numberFormatter.format(cxcSummaryState.data.totals.customers)}</p>
+                    <p className="text-xs text-muted-foreground">Documentos: {numberFormatter.format(cxcSummaryState.data.totals.documents)}</p>
+                  </div>
+                  <div className="rounded-3xl bg-muted/40 p-5">
+                    <p className="text-xs uppercase text-muted-foreground">Monto original</p>
+                    <p className="text-3xl font-semibold text-foreground">{formatCurrency(cxcSummaryState.data.totals.originalAmount)}</p>
+                    <p className="text-xs text-muted-foreground">Saldo: {formatCurrency(cxcSummaryState.data.totals.balanceAmount)}</p>
+                  </div>
+                  <div className="rounded-3xl bg-muted/40 p-5">
+                    <p className="text-xs uppercase text-muted-foreground">Riesgo inmediato</p>
+                    <p className="text-3xl font-semibold text-foreground">{formatCurrency(cxcSummaryState.data.totals.overdueAmount)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Próx. 7 días: {formatCurrency(cxcSummaryState.data.totals.dueNext7Amount)} · 30 días: {formatCurrency(cxcSummaryState.data.totals.dueNext30Amount)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="rounded-3xl border border-muted p-5">
+                    <h3 className="text-sm font-semibold text-foreground">Por estatus</h3>
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="min-w-full table-auto text-left text-sm">
+                        <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
+                          <tr>
+                            <th className="px-3 py-2">Estatus</th>
+                            <th className="px-3 py-2">Documentos</th>
+                            <th className="px-3 py-2">Original</th>
+                            <th className="px-3 py-2">Saldo</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {cxcSummaryState.data.byStatus.length ? (
+                            cxcSummaryState.data.byStatus.map((row) => (
+                              <tr key={row.status}>
+                                <td className="px-3 py-2 font-medium text-foreground">{translateInvoiceStatus(row.status)}</td>
+                                <td className="px-3 py-2">{numberFormatter.format(row.documents)}</td>
+                                <td className="px-3 py-2">{formatCurrency(row.originalAmount)}</td>
+                                <td className="px-3 py-2">{formatCurrency(row.balanceAmount)}</td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={4} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                                Sin documentos pendientes en el periodo.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-muted p-5">
+                    <h3 className="text-sm font-semibold text-foreground">Clientes con mayor saldo</h3>
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="min-w-full table-auto text-left text-sm">
+                        <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
+                          <tr>
+                            <th className="px-3 py-2">Cliente</th>
+                            <th className="px-3 py-2">Documentos</th>
+                            <th className="px-3 py-2">Saldo</th>
+                            <th className="px-3 py-2">Vencido</th>
+                            <th className="px-3 py-2">Crédito disp.</th>
+                            <th className="px-3 py-2">Estatus crédito</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {cxcSummaryState.data.topCustomers.length ? (
+                            cxcSummaryState.data.topCustomers.map((row) => (
+                              <tr key={row.customerId}>
+                                <td className="px-3 py-2">
+                                  <p className="font-semibold text-foreground">{row.customerName}</p>
+                                  <p className="text-xs text-muted-foreground">{row.customerCode}</p>
+                                </td>
+                                <td className="px-3 py-2">{numberFormatter.format(row.documents)}</td>
+                                <td className="px-3 py-2">{formatCurrency(row.balanceAmount)}</td>
+                                <td className="px-3 py-2">{formatCurrency(row.overdueAmount)}</td>
+                                <td className="px-3 py-2">{formatCurrency(row.availableCredit)}</td>
+                                <td className="px-3 py-2">{translateCreditStatus(row.creditStatus)}</td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={6} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                                No hay clientes con saldo pendiente.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Ajusta filtros y ejecuta para visualizar el resumen.</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+      {activeReport === "cxcDue" ? (
+        <Card className="rounded-3xl border bg-background/95 shadow-sm">
+          <CardHeader className="space-y-1">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <FileStack className="h-4 w-4" />
+              <span className="text-xs uppercase tracking-wide">CxC</span>
+            </div>
+            <CardTitle className="text-xl">Análisis de vencimientos</CardTitle>
+            <CardDescription>Rangos de vencimiento y principales documentos con saldo pendiente.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
+                <DatePicker value={cxcDueFilters.from} onChange={(value) => setCxcDueFilters((prev) => ({ ...prev, from: value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
+                <DatePicker value={cxcDueFilters.to} onChange={(value) => setCxcDueFilters((prev) => ({ ...prev, to: value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
+                <Input
+                  value={cxcDueFilters.customer}
+                  onChange={(event) => setCxcDueFilters((prev) => ({ ...prev, customer: event.target.value }))}
+                  placeholder="Nombre, código o RFC"
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Incluir vencimientos futuros</Label>
+                <Combobox
+                  placeholder="Selecciona"
+                  emptyText="Sin opciones"
+                  value={cxcDueFilters.includeFuture ? "1" : "0"}
+                  onChange={(value) => setCxcDueFilters((prev) => ({ ...prev, includeFuture: value === "1" }))}
+                  options={[
+                    { label: "Sí, mostrar próximos vencimientos", value: "1" },
+                    { label: "No, solo vencidos", value: "0" },
+                  ]}
+                />
+              </div>
+            </div>
+            <div className="md:flex md:justify-end">
+              <Button type="button" className="rounded-2xl" onClick={() => void fetchCxcDue()} disabled={cxcDueState.loading}>
+                {cxcDueState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Consultar
+              </Button>
+              <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintModal("cxcDue")}>
+                <Printer className="mr-2 h-4 w-4" /> Imprimir
+              </Button>
+            </div>
+
+            {cxcDueState.data ? (
+              <div className="space-y-6">
+                <div className="rounded-3xl border border-muted p-5">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-foreground">Resumen por bucket</h3>
+                      <p className="text-xs text-muted-foreground">Generado {formatDateTime(cxcDueState.data.generatedAt)}</p>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      Documentos: {numberFormatter.format(cxcDueState.data.buckets.reduce((sum, item) => sum + item.documents, 0))} · Clientes: {numberFormatter.format(cxcDueState.data.buckets.reduce((sum, item) => sum + item.customers, 0))}
+                    </div>
+                  </div>
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full table-auto text-left text-sm">
+                      <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2">Rango</th>
+                          <th className="px-3 py-2">Documentos</th>
+                          <th className="px-3 py-2">Clientes</th>
+                          <th className="px-3 py-2">Monto original</th>
+                          <th className="px-3 py-2">Saldo</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {cxcDueState.data.buckets.length ? (
+                          cxcDueState.data.buckets.map((row) => (
+                            <tr key={row.bucket}>
+                              <td className="px-3 py-2 font-semibold text-foreground">{row.label}</td>
+                              <td className="px-3 py-2">{numberFormatter.format(row.documents)}</td>
+                              <td className="px-3 py-2">{numberFormatter.format(row.customers)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.originalAmount)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.balanceAmount)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={5} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                              No se encontraron documentos en el rango seleccionado.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-muted p-5">
+                  <h3 className="text-sm font-semibold text-foreground">Documentos destacados</h3>
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full table-auto text-left text-sm">
+                      <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2">Documento</th>
+                          <th className="px-3 py-2">Cliente</th>
+                          <th className="px-3 py-2">Tipo</th>
+                          <th className="px-3 py-2">Emisión</th>
+                          <th className="px-3 py-2">Vencimiento</th>
+                          <th className="px-3 py-2">Días</th>
+                          <th className="px-3 py-2">Monto</th>
+                          <th className="px-3 py-2">Saldo</th>
+                          <th className="px-3 py-2">Estatus</th>
+                          <th className="px-3 py-2">Término</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {cxcDueState.data.documents.length ? (
+                          cxcDueState.data.documents.map((document) => (
+                            <tr key={document.documentId}>
+                              <td className="px-3 py-2 font-semibold text-foreground">{document.documentNumber}</td>
+                              <td className="px-3 py-2">
+                                <p className="font-medium text-foreground">{document.customerName}</p>
+                                <p className="text-xs text-muted-foreground">{document.customerCode}</p>
+                              </td>
+                              <td className="px-3 py-2">{translateDocumentType(document.documentType)}</td>
+                              <td className="px-3 py-2">{formatDate(document.documentDate)}</td>
+                              <td className="px-3 py-2">{formatDate(document.dueDate)}</td>
+                              <td className="px-3 py-2">{formatDaysDeltaLabel(document.daysDelta)}</td>
+                              <td className="px-3 py-2">{formatCurrency(document.originalAmount)}</td>
+                              <td className="px-3 py-2">{formatCurrency(document.balanceAmount)}</td>
+                              <td className="px-3 py-2">{translateInvoiceStatus(document.status)}</td>
+                              <td className="px-3 py-2">{document.paymentTermCode ?? "-"}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={10} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                              No se encontraron documentos pendientes para mostrar.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Configura filtros y ejecuta para visualizar el análisis.</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+      {activeReport === "cxcAging" ? (
+        <Card className="rounded-3xl border bg-background/95 shadow-sm">
+          <CardHeader className="space-y-1">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <BarChart3 className="h-4 w-4" />
+              <span className="text-xs uppercase tracking-wide">CxC</span>
+            </div>
+            <CardTitle className="text-xl">Antigüedad de saldos</CardTitle>
+            <CardDescription>Distribución de saldos por rangos de antigüedad y estado de crédito.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
+                <DatePicker value={cxcAgingFilters.from} onChange={(value) => setCxcAgingFilters((prev) => ({ ...prev, from: value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
+                <DatePicker value={cxcAgingFilters.to} onChange={(value) => setCxcAgingFilters((prev) => ({ ...prev, to: value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
+                <Input
+                  value={cxcAgingFilters.customer}
+                  onChange={(event) => setCxcAgingFilters((prev) => ({ ...prev, customer: event.target.value }))}
+                  placeholder="Nombre, código o RFC"
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Límite de filas</Label>
+                <Input
+                  value={cxcAgingFilters.limit}
+                  onChange={(event) => {
+                    const digits = event.target.value.replace(/[^0-9]/g, "");
+                    setCxcAgingFilters((prev) => ({ ...prev, limit: digits }));
+                  }}
+                  placeholder="Ej. 50"
+                  className="rounded-2xl"
+                />
+              </div>
+            </div>
+            <div className="md:flex md:justify-end">
+              <Button type="button" className="rounded-2xl" onClick={() => void fetchCxcAging()} disabled={cxcAgingState.loading}>
+                {cxcAgingState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Consultar
+              </Button>
+              <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintModal("cxcAging")}>
+                <Printer className="mr-2 h-4 w-4" /> Imprimir
+              </Button>
+            </div>
+
+            {cxcAgingState.data ? (
+              <div className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="rounded-3xl bg-muted/40 p-5">
+                    <p className="text-xs uppercase text-muted-foreground">Clientes</p>
+                    <p className="text-3xl font-semibold text-foreground">{numberFormatter.format(cxcAgingState.data.totals.customers)}</p>
+                    <p className="text-xs text-muted-foreground">Con saldos dentro del rango.</p>
+                  </div>
+                  <div className="rounded-3xl bg-muted/40 p-5">
+                    <p className="text-xs uppercase text-muted-foreground">Saldo total</p>
+                    <p className="text-3xl font-semibold text-foreground">{formatCurrency(cxcAgingState.data.totals.balanceAmount)}</p>
+                    <p className="text-xs text-muted-foreground">Reporte generado {formatDateTime(cxcAgingState.data.generatedAt)}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-muted p-5">
+                  <h3 className="text-sm font-semibold text-foreground">Detalle por cliente</h3>
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full table-auto text-left text-sm">
+                      <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2">Cliente</th>
+                          <th className="px-3 py-2">Docs</th>
+                          <th className="px-3 py-2">Saldo</th>
+                          <th className="px-3 py-2">Vigente</th>
+                          <th className="px-3 py-2">0-30</th>
+                          <th className="px-3 py-2">31-60</th>
+                          <th className="px-3 py-2">61-90</th>
+                          <th className="px-3 py-2">91-120</th>
+                          <th className="px-3 py-2">120+</th>
+                          <th className="px-3 py-2">Límite crédito</th>
+                          <th className="px-3 py-2">Estatus crédito</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {cxcAgingState.data.rows.length ? (
+                          cxcAgingState.data.rows.map((row) => (
+                            <tr key={row.customerId}>
+                              <td className="px-3 py-2">
+                                <p className="font-medium text-foreground">{row.customerName}</p>
+                                <p className="text-xs text-muted-foreground">{row.customerCode}</p>
+                              </td>
+                              <td className="px-3 py-2">{numberFormatter.format(row.documents)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.balanceAmount)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.bucketCurrent)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.bucket0To30)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.bucket31To60)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.bucket61To90)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.bucket91To120)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.bucket120Plus)}</td>
+                              <td className="px-3 py-2">{formatCurrency(row.creditLimit)}</td>
+                              <td className="px-3 py-2">{translateCreditStatus(row.creditStatus)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={11} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                              No se encontraron clientes con saldo pendiente.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Ejecuta el reporte para visualizar la antigüedad de saldos.</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+      {activeReport === "cxcStatement" ? (
+        <Card className="rounded-3xl border bg-background/95 shadow-sm">
+          <CardHeader className="space-y-1">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <NotebookPen className="h-4 w-4" />
+              <span className="text-xs uppercase tracking-wide">CxC</span>
+            </div>
+            <CardTitle className="text-xl">Estado de cuenta</CardTitle>
+            <CardDescription>Detalle cronológico de documentos, aplicaciones y saldo acumulado por cliente.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-5">
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Código de cliente</Label>
+                <Input
+                  value={cxcStatementFilters.customerCode}
+                  onChange={(event) => setCxcStatementFilters((prev) => ({ ...prev, customerCode: event.target.value.toUpperCase() }))}
+                  placeholder="Ej. CLI-001"
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">ID de cliente</Label>
+                <Input
+                  value={cxcStatementFilters.customerId}
+                  onChange={(event) => {
+                    const digits = event.target.value.replace(/[^0-9]/g, "");
+                    setCxcStatementFilters((prev) => ({ ...prev, customerId: digits }));
+                  }}
+                  placeholder="Numérico"
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
+                <DatePicker value={cxcStatementFilters.from} onChange={(value) => setCxcStatementFilters((prev) => ({ ...prev, from: value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
+                <DatePicker value={cxcStatementFilters.to} onChange={(value) => setCxcStatementFilters((prev) => ({ ...prev, to: value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Incluir aplicaciones</Label>
+                <Combobox
+                  placeholder="Selecciona"
+                  emptyText="Sin opciones"
+                  value={cxcStatementFilters.includeApplications ? "1" : "0"}
+                  onChange={(value) => setCxcStatementFilters((prev) => ({ ...prev, includeApplications: value === "1" }))}
+                  options={[
+                    { label: "Sí, incluir pagos aplicados", value: "1" },
+                    { label: "No, solo documentos", value: "0" },
+                  ]}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">Es necesario proporcionar código o ID de cliente para generar el estado de cuenta.</p>
+            <div className="md:flex md:justify-end">
+              <Button type="button" className="rounded-2xl" onClick={() => void fetchCxcStatement()} disabled={cxcStatementState.loading}>
+                {cxcStatementState.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                Consultar
+              </Button>
+              <Button type="button" variant="secondary" className="ml-2 rounded-2xl" onClick={() => openPrintModal("cxcStatement")}>
+                <Printer className="mr-2 h-4 w-4" /> Imprimir
+              </Button>
+            </div>
+
+            {cxcStatementState.data ? (
+              <div className="space-y-6">
+                <div className="rounded-3xl border border-muted p-5">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-foreground">{cxcStatementState.data.customer.name}</h3>
+                      <p className="text-xs text-muted-foreground">
+                        Código {cxcStatementState.data.customer.code} · Identificación {cxcStatementState.data.customer.taxId ?? "-"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">Generado {formatDateTime(cxcStatementState.data.generatedAt)}</p>
+                    </div>
+                    <div className="space-y-1 text-sm text-muted-foreground md:text-right">
+                      <p>Límite crédito {formatCurrency(cxcStatementState.data.customer.creditLimit)}</p>
+                      <p>Disponible {formatCurrency(cxcStatementState.data.customer.availableCredit)}</p>
+                      <p>Estatus crédito {translateCreditStatus(cxcStatementState.data.customer.creditStatus)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <div className="rounded-3xl bg-muted/40 p-4">
+                      <p className="text-xs uppercase text-muted-foreground">Saldo inicial</p>
+                      <p className="text-xl font-semibold text-foreground">{formatCurrency(cxcStatementState.data.openingBalance)}</p>
+                    </div>
+                    <div className="rounded-3xl bg-muted/40 p-4">
+                      <p className="text-xs uppercase text-muted-foreground">Saldo final</p>
+                      <p className="text-xl font-semibold text-foreground">{formatCurrency(cxcStatementState.data.closingBalance)}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-muted p-5">
+                  <h3 className="text-sm font-semibold text-foreground">Movimientos del periodo</h3>
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full table-auto text-left text-sm">
+                      <thead className="border-b text-xs uppercase tracking-wide text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2">Fecha</th>
+                          <th className="px-3 py-2">Tipo</th>
+                          <th className="px-3 py-2">Documento</th>
+                          <th className="px-3 py-2">Descripción</th>
+                          <th className="px-3 py-2">Vencimiento</th>
+                          <th className="px-3 py-2">Débito</th>
+                          <th className="px-3 py-2">Crédito</th>
+                          <th className="px-3 py-2">Saldo</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {cxcStatementState.data.entries.length ? (
+                          cxcStatementState.data.entries.map((entry) => (
+                            <tr key={entry.entryId}>
+                              <td className="px-3 py-2">{entry.eventDate ? formatDateTime(entry.eventDate) : "-"}</td>
+                              <td className="px-3 py-2">
+                                <p className="font-medium text-foreground">{entry.entryType === "DOCUMENT" ? "Documento" : "Aplicación"}</p>
+                                <p className="text-xs text-muted-foreground">{entry.documentType ? translateDocumentType(entry.documentType) : "-"}</p>
+                              </td>
+                              <td className="px-3 py-2">{entry.documentNumber ?? entry.relatedDocumentNumber ?? "-"}</td>
+                              <td className="px-3 py-2">
+                                <p className="font-medium text-foreground">{entry.description}</p>
+                                <p className="text-xs text-muted-foreground">{entry.reference ?? "Sin referencia"}</p>
+                              </td>
+                              <td className="px-3 py-2">{entry.dueDate ? formatDate(entry.dueDate) : "-"}</td>
+                              <td className="px-3 py-2">{entry.debit ? formatCurrency(entry.debit) : "-"}</td>
+                              <td className="px-3 py-2">{entry.credit ? formatCurrency(entry.credit) : "-"}</td>
+                              <td className="px-3 py-2 font-semibold text-foreground">{formatCurrency(entry.balanceAfter)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={8} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                              Sin movimientos en el periodo seleccionado.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Selecciona cliente y periodo para generar el estado de cuenta.</p>
+            )}
           </CardContent>
         </Card>
       ) : null}

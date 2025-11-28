@@ -13,12 +13,14 @@ import { siteConfig } from "@/config/site";
 import { cn } from "@/lib/utils";
 import type { SessionPayload } from "@/lib/auth/session";
 import { useSessionActions } from "@/components/providers/session-provider";
+import { publicFeatures } from "@/lib/features/public";
 
 type LoginMode = "admin" | "waiter";
 
 export default function Home() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const waiterLoginEnabled = publicFeatures.isRestaurant;
   const [mode, setMode] = useState<LoginMode>("admin");
   const { setSession } = useSessionActions();
   const logoUrl = siteConfig.logoUrl;
@@ -39,6 +41,9 @@ export default function Home() {
   const maxPinLength = 6;
 
   const handleModeChange = (nextMode: LoginMode) => {
+    if (!waiterLoginEnabled && nextMode === "waiter") {
+      return;
+    }
     if (mode === nextMode) {
       return;
     }
@@ -71,11 +76,13 @@ export default function Home() {
     const form = event.currentTarget;
     const formData = new FormData(form);
 
+    const activeMode: LoginMode = waiterLoginEnabled ? mode : "admin";
+
     const payload: Record<string, unknown> = {
-      role: mode,
+      role: activeMode,
     };
 
-    if (mode === "admin") {
+    if (activeMode === "admin") {
       payload.username = (formData.get("username") as string | null)?.trim();
       payload.password = formData.get("password") as string | null;
     } else {
@@ -103,7 +110,7 @@ export default function Home() {
           return;
         }
 
-        if (mode === "admin" && data.user) {
+        if (activeMode === "admin" && data.user) {
           const defaultCashRegister = data.user.defaultCashRegister
             ? {
                 id: data.user.defaultCashRegister.cashRegisterId,
@@ -126,7 +133,7 @@ export default function Home() {
           setSession(sessionPayload);
         }
 
-        if (mode === "waiter" && data.waiter) {
+        if (activeMode === "waiter" && data.waiter) {
           const sessionPayload: SessionPayload = {
             sub: String(data.waiter.id ?? data.waiter.code ?? ""),
             role: "waiter",
@@ -149,7 +156,7 @@ export default function Home() {
         };
 
         const destination: Route =
-          mode === "waiter"
+          activeMode === "waiter"
             ? isAllowedWaiterRedirect(redirectTarget)
               ? redirectTarget
               : defaultWaiterRoute
@@ -189,47 +196,53 @@ export default function Home() {
             Opera el punto de venta con una interfaz táctil optimizada para equipos administrativos y de salón.
           </CardDescription>
           <div className="relative mx-auto flex w-full max-w-xl items-stretch">
-            <div className="relative grid h-16 w-full grid-cols-2 overflow-hidden rounded-full bg-muted/60 p-1 text-sm font-semibold">
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "absolute inset-y-1 w-1/2 rounded-full bg-background shadow transition-transform duration-300 ease-out",
-                  mode === "waiter" ? "translate-x-full" : "translate-x-0"
-                )}
-              />
-              <button
-                type="button"
-                className={cn(
-                  "relative z-10 flex items-center justify-center gap-2 rounded-full text-base transition-colors",
-                  mode === "admin" ? "text-primary" : "text-muted-foreground"
-                )}
-                aria-pressed={mode === "admin"}
-                onClick={() => handleModeChange("admin")}
-                disabled={isPending}
-              >
-                <Lock className="h-5 w-5" />
-                Admin
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "relative z-10 flex items-center justify-center gap-2 rounded-full text-base transition-colors",
-                  mode === "waiter" ? "text-primary" : "text-muted-foreground"
-                )}
-                aria-pressed={mode === "waiter"}
-                onClick={() => handleModeChange("waiter")}
-                disabled={isPending}
-              >
-                <Users className="h-5 w-5" />
-                Mesero
-              </button>
-            </div>
+            {waiterLoginEnabled ? (
+              <div className="relative grid h-16 w-full grid-cols-2 overflow-hidden rounded-full bg-muted/60 p-1 text-sm font-semibold">
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "absolute inset-y-1 w-1/2 rounded-full bg-background shadow transition-transform duration-300 ease-out",
+                    mode === "waiter" ? "translate-x-full" : "translate-x-0"
+                  )}
+                />
+                <button
+                  type="button"
+                  className={cn(
+                    "relative z-10 flex items-center justify-center gap-2 rounded-full text-base transition-colors",
+                    mode === "admin" ? "text-primary" : "text-muted-foreground"
+                  )}
+                  aria-pressed={mode === "admin"}
+                  onClick={() => handleModeChange("admin")}
+                  disabled={isPending}
+                >
+                  <Lock className="h-5 w-5" />
+                  Admin
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "relative z-10 flex items-center justify-center gap-2 rounded-full text-base transition-colors",
+                    mode === "waiter" ? "text-primary" : "text-muted-foreground"
+                  )}
+                  aria-pressed={mode === "waiter"}
+                  onClick={() => handleModeChange("waiter")}
+                  disabled={isPending}
+                >
+                  <Users className="h-5 w-5" />
+                  Mesero
+                </button>
+              </div>
+            ) : (
+              <div className="flex h-16 w-full items-center justify-center rounded-full border border-dashed border-muted-foreground/40 bg-muted/40 px-6 text-center text-sm font-medium text-muted-foreground">
+                El inicio de sesión de meseros está deshabilitado en modo retail.
+              </div>
+            )}
           </div>
         </CardHeader>
         <CardContent>
           <form className="space-y-8" onSubmit={handleSubmit}>
             <input type="hidden" name="pin" value={waiterPin} />
-            {mode === "admin" ? (
+            {mode === "admin" || !waiterLoginEnabled ? (
               <div className="space-y-6">
                 <div className="space-y-2">
                   <Input
@@ -321,7 +334,7 @@ export default function Home() {
             <Button
               type="submit"
               className="h-14 w-full text-lg"
-              disabled={isPending || (mode === "waiter" && waiterPin.length < 4)}
+              disabled={isPending || (mode === "waiter" && waiterLoginEnabled && waiterPin.length < 4)}
             >
               {isPending ? (
                 <span className="flex items-center justify-center gap-2">

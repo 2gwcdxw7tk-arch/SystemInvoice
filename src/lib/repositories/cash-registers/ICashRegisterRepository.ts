@@ -15,6 +15,9 @@ export interface ICashRegisterRepository {
   createCashRegister(input: CreateCashRegisterInput): Promise<CashRegisterRecord>;
   updateCashRegister(cashRegisterCode: string, input: UpdateCashRegisterInput): Promise<CashRegisterRecord>;
   getCashRegisterById(cashRegisterId: number): Promise<CashRegisterRecord | null>;
+  getCashRegisterByCode(cashRegisterCode: string): Promise<CashRegisterRecord | null>;
+  countActiveCashRegisters(): Promise<number>;
+  countOpenCashRegisterSessions(): Promise<number>;
   listCashRegistersForAdmin(adminUserId: number): Promise<CashRegisterAssignment[]>;
   listCashRegisterAssignments(options?: { adminUserIds?: number[] }): Promise<CashRegisterAssignmentGroup[]>;
   assignCashRegisterToAdmin(params: {

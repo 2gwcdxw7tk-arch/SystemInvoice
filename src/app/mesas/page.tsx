@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-provider";
 import type { TableAdminSnapshot, TableZone } from "@/lib/services/TableService";
+import { publicFeatures } from "@/lib/features/public";
+import { FeatureGuardNotice } from "@/components/layout/feature-guard-notice";
 
 const DATETIME_FORMATTER = new Intl.DateTimeFormat("es-MX", { dateStyle: "short", timeStyle: "short" });
 
@@ -127,7 +129,19 @@ function getStatusMeta(table: TableAdminSnapshot): { label: string; tone: Status
   return { label: "En servicio", tone: "info" };
 }
 
-export default function MesasPage(): JSX.Element {
+export default function MesasPage(): JSX.Element | null {
+  const isRestaurant = publicFeatures.isRestaurant;
+  const hasAccess = isRestaurant;
+
+  const guardContent = hasAccess
+    ? null
+    : (
+        <FeatureGuardNotice
+          title="Mesas deshabilitadas en modo retail"
+          description="Este módulo solo está disponible cuando la instalación opera como restaurante. Ajusta la bandera NEXT_PUBLIC_ES_RESTAURANTE a true para reactivar la administración de mesas."
+        />
+      );
+
   const { toast } = useToast();
   const [tables, setTables] = useState<TableAdminSnapshot[]>([]);
   const [zones, setZones] = useState<TableZone[]>([]);
@@ -177,6 +191,10 @@ export default function MesasPage(): JSX.Element {
   }, [tables, showAvailableOnly]);
 
   const loadTables = useCallback(async () => {
+    if (!hasAccess) {
+      setTables([]);
+      return;
+    }
     setLoadingTables(true);
     try {
       const res = await fetch("/api/tables", { cache: "no-store" });
@@ -192,9 +210,13 @@ export default function MesasPage(): JSX.Element {
     } finally {
       setLoadingTables(false);
     }
-  }, [toast]);
+  }, [hasAccess, toast]);
 
   const loadZones = useCallback(async () => {
+    if (!hasAccess) {
+      setZones([]);
+      return;
+    }
     try {
       const res = await fetch("/api/tables/zones?include_inactive=true", { cache: "no-store" });
       if (!res.ok) {
@@ -207,15 +229,21 @@ export default function MesasPage(): JSX.Element {
       toast({ variant: "error", title: "Zonas", description: message });
       setZones([]);
     }
-  }, [toast]);
+  }, [hasAccess, toast]);
 
   useEffect(() => {
+    if (!hasAccess) {
+      return;
+    }
     void loadTables();
-  }, [loadTables]);
+  }, [hasAccess, loadTables]);
 
   useEffect(() => {
+    if (!hasAccess) {
+      return;
+    }
     void loadZones();
-  }, [loadZones]);
+  }, [hasAccess, loadZones]);
 
   const handleReservationDateChange = useCallback((nextDate: string) => {
     setReservationForm((current) => {
@@ -422,7 +450,7 @@ export default function MesasPage(): JSX.Element {
     [tables, reservationTableId]
   );
 
-  return (
+  return hasAccess ? (
     <section className="space-y-10 pb-16">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-2">
@@ -790,5 +818,5 @@ export default function MesasPage(): JSX.Element {
         </div>
       </Modal>
     </section>
-  );
+  ) : guardContent ?? null;
 }

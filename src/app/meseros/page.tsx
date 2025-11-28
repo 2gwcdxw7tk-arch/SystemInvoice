@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-provider";
 import { formatCurrency } from "@/config/currency";
+import { publicFeatures } from "@/lib/features/public";
+import { FeatureGuardNotice } from "@/components/layout/feature-guard-notice";
 
 const DATETIME_FORMATTER = new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" });
 const DATE_FORMATTER = new Intl.DateTimeFormat("es-MX", { dateStyle: "medium" });
@@ -76,7 +78,19 @@ function formatDateOnly(value: string | null, fallback: string): string {
   return DATE_FORMATTER.format(date);
 }
 
-export default function MeserosPage() {
+export default function MeserosPage(): JSX.Element | null {
+  const isRestaurant = publicFeatures.isRestaurant;
+  const hasAccess = isRestaurant;
+
+  const guardContent = hasAccess
+    ? null
+    : (
+        <FeatureGuardNotice
+          title="Módulo de meseros no disponible"
+          description="La administración de personal de salón está deshabilitada cuando operas en modo retail. Activa NEXT_PUBLIC_ES_RESTAURANTE para volver a usar esta vista."
+        />
+      );
+
   const { toast } = useToast();
   const [waiters, setWaiters] = useState<WaiterDirectoryEntry[]>([]);
   const [loadingWaiters, setLoadingWaiters] = useState(false);
@@ -96,6 +110,11 @@ export default function MeserosPage() {
   const [togglingWaiterId, setTogglingWaiterId] = useState<number | null>(null);
 
   const loadWaiters = useCallback(async () => {
+    if (!hasAccess) {
+      setWaiters([]);
+      setLoadingWaiters(false);
+      return;
+    }
     setLoadingWaiters(true);
     try {
       const res = await fetch("/api/waiters?include_inactive=true", { cache: "no-store" });
@@ -111,11 +130,14 @@ export default function MeserosPage() {
     } finally {
       setLoadingWaiters(false);
     }
-  }, [toast]);
+  }, [hasAccess, toast]);
 
   useEffect(() => {
+    if (!hasAccess) {
+      return;
+    }
     void loadWaiters();
-  }, [loadWaiters]);
+  }, [hasAccess, loadWaiters]);
 
   const stats = useMemo(() => {
     const total = waiters.length;
@@ -299,7 +321,7 @@ export default function MeserosPage() {
     return activeSessions * 150;
   }, [waiters]);
 
-  return (
+  return hasAccess ? (
     <section className="space-y-10 pb-16">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-2">
@@ -685,5 +707,5 @@ export default function MeserosPage() {
         </div>
       </Modal>
     </section>
-  );
+  ) : guardContent ?? null;
 }

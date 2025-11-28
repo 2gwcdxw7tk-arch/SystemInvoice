@@ -1,5 +1,10 @@
 # Módulo de Cuentas por Cobrar (CxC) - Guía Completa de Implementación
 
+## 0. Estado actual (30 nov 2025)
+- **Completado**: repositorios y servicios de condiciones de pago, clientes, documentos, aplicaciones, líneas de crédito, gestiones y disputas con modo mock; endpoints protegidos por `requireCxCPermissions`; integración Facturación↔CxC con generación de documentos espejo; migración `20251128101500_cxc_core_tables` aplicada y sincronizada con `schema_master.sql`; dashboard CxC básico con aging y alertas de límite de crédito.
+- **Pruebas automatizadas**: `tests/api/invoices.retail.cxc.test.ts`, `tests/api/cxc.credit-lines.test.ts` y `tests/api/cxc.document-applications.test.ts` cubren emisión, crédito disponible y aplicaciones parciales; los escenarios de gestiones/disputas se documentan para QA manual hasta contar con su suite dedicada.
+- **Próximas iniciativas (roadmap)**: automatizar reportes avanzados (provisiones, aging gráfico interactivo), enriquecer métricas de licencias y evaluar scoring predictivo basado en historial de cobro.
+
 ## 1. VISIÓN GENERAL DEL MÓDULO
 
 Un módulo CxC es un sistema integral que gestiona el ciclo completo de cobro desde la facturación hasta la conciliación. Su objetivo es:
@@ -829,4 +834,12 @@ Este módulo CxC debe ser:
 ✓ **User-Friendly:** Fácil de usar
 
 El objetivo final es tener un sistema que **garantice flujo de caja saludable, minimice riesgos de incobrabilidad y proporcione visibilidad total del negocio.**
+
+---
+
+## 10. Implementación actual y focos de seguimiento
+
+- **Cobertura vigente**: Los servicios y APIs descritos están desplegados tanto para PostgreSQL como para `MOCK_DATA=true`, respetando permisos y la bandera `NEXT_PUBLIC_ES_RESTAURANTE`.
+- **Monitoreo recomendado**: validar trimestralmente los parámetros de bloqueo automático de crédito y la eficacia de las gestiones registradas en `collection_logs` para ajustar recordatorios.
+- **Próximos pasos sugeridos**: evaluar automatización de intereses moratorios y la integración con conciliación bancaria avanzada reutilizando la estructura de documentos y aplicaciones existente.
 

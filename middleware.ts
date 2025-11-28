@@ -25,9 +25,10 @@ const ROUTE_RULES: RouteRule[] = [
   { prefix: "/unidades", adminOnly: true },
   { prefix: "/mesas", adminOnly: true },
   { prefix: "/meseros", adminOnly: true },
+  { prefix: "/cuentas-por-cobrar", anyPermissions: ["menu.cxc.view"], adminOnly: false },
 ];
 
-const FACTURADOR_ALLOWED_PREFIXES = new Set(["/dashboard", "/facturacion", "/facturas", "/caja", "/reportes"]);
+const FACTURADOR_ALLOWED_PREFIXES = new Set(["/dashboard", "/facturacion", "/facturas", "/caja", "/reportes", "/cuentas-por-cobrar"]);
 
 function matchesPrefix(pathname: string, prefix: string): boolean {
   return pathname === prefix || pathname.startsWith(`${prefix}/`);
@@ -110,5 +111,6 @@ export const config = {
     "/mesas/:path*",
     "/usuarios/:path*",
     "/roles/:path*",
+    "/cuentas-por-cobrar/:path*",
   ],
 };

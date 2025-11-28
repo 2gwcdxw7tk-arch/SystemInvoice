@@ -387,6 +387,56 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     });
   }
 
+  async getCashRegisterByCode(cashRegisterCode: string): Promise<CashRegisterRecord | null> {
+    const normalizedCode = normalizeCode(cashRegisterCode);
+    const register = await this.prisma.cash_registers.findUnique({
+      where: { code: normalizedCode },
+      include: {
+        warehouses: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
+        sequence_definitions: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!register || !register.warehouses) {
+      return null;
+    }
+
+    return mapRegisterToRecord({
+      id: register.id,
+      code: register.code,
+      name: register.name,
+      warehouse_id: register.warehouse_id,
+      allow_manual_warehouse_override: register.allow_manual_warehouse_override,
+      is_active: register.is_active,
+      notes: register.notes,
+      created_at: register.created_at,
+      updated_at: register.updated_at,
+      warehouses: register.warehouses,
+      invoice_sequence_definition_id: register.invoice_sequence_definition_id ?? null,
+      sequence_definitions: register.sequence_definitions ?? null,
+    });
+  }
+
+  async countActiveCashRegisters(): Promise<number> {
+    return this.prisma.cash_registers.count({ where: { is_active: true } });
+  }
+
+  async countOpenCashRegisterSessions(): Promise<number> {
+    return this.prisma.cash_register_sessions.count({ where: { status: "OPEN" } });
+  }
+
   async listCashRegistersForAdmin(adminUserId: number): Promise<CashRegisterAssignment[]> {
     const assignments = await this.prisma.cash_register_users.findMany({
       where: { admin_user_id: adminUserId, cash_registers: { is_active: true } }, // Filter active cash registers here

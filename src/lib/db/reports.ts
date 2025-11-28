@@ -3,6 +3,7 @@ import "server-only";
 import { env } from "@/lib/env";
 import { query } from "@/lib/db/postgres";
 import type { PurchaseStatus } from "@/lib/types/inventory";
+import type { CustomerDocumentStatus, CustomerDocumentType } from "@/lib/types/cxc";
 
 export interface SalesSummaryFilters {
   from: string;
@@ -132,6 +133,181 @@ export interface InvoiceStatusDetailRow {
 export interface InvoiceStatusResult {
   summary: InvoiceStatusRow[];
   topPending: InvoiceStatusDetailRow[];
+}
+
+const CXC_DEBIT_TYPES: CustomerDocumentType[] = ["INVOICE", "DEBIT_NOTE"];
+const CXC_CREDIT_TYPES: CustomerDocumentType[] = ["CREDIT_NOTE", "RECEIPT", "RETENTION", "ADJUSTMENT"];
+const CXC_OPEN_STATUSES: CustomerDocumentStatus[] = ["PENDIENTE", "BORRADOR"];
+const CXC_ALL_STATUSES: CustomerDocumentStatus[] = ["PENDIENTE", "PAGADO", "CANCELADO", "BORRADOR"];
+const CXC_DOCUMENT_TYPE_LABELS: Record<CustomerDocumentType, string> = {
+  INVOICE: "Factura",
+  DEBIT_NOTE: "Nota de débito",
+  CREDIT_NOTE: "Nota de crédito",
+  RECEIPT: "Recibo",
+  RETENTION: "Retención",
+  ADJUSTMENT: "Ajuste",
+};
+
+export interface CxcSummaryFilters {
+  from: string;
+  to: string;
+  customer?: string;
+  status?: CustomerDocumentStatus[];
+  documentTypes?: CustomerDocumentType[];
+}
+
+export interface CxcSummaryTotals {
+  customers: number;
+  documents: number;
+  originalAmount: number;
+  balanceAmount: number;
+  overdueAmount: number;
+  dueNext7Amount: number;
+  dueNext30Amount: number;
+}
+
+export interface CxcSummaryStatusRow {
+  status: CustomerDocumentStatus;
+  documents: number;
+  originalAmount: number;
+  balanceAmount: number;
+}
+
+export interface CxcSummaryTopCustomerRow {
+  customerId: number;
+  customerCode: string;
+  customerName: string;
+  documents: number;
+  originalAmount: number;
+  balanceAmount: number;
+  overdueAmount: number;
+  creditLimit: number;
+  creditUsed: number;
+  creditOnHold: number;
+  availableCredit: number;
+  creditStatus: string;
+}
+
+export interface CxcSummaryResult {
+  totals: CxcSummaryTotals;
+  byStatus: CxcSummaryStatusRow[];
+  topCustomers: CxcSummaryTopCustomerRow[];
+  generatedAt: string;
+}
+
+export interface CxcDueAnalysisFilters {
+  from: string;
+  to: string;
+  customer?: string;
+  includeFuture?: boolean;
+}
+
+export interface CxcDueBucketRow {
+  bucket: "OVERDUE" | "TODAY" | "DUE_7" | "DUE_30" | "DUE_60" | "FUTURE";
+  label: string;
+  documents: number;
+  customers: number;
+  originalAmount: number;
+  balanceAmount: number;
+}
+
+export interface CxcDueDocumentRow {
+  documentId: number;
+  documentNumber: string;
+  customerId: number;
+  customerCode: string;
+  customerName: string;
+  documentType: CustomerDocumentType;
+  documentDate: string;
+  dueDate: string;
+  daysDelta: number;
+  originalAmount: number;
+  balanceAmount: number;
+  status: CustomerDocumentStatus;
+  paymentTermCode: string | null;
+}
+
+export interface CxcDueAnalysisResult {
+  buckets: CxcDueBucketRow[];
+  documents: CxcDueDocumentRow[];
+  generatedAt: string;
+}
+
+export interface CxcAgingFilters {
+  from: string;
+  to: string;
+  customer?: string;
+  limit?: number;
+}
+
+export interface CxcAgingRow {
+  customerId: number;
+  customerCode: string;
+  customerName: string;
+  documents: number;
+  balanceAmount: number;
+  bucketCurrent: number;
+  bucket0To30: number;
+  bucket31To60: number;
+  bucket61To90: number;
+  bucket91To120: number;
+  bucket120Plus: number;
+  creditLimit: number;
+  creditStatus: string;
+}
+
+export interface CxcAgingResult {
+  rows: CxcAgingRow[];
+  totals: {
+    balanceAmount: number;
+    customers: number;
+  };
+  generatedAt: string;
+}
+
+export interface CxcStatementFilters {
+  customerId?: number;
+  customerCode?: string;
+  from: string;
+  to: string;
+  includeApplications?: boolean;
+}
+
+export interface CxcStatementCustomerSummary {
+  id: number;
+  code: string;
+  name: string;
+  taxId: string | null;
+  creditLimit: number;
+  creditUsed: number;
+  creditOnHold: number;
+  creditStatus: string;
+  availableCredit: number;
+}
+
+export interface CxcStatementEntry {
+  entryId: string;
+  entryType: "DOCUMENT" | "APPLICATION";
+  documentType?: CustomerDocumentType;
+  documentNumber?: string;
+  relatedDocumentNumber?: string | null;
+  relatedDocumentType?: CustomerDocumentType | null;
+  description: string;
+  reference: string | null;
+  eventDate: string;
+  dueDate: string | null;
+  debit: number;
+  credit: number;
+  balanceAfter: number;
+  affectsBalance: boolean;
+}
+
+export interface CxcStatementResult {
+  customer: CxcStatementCustomerSummary;
+  openingBalance: number;
+  closingBalance: number;
+  entries: CxcStatementEntry[];
+  generatedAt: string;
 }
 
 function buildMockNumber(seed: number, multiplier: number, precision = 2) {
@@ -740,4 +916,899 @@ export async function getInvoiceStatusReport(filters: InvoiceStatusFilters): Pro
       status: row.status,
     })),
   } satisfies InvoiceStatusResult;
+}
+
+const ensureIsoString = (value: Date | string): string => (value instanceof Date ? value.toISOString() : new Date(value).toISOString());
+
+const dueBucketLabelMap: Record<CxcDueBucketRow["bucket"], string> = {
+  OVERDUE: "Vencido",
+  TODAY: "Vence hoy",
+  DUE_7: "0-7 días",
+  DUE_30: "8-30 días",
+  DUE_60: "31-60 días",
+  FUTURE: "61+ días",
+};
+
+const sanitizeCustomerFilter = (value?: string): string | null => {
+  if (!value) return null;
+  const normalized = value.trim();
+  if (!normalized) return null;
+  return `%${normalized.toUpperCase()}%`;
+};
+
+const sanitizeStatusFilter = (statuses?: CustomerDocumentStatus[]): CustomerDocumentStatus[] | null => {
+  if (!statuses || statuses.length === 0) return null;
+  const normalized = statuses
+    .map((status) => status.toUpperCase() as CustomerDocumentStatus)
+    .filter((status) => CXC_ALL_STATUSES.includes(status));
+  return normalized.length > 0 ? normalized : null;
+};
+
+const sanitizeDocumentTypes = (types?: CustomerDocumentType[]): CustomerDocumentType[] | null => {
+  if (!types || types.length === 0) return null;
+  const allowed = [...CXC_DEBIT_TYPES, ...CXC_CREDIT_TYPES];
+  const normalized = types
+    .map((type) => type.toUpperCase() as CustomerDocumentType)
+    .filter((type) => allowed.includes(type));
+  return normalized.length > 0 ? normalized : null;
+};
+
+export async function getCxcSummaryReport(filters: CxcSummaryFilters): Promise<CxcSummaryResult> {
+  if (env.useMockData) {
+    const totals: CxcSummaryTotals = {
+      customers: 12,
+      documents: 38,
+      originalAmount: 184_500.75,
+      balanceAmount: 92_340.5,
+      overdueAmount: 24_850.25,
+      dueNext7Amount: 12_400.0,
+      dueNext30Amount: 18_950.0,
+    };
+    const byStatus: CxcSummaryStatusRow[] = [
+      { status: "PENDIENTE", documents: 24, originalAmount: 110_000, balanceAmount: 82_000 },
+      { status: "BORRADOR", documents: 6, originalAmount: 6_500, balanceAmount: 6_500 },
+      { status: "PAGADO", documents: 8, originalAmount: 38_000, balanceAmount: 0 },
+    ];
+    const topCustomers: CxcSummaryTopCustomerRow[] = Array.from({ length: 5 }, (_, index) => {
+      const outstanding = 18_000 - index * 1_250;
+      const overdue = index % 2 === 0 ? outstanding * 0.35 : outstanding * 0.25;
+      const creditLimit = 25_000 + index * 2_500;
+      const creditUsed = outstanding + index * 600;
+      const creditOnHold = 1_200 + index * 150;
+      const available = Math.max(0, creditLimit - creditUsed - creditOnHold);
+      return {
+        customerId: index + 1,
+        customerCode: `CLI-${100 + index}`,
+        customerName: `Cliente Demo ${index + 1}`,
+        documents: 4 + index,
+        originalAmount: roundNumber(outstanding * 1.1),
+        balanceAmount: roundNumber(outstanding),
+        overdueAmount: roundNumber(overdue),
+        creditLimit: roundNumber(creditLimit),
+        creditUsed: roundNumber(creditUsed),
+        creditOnHold: roundNumber(creditOnHold),
+        availableCredit: roundNumber(available),
+        creditStatus: index === 0 ? "ACTIVE" : index === 3 ? "ON_HOLD" : "ACTIVE",
+      } satisfies CxcSummaryTopCustomerRow;
+    });
+    return {
+      totals,
+      byStatus,
+      topCustomers,
+      generatedAt: new Date().toISOString(),
+    } satisfies CxcSummaryResult;
+  }
+
+  const params: unknown[] = [filters.from, filters.to];
+  const conditions: string[] = [
+    "cd.document_date BETWEEN $1 AND $2",
+    "cd.balance_amount > 0",
+    "cd.status <> 'CANCELADO'",
+  ];
+
+  const documentTypes = sanitizeDocumentTypes(filters.documentTypes) ?? CXC_DEBIT_TYPES;
+  params.push(documentTypes);
+  conditions.push(`cd.document_type = ANY($${params.length}::text[])`);
+
+  const statusFilter = sanitizeStatusFilter(filters.status ?? CXC_OPEN_STATUSES);
+  if (statusFilter) {
+    params.push(statusFilter);
+    conditions.push(`cd.status = ANY($${params.length}::text[])`);
+  }
+
+  const customerTerm = sanitizeCustomerFilter(filters.customer);
+  if (customerTerm) {
+    params.push(customerTerm);
+    const placeholder = `$${params.length}`;
+    conditions.push(`(UPPER(c.code) LIKE ${placeholder} OR UPPER(c.name) LIKE ${placeholder} OR UPPER(COALESCE(c.tax_id, '')) LIKE ${placeholder})`);
+  }
+
+  const baseQuery = `
+WITH open_docs AS (
+  SELECT
+    cd.id,
+    cd.customer_id,
+    cd.document_type,
+    cd.document_number,
+    cd.document_date,
+    cd.due_date,
+    COALESCE(cd.due_date, cd.document_date) AS due_date_effective,
+    cd.original_amount,
+    cd.balance_amount,
+    cd.status,
+    c.code AS customer_code,
+    c.name AS customer_name,
+    c.credit_limit,
+    c.credit_used,
+    c.credit_on_hold,
+    c.credit_status
+  FROM app.customer_documents cd
+  INNER JOIN app.customers c ON c.id = cd.customer_id
+  WHERE ${conditions.join(" AND ")}
+)
+` as const;
+
+  const totalsResult = await query<{
+    customers: number;
+    documents: number;
+    original_amount: number;
+    balance_amount: number;
+    overdue_amount: number;
+    due_next_7: number;
+    due_next_30: number;
+  }>(
+    `${baseQuery}
+     SELECT
+       COUNT(DISTINCT customer_id) AS customers,
+       COUNT(*) AS documents,
+       COALESCE(SUM(original_amount), 0) AS original_amount,
+       COALESCE(SUM(balance_amount), 0) AS balance_amount,
+       COALESCE(SUM(CASE WHEN due_date_effective < CURRENT_DATE THEN balance_amount ELSE 0 END), 0) AS overdue_amount,
+       COALESCE(SUM(CASE WHEN due_date_effective >= CURRENT_DATE AND due_date_effective <= CURRENT_DATE + INTERVAL '7 day' THEN balance_amount ELSE 0 END), 0) AS due_next_7,
+       COALESCE(SUM(CASE WHEN due_date_effective > CURRENT_DATE + INTERVAL '7 day' AND due_date_effective <= CURRENT_DATE + INTERVAL '30 day' THEN balance_amount ELSE 0 END), 0) AS due_next_30
+     FROM open_docs`,
+    params
+  );
+
+  const statusResult = await query<{
+    status: CustomerDocumentStatus;
+    documents: number;
+    original_amount: number;
+    balance_amount: number;
+  }>(
+    `${baseQuery}
+     SELECT
+       status,
+       COUNT(*) AS documents,
+       COALESCE(SUM(original_amount), 0) AS original_amount,
+       COALESCE(SUM(balance_amount), 0) AS balance_amount
+     FROM open_docs
+     GROUP BY status
+     ORDER BY status`,
+    params
+  );
+
+  const topResult = await query<{
+    customer_id: number;
+    customer_code: string;
+    customer_name: string;
+    documents: number;
+    original_amount: number;
+    balance_amount: number;
+    overdue_amount: number;
+    credit_limit: number;
+    credit_used: number;
+    credit_on_hold: number;
+    credit_status: string;
+  }>(
+    `${baseQuery}
+     SELECT
+       customer_id,
+       customer_code,
+       customer_name,
+       COUNT(*) AS documents,
+       COALESCE(SUM(original_amount), 0) AS original_amount,
+       COALESCE(SUM(balance_amount), 0) AS balance_amount,
+       COALESCE(SUM(CASE WHEN due_date_effective < CURRENT_DATE THEN balance_amount ELSE 0 END), 0) AS overdue_amount,
+       MAX(credit_limit) AS credit_limit,
+       MAX(credit_used) AS credit_used,
+       MAX(credit_on_hold) AS credit_on_hold,
+       MAX(credit_status) AS credit_status
+     FROM open_docs
+     GROUP BY customer_id, customer_code, customer_name
+     ORDER BY balance_amount DESC
+     LIMIT 15`,
+    params
+  );
+
+  const totalsRow = totalsResult.rows[0] ?? {
+    customers: 0,
+    documents: 0,
+    original_amount: 0,
+    balance_amount: 0,
+    overdue_amount: 0,
+    due_next_7: 0,
+    due_next_30: 0,
+  };
+
+  return {
+    totals: {
+      customers: Number(totalsRow.customers ?? 0),
+      documents: Number(totalsRow.documents ?? 0),
+      originalAmount: roundNumber(totalsRow.original_amount),
+      balanceAmount: roundNumber(totalsRow.balance_amount),
+      overdueAmount: roundNumber(totalsRow.overdue_amount),
+      dueNext7Amount: roundNumber(totalsRow.due_next_7),
+      dueNext30Amount: roundNumber(totalsRow.due_next_30),
+    },
+    byStatus: statusResult.rows.map((row) => ({
+      status: row.status,
+      documents: Number(row.documents ?? 0),
+      originalAmount: roundNumber(row.original_amount),
+      balanceAmount: roundNumber(row.balance_amount),
+    })),
+    topCustomers: topResult.rows.map((row) => {
+      const creditLimit = roundNumber(row.credit_limit);
+      const creditUsed = roundNumber(row.credit_used);
+      const creditOnHold = roundNumber(row.credit_on_hold);
+      const available = Math.max(0, creditLimit - creditUsed - creditOnHold);
+      return {
+        customerId: Number(row.customer_id),
+        customerCode: row.customer_code,
+        customerName: row.customer_name,
+        documents: Number(row.documents ?? 0),
+        originalAmount: roundNumber(row.original_amount),
+        balanceAmount: roundNumber(row.balance_amount),
+        overdueAmount: roundNumber(row.overdue_amount),
+        creditLimit,
+        creditUsed,
+        creditOnHold,
+        availableCredit: roundNumber(available),
+        creditStatus: row.credit_status ?? "ACTIVE",
+      } satisfies CxcSummaryTopCustomerRow;
+    }),
+    generatedAt: new Date().toISOString(),
+  } satisfies CxcSummaryResult;
+}
+
+export async function getCxcDueAnalysisReport(filters: CxcDueAnalysisFilters): Promise<CxcDueAnalysisResult> {
+  if (env.useMockData) {
+    const buckets: CxcDueBucketRow[] = [
+      { bucket: "OVERDUE", label: dueBucketLabelMap.OVERDUE, documents: 7, customers: 5, originalAmount: 25_000, balanceAmount: 18_400 },
+      { bucket: "TODAY", label: dueBucketLabelMap.TODAY, documents: 3, customers: 3, originalAmount: 8_750, balanceAmount: 8_750 },
+      { bucket: "DUE_7", label: dueBucketLabelMap.DUE_7, documents: 5, customers: 4, originalAmount: 12_430, balanceAmount: 12_430 },
+      { bucket: "DUE_30", label: dueBucketLabelMap.DUE_30, documents: 4, customers: 4, originalAmount: 15_590, balanceAmount: 9_200 },
+      { bucket: "DUE_60", label: dueBucketLabelMap.DUE_60, documents: 2, customers: 2, originalAmount: 7_800, balanceAmount: 5_200 },
+      { bucket: "FUTURE", label: dueBucketLabelMap.FUTURE, documents: 6, customers: 6, originalAmount: 32_000, balanceAmount: 32_000 },
+    ];
+    const documents: CxcDueDocumentRow[] = Array.from({ length: 12 }, (_, index) => ({
+      documentId: 500 + index,
+      documentNumber: `FAC-2025-${1200 + index}`,
+      customerId: 100 + (index % 3),
+      customerCode: `CLI-${100 + (index % 3)}`,
+      customerName: `Cliente Demo ${(index % 3) + 1}`,
+      documentType: "INVOICE",
+      documentDate: new Date(Date.parse(filters.from) + index * 86_400_000).toISOString(),
+      dueDate: new Date(Date.parse(filters.from) + (index + 2) * 86_400_000).toISOString(),
+      daysDelta: index - 4,
+      originalAmount: 2_500 + index * 320,
+      balanceAmount: 2_500 + index * 320,
+      status: "PENDIENTE",
+      paymentTermCode: "NET30",
+    }));
+    return { buckets, documents, generatedAt: new Date().toISOString() } satisfies CxcDueAnalysisResult;
+  }
+
+  const params: unknown[] = [filters.from, filters.to];
+  const conditions: string[] = [
+    "cd.document_date BETWEEN $1 AND $2",
+    "cd.balance_amount > 0",
+    "cd.status <> 'CANCELADO'",
+  ];
+
+  params.push(CXC_DEBIT_TYPES);
+  conditions.push(`cd.document_type = ANY($${params.length}::text[])`);
+
+  const customerTerm = sanitizeCustomerFilter(filters.customer);
+  if (customerTerm) {
+    params.push(customerTerm);
+    const placeholder = `$${params.length}`;
+    conditions.push(`(UPPER(c.code) LIKE ${placeholder} OR UPPER(c.name) LIKE ${placeholder} OR UPPER(COALESCE(c.tax_id, '')) LIKE ${placeholder})`);
+  }
+
+  if (filters.includeFuture === false) {
+    conditions.push("COALESCE(cd.due_date, cd.document_date) <= CURRENT_DATE");
+  }
+
+  const baseQuery = `
+WITH open_docs AS (
+  SELECT
+    cd.id,
+    cd.customer_id,
+    cd.document_type,
+    cd.document_number,
+    cd.document_date,
+    cd.due_date,
+    COALESCE(cd.due_date, cd.document_date) AS due_date_effective,
+    cd.original_amount,
+    cd.balance_amount,
+    cd.status,
+    c.code AS customer_code,
+    c.name AS customer_name,
+    pt.code AS payment_term_code
+  FROM app.customer_documents cd
+  INNER JOIN app.customers c ON c.id = cd.customer_id
+  LEFT JOIN app.payment_terms pt ON pt.id = cd.payment_term_id
+  WHERE ${conditions.join(" AND ")}
+)
+` as const;
+
+  const bucketResult = await query<{
+    bucket: CxcDueBucketRow["bucket"];
+    documents: number;
+    customers: number;
+    original_amount: number;
+    balance_amount: number;
+  }>(
+    `${baseQuery}
+     SELECT
+       bucket,
+       COUNT(*) AS documents,
+       COUNT(DISTINCT customer_id) AS customers,
+       COALESCE(SUM(original_amount), 0) AS original_amount,
+       COALESCE(SUM(balance_amount), 0) AS balance_amount
+     FROM (
+       SELECT *,
+         CASE
+           WHEN due_date_effective < CURRENT_DATE THEN 'OVERDUE'
+           WHEN due_date_effective = CURRENT_DATE THEN 'TODAY'
+           WHEN due_date_effective <= CURRENT_DATE + INTERVAL '7 day' THEN 'DUE_7'
+           WHEN due_date_effective <= CURRENT_DATE + INTERVAL '30 day' THEN 'DUE_30'
+           WHEN due_date_effective <= CURRENT_DATE + INTERVAL '60 day' THEN 'DUE_60'
+           ELSE 'FUTURE'
+         END AS bucket
+       FROM open_docs
+     ) bucketed
+     GROUP BY bucket
+     ORDER BY bucket`,
+    params
+  );
+
+  const documentsResult = await query<{
+    id: number;
+    document_number: string;
+    customer_id: number;
+    customer_code: string;
+    customer_name: string;
+    document_type: CustomerDocumentType;
+    document_date: Date | string;
+    due_date: Date | string;
+    due_date_effective: Date | string;
+    original_amount: number;
+    balance_amount: number;
+    status: CustomerDocumentStatus;
+    payment_term_code: string | null;
+  }>(
+    `${baseQuery}
+     SELECT
+       id,
+       document_number,
+       customer_id,
+       customer_code,
+       customer_name,
+       document_type,
+       document_date,
+       due_date,
+       due_date_effective,
+       original_amount,
+       balance_amount,
+       status,
+       payment_term_code
+     FROM open_docs
+     ORDER BY due_date_effective ASC, balance_amount DESC
+     LIMIT 100`,
+    params
+  );
+
+  const today = new Date();
+  const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+
+  return {
+    buckets: bucketResult.rows.map((row) => ({
+      bucket: row.bucket,
+      label: dueBucketLabelMap[row.bucket],
+      documents: Number(row.documents ?? 0),
+      customers: Number(row.customers ?? 0),
+      originalAmount: roundNumber(row.original_amount),
+      balanceAmount: roundNumber(row.balance_amount),
+    })),
+    documents: documentsResult.rows.map((row) => {
+      const dueDate = ensureIsoString(row.due_date_effective);
+      const dueDateValue = new Date(dueDate);
+      const diffMs = todayUtc.getTime() - dueDateValue.getTime();
+      const daysDelta = Math.round(diffMs / 86_400_000);
+      return {
+        documentId: Number(row.id),
+        documentNumber: row.document_number,
+        customerId: Number(row.customer_id),
+        customerCode: row.customer_code,
+        customerName: row.customer_name,
+        documentType: row.document_type,
+        documentDate: ensureIsoString(row.document_date),
+        dueDate,
+        daysDelta,
+        originalAmount: roundNumber(row.original_amount),
+        balanceAmount: roundNumber(row.balance_amount),
+        status: row.status,
+        paymentTermCode: row.payment_term_code,
+      } satisfies CxcDueDocumentRow;
+    }),
+    generatedAt: new Date().toISOString(),
+  } satisfies CxcDueAnalysisResult;
+}
+
+export async function getCxcAgingReport(filters: CxcAgingFilters): Promise<CxcAgingResult> {
+  if (env.useMockData) {
+    const rows: CxcAgingRow[] = Array.from({ length: 6 }, (_, index) => ({
+      customerId: index + 1,
+      customerCode: `CLI-${120 + index}`,
+      customerName: `Cliente Demo ${index + 1}`,
+      documents: 3 + index,
+      balanceAmount: 18_000 - index * 1_500,
+      bucketCurrent: 3_500 + index * 420,
+      bucket0To30: 4_200 - index * 180,
+      bucket31To60: 3_300 - index * 250,
+      bucket61To90: 2_600 - index * 320,
+      bucket91To120: 2_100 - index * 210,
+      bucket120Plus: 1_500 + index * 150,
+      creditLimit: 25_000 + index * 2_000,
+      creditStatus: index === 4 ? "ON_HOLD" : "ACTIVE",
+    }));
+    const totalsBalance = rows.reduce((acc, row) => acc + row.balanceAmount, 0);
+    return {
+      rows,
+      totals: {
+        balanceAmount: roundNumber(totalsBalance),
+        customers: rows.length,
+      },
+      generatedAt: new Date().toISOString(),
+    } satisfies CxcAgingResult;
+  }
+
+  const params: unknown[] = [filters.from, filters.to];
+  const conditions: string[] = [
+    "cd.document_date BETWEEN $1 AND $2",
+    "cd.balance_amount > 0",
+    "cd.status <> 'CANCELADO'",
+  ];
+
+  params.push(CXC_DEBIT_TYPES);
+  conditions.push(`cd.document_type = ANY($${params.length}::text[])`);
+
+  const customerTerm = sanitizeCustomerFilter(filters.customer);
+  if (customerTerm) {
+    params.push(customerTerm);
+    const placeholder = `$${params.length}`;
+    conditions.push(`(UPPER(c.code) LIKE ${placeholder} OR UPPER(c.name) LIKE ${placeholder} OR UPPER(COALESCE(c.tax_id, '')) LIKE ${placeholder})`);
+  }
+
+  const limit = Math.max(1, Math.min(filters.limit ?? 50, 200));
+  params.push(limit);
+
+  const queryResult = await query<{
+    customer_id: number;
+    customer_code: string;
+    customer_name: string;
+    documents: number;
+    balance_amount: number;
+    bucket_current: number;
+    bucket_0_30: number;
+    bucket_31_60: number;
+    bucket_61_90: number;
+    bucket_91_120: number;
+    bucket_120_plus: number;
+    credit_limit: number;
+    credit_status: string;
+  }>(
+    `WITH open_docs AS (
+       SELECT
+         cd.id,
+         cd.customer_id,
+         cd.document_type,
+         cd.document_number,
+         cd.document_date,
+         cd.due_date,
+         COALESCE(cd.due_date, cd.document_date) AS due_date_effective,
+         cd.balance_amount,
+         c.code AS customer_code,
+         c.name AS customer_name,
+         c.credit_limit,
+         c.credit_status
+       FROM app.customer_documents cd
+       INNER JOIN app.customers c ON c.id = cd.customer_id
+       WHERE ${conditions.join(" AND ")}
+     ), classified AS (
+       SELECT
+         customer_id,
+         customer_code,
+         customer_name,
+         balance_amount,
+         credit_limit,
+         credit_status,
+         CASE
+           WHEN due_date_effective < CURRENT_DATE - INTERVAL '120 day' THEN '120_PLUS'
+           WHEN due_date_effective < CURRENT_DATE - INTERVAL '90 day' THEN '91_120'
+           WHEN due_date_effective < CURRENT_DATE - INTERVAL '60 day' THEN '61_90'
+           WHEN due_date_effective < CURRENT_DATE - INTERVAL '30 day' THEN '31_60'
+           WHEN due_date_effective < CURRENT_DATE THEN '0_30'
+           ELSE 'CURRENT'
+         END AS bucket
+       FROM open_docs
+     )
+     SELECT
+       customer_id,
+       customer_code,
+       customer_name,
+       COUNT(*) AS documents,
+       COALESCE(SUM(balance_amount), 0) AS balance_amount,
+       COALESCE(SUM(CASE WHEN bucket = 'CURRENT' THEN balance_amount ELSE 0 END), 0) AS bucket_current,
+       COALESCE(SUM(CASE WHEN bucket = '0_30' THEN balance_amount ELSE 0 END), 0) AS bucket_0_30,
+       COALESCE(SUM(CASE WHEN bucket = '31_60' THEN balance_amount ELSE 0 END), 0) AS bucket_31_60,
+       COALESCE(SUM(CASE WHEN bucket = '61_90' THEN balance_amount ELSE 0 END), 0) AS bucket_61_90,
+       COALESCE(SUM(CASE WHEN bucket = '91_120' THEN balance_amount ELSE 0 END), 0) AS bucket_91_120,
+       COALESCE(SUM(CASE WHEN bucket = '120_PLUS' THEN balance_amount ELSE 0 END), 0) AS bucket_120_plus,
+       MAX(credit_limit) AS credit_limit,
+       MAX(credit_status) AS credit_status
+     FROM classified
+     GROUP BY customer_id, customer_code, customer_name
+     ORDER BY balance_amount DESC
+     LIMIT $${params.length}`,
+    params
+  );
+
+  const totals = queryResult.rows.reduce(
+    (acc, row) => {
+      acc.balanceAmount += Number(row.balance_amount ?? 0);
+      acc.customers += 1;
+      return acc;
+    },
+    { balanceAmount: 0, customers: 0 }
+  );
+
+  return {
+    rows: queryResult.rows.map((row) => ({
+      customerId: Number(row.customer_id),
+      customerCode: row.customer_code,
+      customerName: row.customer_name,
+      documents: Number(row.documents ?? 0),
+      balanceAmount: roundNumber(row.balance_amount),
+      bucketCurrent: roundNumber(row.bucket_current),
+      bucket0To30: roundNumber(row.bucket_0_30),
+      bucket31To60: roundNumber(row.bucket_31_60),
+      bucket61To90: roundNumber(row.bucket_61_90),
+      bucket91To120: roundNumber(row.bucket_91_120),
+      bucket120Plus: roundNumber(row.bucket_120_plus),
+      creditLimit: roundNumber(row.credit_limit),
+      creditStatus: row.credit_status ?? "ACTIVE",
+    })),
+    totals: {
+      balanceAmount: roundNumber(totals.balanceAmount),
+      customers: totals.customers,
+    },
+    generatedAt: new Date().toISOString(),
+  } satisfies CxcAgingResult;
+}
+
+export async function getCxcStatementReport(filters: CxcStatementFilters): Promise<CxcStatementResult> {
+  if (env.useMockData) {
+    const customer: CxcStatementCustomerSummary = {
+      id: 1,
+      code: filters.customerCode ?? "CLI-100",
+      name: "Cliente Demo",
+      taxId: "J03123456",
+      creditLimit: 50_000,
+      creditUsed: 18_500,
+      creditOnHold: 2_500,
+      creditStatus: "ACTIVE",
+      availableCredit: 29_000,
+    };
+    const openingBalance = 12_000;
+    let running = openingBalance;
+    const entries: CxcStatementEntry[] = [
+      {
+        entryId: "DOC-1",
+        entryType: "DOCUMENT",
+        documentType: "INVOICE",
+        documentNumber: "FAC-001",
+        description: "Factura",
+        reference: null,
+        eventDate: new Date(filters.from).toISOString(),
+        dueDate: new Date(filters.to).toISOString(),
+        debit: 8_500,
+        credit: 0,
+        balanceAfter: (running += 8_500),
+        affectsBalance: true,
+      },
+      {
+        entryId: "DOC-2",
+        entryType: "DOCUMENT",
+        documentType: "RECEIPT",
+        documentNumber: "ROC-001",
+        description: "Recibo",
+        reference: "Transferencia 1234",
+        eventDate: new Date(Date.parse(filters.from) + 2 * 86_400_000).toISOString(),
+        dueDate: null,
+        debit: 0,
+        credit: 5_000,
+        balanceAfter: (running -= 5_000),
+        affectsBalance: true,
+      },
+      {
+        entryId: "APP-1",
+        entryType: "APPLICATION",
+        description: "Aplicación de recibo ROC-001 a FAC-001",
+        relatedDocumentNumber: "FAC-001",
+        relatedDocumentType: "INVOICE",
+        reference: "Pago parcial",
+        eventDate: new Date(Date.parse(filters.from) + 3 * 86_400_000).toISOString(),
+        dueDate: null,
+        debit: 0,
+        credit: 0,
+        balanceAfter: running,
+        affectsBalance: false,
+      },
+    ];
+    return {
+      customer,
+      openingBalance,
+      closingBalance: running,
+      entries,
+      generatedAt: new Date().toISOString(),
+    } satisfies CxcStatementResult;
+  }
+
+  if (!filters.customerCode && typeof filters.customerId !== "number") {
+    throw new Error("Se requiere customerCode o customerId para generar el estado de cuenta");
+  }
+
+  const customerLookupParams: unknown[] = [];
+  const customerLookupConditions: string[] = [];
+
+  if (typeof filters.customerId === "number") {
+    customerLookupParams.push(filters.customerId);
+    customerLookupConditions.push(`id = $${customerLookupParams.length}`);
+  }
+
+  if (filters.customerCode) {
+    customerLookupParams.push(filters.customerCode.trim().toUpperCase());
+    customerLookupConditions.push(`UPPER(code) = $${customerLookupParams.length}`);
+  }
+
+  const customerRow = await query<{
+    id: number;
+    code: string;
+    name: string;
+    tax_id: string | null;
+    credit_limit: number;
+    credit_used: number;
+    credit_on_hold: number;
+    credit_status: string;
+  }>(
+    `SELECT id, code, name, tax_id, credit_limit, credit_used, credit_on_hold, credit_status
+     FROM app.customers
+     WHERE ${customerLookupConditions.join(" OR ")}
+     LIMIT 1`,
+    customerLookupParams
+  );
+
+  const customer = customerRow.rows[0];
+  if (!customer) {
+    throw new Error("Cliente no encontrado para generar el estado de cuenta");
+  }
+
+  const customerId = Number(customer.id);
+  const baseCustomerSummary: CxcStatementCustomerSummary = {
+    id: customerId,
+    code: customer.code,
+    name: customer.name,
+    taxId: customer.tax_id,
+    creditLimit: roundNumber(customer.credit_limit),
+    creditUsed: roundNumber(customer.credit_used),
+    creditOnHold: roundNumber(customer.credit_on_hold),
+    creditStatus: customer.credit_status ?? "ACTIVE",
+    availableCredit: roundNumber(Math.max(0, Number(customer.credit_limit ?? 0) - Number(customer.credit_used ?? 0) - Number(customer.credit_on_hold ?? 0))),
+  };
+
+  const documentsParams: unknown[] = [customerId];
+  const documentConditions: string[] = ["cd.customer_id = $1", "cd.status <> 'CANCELADO'"];
+
+  if (filters.from) {
+    documentsParams.push(filters.from);
+    documentConditions.push(`cd.document_date >= $${documentsParams.length}`);
+  }
+  if (filters.to) {
+    documentsParams.push(filters.to);
+    documentConditions.push(`cd.document_date <= $${documentsParams.length}`);
+  }
+
+  const documentsResult = await query<{
+    id: number;
+    document_type: CustomerDocumentType;
+    document_number: string;
+    document_date: Date | string;
+    due_date: Date | string | null;
+    original_amount: number;
+    balance_amount: number;
+    status: CustomerDocumentStatus;
+    reference: string | null;
+    notes: string | null;
+  }>(
+    `SELECT id, document_type, document_number, document_date, due_date, original_amount, balance_amount, status, reference, notes
+     FROM app.customer_documents cd
+     WHERE ${documentConditions.join(" AND ")}
+     ORDER BY document_date ASC, id ASC`,
+    documentsParams
+  );
+
+  const includeApplications = filters.includeApplications !== false;
+  let applicationsRows: Array<{
+    id: number;
+    application_date: Date | string;
+    amount: number;
+    reference: string | null;
+    notes: string | null;
+    applied_number: string;
+    applied_type: CustomerDocumentType;
+    target_number: string;
+    target_type: CustomerDocumentType;
+  }> = [];
+
+  if (includeApplications) {
+    const appParams: unknown[] = [customerId];
+    const appConditions: string[] = ["(applied.customer_id = $1 OR target.customer_id = $1)"];
+    if (filters.from) {
+      appParams.push(filters.from);
+      appConditions.push(`app.application_date::date >= $${appParams.length}`);
+    }
+    if (filters.to) {
+      appParams.push(filters.to);
+      appConditions.push(`app.application_date::date <= $${appParams.length}`);
+    }
+
+    const appsResult = await query<{
+      id: number;
+      application_date: Date | string;
+      amount: number;
+      reference: string | null;
+      notes: string | null;
+      applied_number: string;
+      applied_type: CustomerDocumentType;
+      target_number: string;
+      target_type: CustomerDocumentType;
+    }>(
+      `SELECT
+         app.id,
+         app.application_date,
+         app.amount,
+         app.reference,
+         app.notes,
+         applied.document_number AS applied_number,
+         applied.document_type AS applied_type,
+         target.document_number AS target_number,
+         target.document_type AS target_type
+       FROM app.customer_document_applications app
+       INNER JOIN app.customer_documents applied ON applied.id = app.applied_document_id
+       INNER JOIN app.customer_documents target ON target.id = app.target_document_id
+       WHERE ${appConditions.join(" AND ")}
+       ORDER BY app.application_date ASC, app.id ASC`,
+      appParams
+    );
+    applicationsRows = appsResult.rows;
+  }
+
+  let openingBalance = 0;
+  if (filters.from) {
+    const openingResult = await query<{
+      debit_total: number;
+      credit_total: number;
+    }>(
+      `SELECT
+         COALESCE(SUM(CASE WHEN document_type = ANY($2::text[]) THEN original_amount ELSE 0 END), 0) AS debit_total,
+         COALESCE(SUM(CASE WHEN document_type = ANY($3::text[]) THEN original_amount ELSE 0 END), 0) AS credit_total
+       FROM app.customer_documents
+       WHERE customer_id = $1
+         AND status <> 'CANCELADO'
+         AND document_date < $4`,
+      [customerId, CXC_DEBIT_TYPES, CXC_CREDIT_TYPES, filters.from]
+    );
+    const row = openingResult.rows[0];
+    openingBalance = roundNumber((row?.debit_total ?? 0) - (row?.credit_total ?? 0));
+  }
+
+  type StatementEvent = {
+    sortKey: string;
+    eventDate: string;
+    affectsBalance: boolean;
+    debit: number;
+    credit: number;
+    buildEntry: (balance: number) => CxcStatementEntry;
+  };
+
+  const events: StatementEvent[] = [];
+
+  for (const doc of documentsResult.rows) {
+    const eventDate = ensureIsoString(doc.document_date);
+    const dueDate = doc.due_date ? ensureIsoString(doc.due_date) : null;
+    const isDebit = CXC_DEBIT_TYPES.includes(doc.document_type);
+    const debit = isDebit ? roundNumber(doc.original_amount) : 0;
+    const credit = isDebit ? 0 : roundNumber(doc.original_amount);
+    const description = CXC_DOCUMENT_TYPE_LABELS[doc.document_type] ?? doc.document_type;
+    const reference = doc.reference ?? doc.notes ?? null;
+    events.push({
+      sortKey: `${eventDate}-DOC-${String(doc.id).padStart(6, "0")}`,
+      eventDate,
+      affectsBalance: true,
+      debit,
+      credit,
+      buildEntry: (balance) => ({
+        entryId: `DOC-${doc.id}`,
+        entryType: "DOCUMENT",
+        documentType: doc.document_type,
+        documentNumber: doc.document_number,
+        description,
+        reference,
+        eventDate,
+        dueDate,
+        debit,
+        credit,
+        balanceAfter: roundNumber(balance),
+        affectsBalance: true,
+      }),
+    });
+  }
+
+  for (const app of applicationsRows) {
+    const eventDate = ensureIsoString(app.application_date);
+    const description = `Aplicación de ${app.applied_number} a ${app.target_number}`;
+    events.push({
+      sortKey: `${eventDate}-APP-${String(app.id).padStart(6, "0")}`,
+      eventDate,
+      affectsBalance: false,
+      debit: 0,
+      credit: 0,
+      buildEntry: (balance) => ({
+        entryId: `APP-${app.id}`,
+        entryType: "APPLICATION",
+        description,
+        relatedDocumentNumber: app.target_number,
+        relatedDocumentType: app.target_type,
+        reference: app.reference ?? app.notes ?? null,
+        eventDate,
+        dueDate: null,
+        debit: 0,
+        credit: 0,
+        balanceAfter: roundNumber(balance),
+        affectsBalance: false,
+      }),
+    });
+  }
+
+  events.sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
+
+  let runningBalance = openingBalance;
+  const entries: CxcStatementEntry[] = [];
+  for (const event of events) {
+    if (event.affectsBalance) {
+      runningBalance = roundNumber(runningBalance + event.debit - event.credit);
+    }
+    entries.push(event.buildEntry(runningBalance));
+  }
+
+  return {
+    customer: baseCustomerSummary,
+    openingBalance,
+    closingBalance: runningBalance,
+    entries,
+    generatedAt: new Date().toISOString(),
+  } satisfies CxcStatementResult;
 }

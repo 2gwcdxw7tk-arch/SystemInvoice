@@ -15,6 +15,14 @@ import {
   PurchasesReportRow,
   InvoiceStatusFilters,
   InvoiceStatusResult,
+  CxcSummaryFilters,
+  CxcSummaryResult,
+  CxcDueAnalysisFilters,
+  CxcDueAnalysisResult,
+  CxcAgingFilters,
+  CxcAgingResult,
+  CxcStatementFilters,
+  CxcStatementResult,
 } from "@/lib/repositories/reports/ReportRepository";
 
 function formatMoney(value: number, currency = "MXN") {
@@ -72,6 +80,18 @@ export class ReportService {
   }
   getInvoiceStatus(filters: InvoiceStatusFilters): Promise<InvoiceStatusResult> {
     return this.repo.getInvoiceStatus(filters);
+  }
+  getCxcSummary(filters: CxcSummaryFilters): Promise<CxcSummaryResult> {
+    return this.repo.getCxcSummary(filters);
+  }
+  getCxcDueAnalysis(filters: CxcDueAnalysisFilters): Promise<CxcDueAnalysisResult> {
+    return this.repo.getCxcDueAnalysis(filters);
+  }
+  getCxcAging(filters: CxcAgingFilters): Promise<CxcAgingResult> {
+    return this.repo.getCxcAging(filters);
+  }
+  getCxcStatement(filters: CxcStatementFilters): Promise<CxcStatementResult> {
+    return this.repo.getCxcStatement(filters);
   }
 
   // HTML renderers
@@ -270,6 +290,207 @@ export class ReportService {
           <th>Folio</th><th>Cliente</th><th>Mesero</th><th>Fecha</th><th class="right">Total</th><th class="right">Pagado</th><th class="right">Saldo</th><th>Estatus</th>
         </tr></thead>
         <tbody>${pendingRows}</tbody>
+      </table>
+    `;
+    return baseHtml(title, body);
+  }
+
+  renderCxcSummaryHtml(filters: CxcSummaryFilters, data: CxcSummaryResult): string {
+    const title = `CxC - Resumen (${filters.from} a ${filters.to})`;
+    const statusRows = data.byStatus
+      .map(
+        (row) => `<tr>
+          <td>${row.status}</td>
+          <td class="right">${row.documents}</td>
+          <td class="right">${formatMoney(row.originalAmount)}</td>
+          <td class="right">${formatMoney(row.balanceAmount)}</td>
+        </tr>`
+      )
+      .join("");
+    const topRows = data.topCustomers
+      .map(
+        (row, index) => `<tr>
+          <td>${index + 1}</td>
+          <td>${row.customerCode}</td>
+          <td>${row.customerName}</td>
+          <td class="right">${row.documents}</td>
+          <td class="right">${formatMoney(row.originalAmount)}</td>
+          <td class="right">${formatMoney(row.balanceAmount)}</td>
+          <td class="right">${formatMoney(row.overdueAmount)}</td>
+          <td class="right">${formatMoney(row.availableCredit)}</td>
+          <td>${row.creditStatus}</td>
+        </tr>`
+      )
+      .join("");
+    const body = `
+      <h1>${title}</h1>
+      <div class="meta">Generado: ${new Date(data.generatedAt).toLocaleString("es-MX")}</div>
+      <h2>Totales</h2>
+      <table>
+        <tbody>
+          <tr><td>Clientes</td><td class="right">${data.totals.customers}</td></tr>
+          <tr><td>Documentos</td><td class="right">${data.totals.documents}</td></tr>
+          <tr><td>Monto original</td><td class="right">${formatMoney(data.totals.originalAmount)}</td></tr>
+          <tr><td>Saldo</td><td class="right">${formatMoney(data.totals.balanceAmount)}</td></tr>
+          <tr><td>Vencido</td><td class="right">${formatMoney(data.totals.overdueAmount)}</td></tr>
+          <tr><td>Vence en 7 días</td><td class="right">${formatMoney(data.totals.dueNext7Amount)}</td></tr>
+          <tr><td>Vence en 30 días</td><td class="right">${formatMoney(data.totals.dueNext30Amount)}</td></tr>
+        </tbody>
+      </table>
+      <h2>Por estatus</h2>
+      <table>
+        <thead><tr>
+          <th>Estatus</th><th class="right">Documentos</th><th class="right">Monto original</th><th class="right">Saldo</th>
+        </tr></thead>
+        <tbody>${statusRows}</tbody>
+      </table>
+      <h2>Top clientes por saldo</h2>
+      <table>
+        <thead><tr>
+          <th>#</th><th>Código</th><th>Cliente</th><th class="right">Documentos</th><th class="right">Monto original</th><th class="right">Saldo</th><th class="right">Vencido</th><th class="right">Crédito disp.</th><th>Estatus crédito</th>
+        </tr></thead>
+        <tbody>${topRows}</tbody>
+      </table>
+    `;
+    return baseHtml(title, body);
+  }
+
+  renderCxcDueAnalysisHtml(filters: CxcDueAnalysisFilters, data: CxcDueAnalysisResult): string {
+    const title = `CxC - Análisis de Vencimientos (${filters.from} a ${filters.to})`;
+    const bucketRows = data.buckets
+      .map(
+        (bucket) => `<tr>
+          <td>${bucket.label}</td>
+          <td class="right">${bucket.documents}</td>
+          <td class="right">${bucket.customers}</td>
+          <td class="right">${formatMoney(bucket.originalAmount)}</td>
+          <td class="right">${formatMoney(bucket.balanceAmount)}</td>
+        </tr>`
+      )
+      .join("");
+    const documentRows = data.documents
+      .map(
+        (doc) => `<tr>
+          <td>${doc.documentNumber}</td>
+          <td>${doc.customerCode}</td>
+          <td>${doc.customerName}</td>
+          <td>${doc.documentType}</td>
+          <td>${new Date(doc.documentDate).toLocaleDateString("es-MX")}</td>
+          <td>${new Date(doc.dueDate).toLocaleDateString("es-MX")}</td>
+          <td class="right">${doc.daysDelta}</td>
+          <td class="right">${formatMoney(doc.originalAmount)}</td>
+          <td class="right">${formatMoney(doc.balanceAmount)}</td>
+          <td>${doc.status}</td>
+          <td>${doc.paymentTermCode ?? "-"}</td>
+        </tr>`
+      )
+      .join("");
+    const body = `
+      <h1>${title}</h1>
+      <div class="meta">Generado: ${new Date(data.generatedAt).toLocaleString("es-MX")}</div>
+      <h2>Resumen por bucket</h2>
+      <table>
+        <thead><tr>
+          <th>Rango</th><th class="right">Documentos</th><th class="right">Clientes</th><th class="right">Monto original</th><th class="right">Saldo</th>
+        </tr></thead>
+        <tbody>${bucketRows}</tbody>
+      </table>
+      <h2>Documentos destacados</h2>
+      <table>
+        <thead><tr>
+          <th>Documento</th><th>Cliente</th><th>Nombre</th><th>Tipo</th><th>Fecha</th><th>Vencimiento</th><th class="right">Días vencido</th><th class="right">Monto</th><th class="right">Saldo</th><th>Estatus</th><th>Término</th>
+        </tr></thead>
+        <tbody>${documentRows}</tbody>
+      </table>
+    `;
+    return baseHtml(title, body);
+  }
+
+  renderCxcAgingHtml(filters: CxcAgingFilters, data: CxcAgingResult): string {
+    const title = `CxC - Antigüedad de saldos (${filters.from} a ${filters.to})`;
+    const rows = data.rows
+      .map(
+        (row, index) => `<tr>
+          <td>${index + 1}</td>
+          <td>${row.customerCode}</td>
+          <td>${row.customerName}</td>
+          <td class="right">${row.documents}</td>
+          <td class="right">${formatMoney(row.balanceAmount)}</td>
+          <td class="right">${formatMoney(row.bucketCurrent)}</td>
+          <td class="right">${formatMoney(row.bucket0To30)}</td>
+          <td class="right">${formatMoney(row.bucket31To60)}</td>
+          <td class="right">${formatMoney(row.bucket61To90)}</td>
+          <td class="right">${formatMoney(row.bucket91To120)}</td>
+          <td class="right">${formatMoney(row.bucket120Plus)}</td>
+          <td class="right">${formatMoney(row.creditLimit)}</td>
+          <td>${row.creditStatus}</td>
+        </tr>`
+      )
+      .join("");
+    const body = `
+      <h1>${title}</h1>
+      <div class="meta">Generado: ${new Date(data.generatedAt).toLocaleString("es-MX")}</div>
+      <h2>Resumen</h2>
+      <table>
+        <tbody>
+          <tr><td>Clientes</td><td class="right">${data.totals.customers}</td></tr>
+          <tr><td>Saldo total</td><td class="right">${formatMoney(data.totals.balanceAmount)}</td></tr>
+        </tbody>
+      </table>
+      <h2>Detalle</h2>
+      <table>
+        <thead><tr>
+          <th>#</th><th>Código</th><th>Cliente</th><th class="right">Docs</th><th class="right">Saldo</th><th class="right">Vigente</th><th class="right">0-30</th><th class="right">31-60</th><th class="right">61-90</th><th class="right">91-120</th><th class="right">120+</th><th class="right">Límite crédito</th><th>Estatus crédito</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    return baseHtml(title, body);
+  }
+
+  renderCxcStatementHtml(filters: CxcStatementFilters, data: CxcStatementResult): string {
+    const title = `CxC - Estado de cuenta (${filters.from} a ${filters.to})`;
+    const entries = data.entries
+      .map(
+        (entry) => `<tr>
+          <td>${entry.eventDate ? new Date(entry.eventDate).toLocaleString("es-MX") : "-"}</td>
+          <td>${entry.entryType}</td>
+          <td>${entry.documentNumber ?? entry.relatedDocumentNumber ?? "-"}</td>
+          <td>${entry.description}</td>
+          <td>${entry.dueDate ? new Date(entry.dueDate).toLocaleDateString("es-MX") : "-"}</td>
+          <td class="right">${formatMoney(entry.debit)}</td>
+          <td class="right">${formatMoney(entry.credit)}</td>
+          <td class="right">${formatMoney(entry.balanceAfter)}</td>
+        </tr>`
+      )
+      .join("");
+    const body = `
+      <h1>${title}</h1>
+      <div class="meta">Generado: ${new Date(data.generatedAt).toLocaleString("es-MX")}</div>
+      <h2>Cliente</h2>
+      <table>
+        <tbody>
+          <tr><td>Código</td><td>${data.customer.code}</td></tr>
+          <tr><td>Nombre</td><td>${data.customer.name}</td></tr>
+          <tr><td>Identificación</td><td>${data.customer.taxId ?? "-"}</td></tr>
+          <tr><td>Límite de crédito</td><td class="right">${formatMoney(data.customer.creditLimit)}</td></tr>
+          <tr><td>Disponible</td><td class="right">${formatMoney(data.customer.availableCredit)}</td></tr>
+          <tr><td>Estatus crédito</td><td>${data.customer.creditStatus}</td></tr>
+        </tbody>
+      </table>
+      <h2>Resumen</h2>
+      <table>
+        <tbody>
+          <tr><td>Saldo inicial</td><td class="right">${formatMoney(data.openingBalance)}</td></tr>
+          <tr><td>Saldo final</td><td class="right">${formatMoney(data.closingBalance)}</td></tr>
+        </tbody>
+      </table>
+      <h2>Movimientos</h2>
+      <table>
+        <thead><tr>
+          <th>Fecha</th><th>Tipo</th><th>Documento</th><th>Descripción</th><th>Vencimiento</th><th class="right">Débito</th><th class="right">Crédito</th><th class="right">Saldo</th>
+        </tr></thead>
+        <tbody>${entries}</tbody>
       </table>
     `;
     return baseHtml(title, body);

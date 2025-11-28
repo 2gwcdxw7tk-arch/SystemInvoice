@@ -1,6 +1,7 @@
 import "server-only";
 
 import { env } from "@/lib/env";
+import { assertRestaurantFeatureEnabled } from "@/lib/features/guards";
 import { prisma } from "@/lib/db/prisma";
 import type { OrderLine, OrderStatus } from "@/lib/orders/types";
 import { TableZoneRepository } from "@/lib/repositories/TableZoneRepository";
@@ -411,6 +412,7 @@ async function fetchOneDefinition(tableId: string): Promise<{ def: TableDefiniti
 // -----------------------
 
 export async function listWaiterTables(): Promise<WaiterTableSnapshot[]> {
+  assertRestaurantFeatureEnabled();
   if (env.useMockData) {
     ensureTableSeed();
     return Array.from(mockTableCatalog.values())
@@ -422,6 +424,7 @@ export async function listWaiterTables(): Promise<WaiterTableSnapshot[]> {
 }
 
 export async function getWaiterTable(tableId: string): Promise<WaiterTableSnapshot | null> {
+  assertRestaurantFeatureEnabled();
   if (env.useMockData) {
     ensureTableSeed();
     const rec = mockTableCatalog.get(normalizeId(tableId));
@@ -434,6 +437,7 @@ export async function getWaiterTable(tableId: string): Promise<WaiterTableSnapsh
 }
 
 export async function claimWaiterTable(params: { tableId: string; waiterId: number; waiterName: string }): Promise<WaiterTableSnapshot> {
+  assertRestaurantFeatureEnabled();
   const id = normalizeId(params.tableId);
   if (env.useMockData) {
     ensureTableSeed();
@@ -507,6 +511,7 @@ export async function storeWaiterTableOrder(params: {
   pendingItems: OrderLine[];
   sentItems: OrderLine[];
 }): Promise<WaiterTableSnapshot> {
+  assertRestaurantFeatureEnabled();
   const id = normalizeId(params.tableId);
   if (env.useMockData) {
     ensureTableSeed();
@@ -566,6 +571,7 @@ export async function storeWaiterTableOrder(params: {
 }
 
 export async function listTableDefinitions(): Promise<TableDefinition[]> {
+  assertRestaurantFeatureEnabled();
   if (env.useMockData) {
     ensureTableSeed();
     return Array.from(mockTableCatalog.values())
@@ -597,6 +603,7 @@ export async function listTableDefinitions(): Promise<TableDefinition[]> {
 }
 
 export async function getTableAdminSnapshot(tableId: string): Promise<TableAdminSnapshot | null> {
+  assertRestaurantFeatureEnabled();
   if (env.useMockData) {
     ensureTableSeed();
     const rec = mockTableCatalog.get(normalizeId(tableId));
@@ -609,6 +616,7 @@ export async function getTableAdminSnapshot(tableId: string): Promise<TableAdmin
 }
 
 export async function listTableAdminSnapshots(): Promise<TableAdminSnapshot[]> {
+  assertRestaurantFeatureEnabled();
   if (env.useMockData) {
     ensureTableSeed();
     return Array.from(mockTableCatalog.values())
@@ -626,6 +634,7 @@ export async function createTableDefinition(input: {
   capacity: number | null;
   isActive?: boolean;
 }): Promise<TableDefinition> {
+  assertRestaurantFeatureEnabled();
   const id = normalizeId(input.id);
   if (env.useMockData) {
     ensureTableSeed();
@@ -696,6 +705,7 @@ export async function updateTableDefinition(tableId: string, patch: {
   capacity?: number | null;
   isActive?: boolean;
 }): Promise<TableDefinition> {
+  assertRestaurantFeatureEnabled();
   const id = normalizeId(tableId);
   if (env.useMockData) {
     ensureTableSeed();
@@ -767,6 +777,7 @@ export async function updateTableDefinition(tableId: string, patch: {
 }
 
 export async function deleteTableDefinition(tableId: string): Promise<void> {
+  assertRestaurantFeatureEnabled();
   const id = normalizeId(tableId);
   if (env.useMockData) {
     ensureTableSeed();
@@ -810,6 +821,7 @@ export async function deleteTableDefinition(tableId: string): Promise<void> {
 }
 
 export async function setTableOrderStatus(tableId: string, status: OrderStatus): Promise<TableAdminSnapshot> {
+  assertRestaurantFeatureEnabled();
   const id = normalizeId(tableId);
   if (env.useMockData) {
     ensureTableSeed();
@@ -885,6 +897,7 @@ export async function reserveTable(params: {
   scheduledFor?: string | null;
   notes?: string | null;
 }): Promise<TableAdminSnapshot> {
+  assertRestaurantFeatureEnabled();
   const id = normalizeId(params.tableId);
   const reservedBy = params.reservedBy.trim();
   if (!reservedBy) throw new Error("Debes indicar quién realiza la reservación");
@@ -976,6 +989,7 @@ export async function reserveTable(params: {
 }
 
 export async function releaseTableReservation(tableId: string): Promise<TableAdminSnapshot> {
+  assertRestaurantFeatureEnabled();
   const id = normalizeId(tableId);
   if (env.useMockData) {
     ensureTableSeed();
@@ -1006,6 +1020,7 @@ export async function releaseTableReservation(tableId: string): Promise<TableAdm
 }
 
 export async function listAvailableTables(): Promise<TableAdminSnapshot[]> {
+  assertRestaurantFeatureEnabled();
   if (env.useMockData) {
     ensureTableSeed();
     const records = Array.from(mockTableCatalog.values()).filter((r) => r.isActive);
@@ -1026,6 +1041,7 @@ export async function listAvailableTables(): Promise<TableAdminSnapshot[]> {
 const zoneRepo = new TableZoneRepository();
 
 export async function listTableZones(options?: { includeInactive?: boolean }): Promise<TableZone[]> {
+  assertRestaurantFeatureEnabled();
   if (!env.useMockData) {
     const rows = await zoneRepo.listZones(options?.includeInactive ?? true);
     return rows.map<TableZone>((z: TableZoneRow) => ({
@@ -1046,6 +1062,7 @@ export async function listTableZones(options?: { includeInactive?: boolean }): P
 }
 
 export async function createTableZone(input: { name: string; isActive?: boolean }): Promise<TableZone> {
+  assertRestaurantFeatureEnabled();
   if (!env.useMockData) {
     const created = await zoneRepo.createZone({ name: input.name, isActive: input.isActive });
     return { id: created.id, name: created.name, is_active: created.isActive, sort_order: created.sortOrder, created_at: created.createdAt, updated_at: created.updatedAt ?? null };
@@ -1064,6 +1081,7 @@ export async function createTableZone(input: { name: string; isActive?: boolean 
 }
 
 export async function updateTableZone(zoneId: string, patch: { name?: string; isActive?: boolean }): Promise<TableZone> {
+  assertRestaurantFeatureEnabled();
   if (!env.useMockData) {
     const updated = await zoneRepo.updateZone(zoneId, { name: patch.name, isActive: patch.isActive });
     return { id: updated.id, name: updated.name, is_active: updated.isActive, sort_order: updated.sortOrder, created_at: updated.createdAt, updated_at: updated.updatedAt ?? null };
@@ -1084,6 +1102,7 @@ export async function updateTableZone(zoneId: string, patch: { name?: string; is
 }
 
 export async function deleteTableZone(zoneId: string): Promise<void> {
+  assertRestaurantFeatureEnabled();
   ensureZoneSeed();
   if (!env.useMockData) {
     // En producción validamos uso mediante Prisma

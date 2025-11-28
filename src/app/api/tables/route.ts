@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { env } from "@/lib/env";
+import { RESTAURANT_DISABLED_MESSAGE } from "@/lib/features/guards";
 import { createTableDefinition, listAvailableTables, listTableAdminSnapshots } from "@/lib/services/TableService";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +23,10 @@ export async function GET(request: NextRequest) {
   const session = await parseSessionCookie(rawSession);
   if (!session || session.role !== "admin") {
     return NextResponse.json({ success: false, message: "Sesión no válida" }, { status: 401 });
+  }
+
+  if (!env.features.isRestaurant) {
+    return NextResponse.json({ success: false, message: RESTAURANT_DISABLED_MESSAGE }, { status: 403 });
   }
 
   try {
@@ -45,6 +51,10 @@ export async function POST(request: NextRequest) {
   const session = await parseSessionCookie(rawSession);
   if (!session || session.role !== "admin") {
     return NextResponse.json({ success: false, message: "Sesión no válida" }, { status: 401 });
+  }
+
+  if (!env.features.isRestaurant) {
+    return NextResponse.json({ success: false, message: RESTAURANT_DISABLED_MESSAGE }, { status: 403 });
   }
 
   const body = await request.json().catch(() => null);

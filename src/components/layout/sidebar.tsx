@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type MouseEvent } from "react";
-import { ChevronLeft, ChevronRight, LayoutDashboard, ListChecks, PackageSearch, Receipt, Settings, Table, Users, BarChart3, ShieldCheck, Wallet, Shield, type LucideIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, LayoutDashboard, ListChecks, PackageSearch, Receipt, Settings, Table, Users, BarChart3, ShieldCheck, Wallet, Shield, BadgeDollarSign, type LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { hasSessionPermission, isSessionAdministrator, isSessionFacturadorOnly } from "@/lib/auth/session-roles";
 import { useSession } from "@/components/providers/session-provider";
+import { publicFeatures } from "@/lib/features/public";
 
 export type NavItem = {
   label: string;
@@ -16,6 +17,7 @@ export type NavItem = {
   icon: LucideIcon;
   description: string;
   permissionCode?: string;
+  featureScope?: "restaurant" | "retail";
 };
 
 type SidebarNavItem = NavItem & { disabled?: boolean };
@@ -62,6 +64,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Table,
     description: "Mantenimiento de mesas y zonas",
     permissionCode: "menu.mesas.view",
+    featureScope: "restaurant",
   },
   {
     label: "Meseros",
@@ -69,6 +72,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Users,
     description: "Staff y permisos",
     permissionCode: "menu.meseros.view",
+    featureScope: "restaurant",
+  },
+  {
+    label: "Cuentas por Cobrar",
+    href: { pathname: "/cuentas-por-cobrar" },
+    icon: BadgeDollarSign,
+    description: "Clientes, documentos y gestiones",
+    permissionCode: "menu.cxc.view",
+    featureScope: "retail",
   },
   {
     label: "Usuarios",
@@ -114,8 +126,18 @@ export function Sidebar({ collapsed = false, onToggleCollapse, variant = "deskto
 
   const sessionIsAdministrator = isSessionAdministrator(session);
   const sessionIsFacturadorOnly = isSessionFacturadorOnly(session);
+  const isRestaurant = publicFeatures.isRestaurant;
+  const isRetailMode = publicFeatures.retailModeEnabled;
 
-  const navItems: SidebarNavItem[] = NAV_ITEMS.map((item) => {
+  const navItems: SidebarNavItem[] = NAV_ITEMS.filter((item) => {
+    if (item.featureScope === "restaurant" && !isRestaurant) {
+      return false;
+    }
+    if (item.featureScope === "retail" && !isRetailMode) {
+      return false;
+    }
+    return true;
+  }).map((item) => {
     const requiredPermission = item.permissionCode;
     const hasAccess = sessionIsAdministrator || !requiredPermission || hasSessionPermission(session, requiredPermission);
     return {

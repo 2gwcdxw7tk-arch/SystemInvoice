@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { env } from "@/lib/env";
+import { RESTAURANT_DISABLED_MESSAGE } from "@/lib/features/guards";
 import { listWaiterTables } from "@/lib/services/TableService";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +14,10 @@ export async function GET(request: NextRequest) {
   const session = await parseSessionCookie(rawSession);
   if (!session || session.role !== "waiter") {
     return NextResponse.json({ success: false, message: "Sesión no válida" }, { status: 401 });
+  }
+
+  if (!env.features.isRestaurant) {
+    return NextResponse.json({ success: false, message: RESTAURANT_DISABLED_MESSAGE }, { status: 403 });
   }
 
   try {

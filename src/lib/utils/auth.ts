@@ -73,6 +73,14 @@ export const MOCK_ROLE_PERMISSIONS: Record<string, string[]> = {
     "menu.roles.view",
     "menu.reportes.view",
     "menu.preferencias.view",
+    "menu.cxc.view",
+    "customers.manage",
+    "payment-terms.manage",
+    "customer.documents.manage",
+    "customer.documents.apply",
+    "customer.credit.manage",
+    "customer.collections.manage",
+    "customer.disputes.manage",
   ],
 };
 

@@ -1,4 +1,7 @@
+import type { CreateCustomerDocumentInput } from "@/lib/repositories/cxc/CustomerDocumentRepository";
 import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
+
+export type InvoiceSaleType = "CONTADO" | "CREDITO";
 
 export type InvoiceUnit = "RETAIL" | "STORAGE";
 
@@ -31,6 +34,13 @@ export interface InvoiceInsertInput {
   notes?: string | null;
   customer_name?: string | null;
   customer_tax_id?: string | null;
+  customer_id?: number | null;
+  customer_code?: string | null;
+  sale_type?: InvoiceSaleType | null;
+  payment_term_id?: number | null;
+  payment_term_code?: string | null;
+  payment_term_days?: number | null;
+  due_date?: Date | null;
   payments: InvoicePaymentInput[];
   items?: InvoiceItemInput[];
   issuer_admin_user_id?: number | null;
@@ -53,6 +63,7 @@ export interface InvoicePersistenceInput extends Omit<InvoiceInsertInput, "items
   items: InvoiceItemPersistence[];
   payments: InvoicePaymentInput[];
   movementLines: InvoiceConsumptionLineInput[];
+  customerDocument?: Omit<CreateCustomerDocumentInput, "relatedInvoiceId">;
 }
 
 export interface InvoiceInsertResult {

@@ -376,7 +376,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     return NextResponse.json({ success: false, message: "No tienes permisos para consultar reportes de caja" }, { status: 403 });
   }
 
-  const report = await cashRegisterService.getCashRegisterClosureReport(normalizedSessionId);
+  const sessionLookupId = sessionIdIsSafe ? sessionIdNumeric : normalizedSessionId;
+  const report = await cashRegisterService.getCashRegisterClosureReport(sessionLookupId);
   if (!report) {
     return NextResponse.json({ success: false, message: "No se encontró la sesión solicitada" }, { status: 404 });
   }

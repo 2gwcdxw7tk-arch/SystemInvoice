@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "No se pudo abrir la caja";
-    const status = /ya (tienes|existe)/i.test(message) ? 409 : 400;
+    const status = /ya (tienes|existe)/i.test(message) || /(licenci|tope)/i.test(message) ? 409 : 400;
     return NextResponse.json({ success: false, message }, { status });
   }
 }

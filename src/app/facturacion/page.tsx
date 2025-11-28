@@ -21,6 +21,7 @@ import { Printer, Plus, Minus, Loader2, Ban, ArrowLeft, ArrowRight, Receipt, Ute
 import type { LucideIcon } from "lucide-react";
 import { useSession } from "@/components/providers/session-provider";
 import { hasSessionPermission, isSessionAdministrator } from "@/lib/auth/session-roles";
+import { publicFeatures } from "@/lib/features/public";
 
 /**
  * Página dedicada de Facturación.
@@ -123,6 +124,42 @@ interface CashRegisterSessionSnapshot {
     warehouseName: string;
   };
 }
+
+type RetailCustomerRecord = {
+  id: number;
+  code: string;
+  name: string;
+  taxId: string | null;
+  paymentTermCode: string | null;
+  creditLimit: number;
+  creditUsed: number;
+  creditOnHold: number;
+  availableCredit: number;
+  creditStatus: "ACTIVE" | "ON_HOLD" | "BLOCKED";
+};
+
+type RetailPaymentTerm = {
+  code: string;
+  name: string;
+  description: string | null;
+  days: number;
+  graceDays: number;
+  isActive: boolean;
+};
+
+const addDaysToDate = (isoDate: string, days: number): string => {
+  if (!isoDate) {
+    const fallback = new Date();
+    fallback.setDate(fallback.getDate() + days);
+    return fallback.toISOString().slice(0, 10);
+  }
+  const base = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(base.getTime())) {
+    return isoDate;
+  }
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+};
 
 const tableStatusLabels: Record<KitchenOrderStatus, string> = {
   OPEN: "Ocupada",
@@ -1996,6 +2033,8 @@ function FacturacionWorkspace({
   const [serviceEnabled, setServiceEnabled] = useState(() => serviceRate > 0);
   const [applyVAT, setApplyVAT] = useState(() => vatRate > 0);
   const [invoiceDate, setInvoiceDate] = useState<string>(() => new Date().toISOString().slice(0,10));
+  const [customerName, setCustomerName] = useState(() => (mode === "sin-pedido" ? DEFAULT_MANUAL_CUSTOMER_NAME : ""));
+  const [customerTaxId, setCustomerTaxId] = useState("");
   const [draftInvoice, setDraftInvoice] = useState<DraftInvoice>(() => createInitialManualDraft());
   const [cashSessionState, setCashSessionState] = useState<{
     loading: boolean;
@@ -2011,6 +2050,93 @@ function FacturacionWorkspace({
     recentSessions: [],
   });
   const [cashSessionError, setCashSessionError] = useState<string | null>(null);
+  const isRetailMode = publicFeatures.retailModeEnabled;
+  const retailManualFlow = isRetailMode && mode === "sin-pedido";
+  const [retailCustomers, setRetailCustomers] = useState<RetailCustomerRecord[]>([]);
+  const [retailCustomersLoading, setRetailCustomersLoading] = useState(false);
+  const [retailCustomersError, setRetailCustomersError] = useState<string | null>(null);
+  const retailCustomersRequestedRef = useRef(false);
+  const [paymentTerms, setPaymentTerms] = useState<RetailPaymentTerm[]>([]);
+  const [paymentTermsLoading, setPaymentTermsLoading] = useState(false);
+  const [paymentTermsError, setPaymentTermsError] = useState<string | null>(null);
+  const paymentTermsRequestedRef = useRef(false);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+  const [paymentMode, setPaymentMode] = useState<"CONTADO" | "CREDITO">("CONTADO");
+  const [selectedPaymentTermCode, setSelectedPaymentTermCode] = useState<string>("");
+  const customerOptions = useMemo<ComboboxOption<number>[]>(
+    () =>
+      retailCustomers.map((customer) => ({
+        value: customer.id,
+        label: `${customer.code} • ${customer.name}`,
+        description: `${customer.creditStatus === "ACTIVE" ? "Crédito activo" : customer.creditStatus === "ON_HOLD" ? "En revisión" : "Crédito bloqueado"} · Disponible: ${formatCurrency(customer.availableCredit, { currency: "local" })}`,
+      })),
+    [retailCustomers]
+  );
+  const paymentTermOptions = useMemo<ComboboxOption<string>[]>(
+    () =>
+      paymentTerms.map((term) => {
+        const totalDays = term.days + term.graceDays;
+        const description =
+          totalDays === 0
+            ? "Pago inmediato"
+            : `${totalDays} días${term.graceDays > 0 ? ` (${term.days} + ${term.graceDays} gracia)` : ""}`;
+        return {
+          value: term.code,
+          label: `${term.name} (${term.code})`,
+          description,
+        };
+      }),
+    [paymentTerms]
+  );
+  const selectedRetailCustomer = useMemo(
+    () => retailCustomers.find((customer) => customer.id === selectedCustomerId) ?? null,
+    [retailCustomers, selectedCustomerId]
+  );
+  const selectedPaymentTerm = useMemo(
+    () => paymentTerms.find((term) => term.code === selectedPaymentTermCode) ?? null,
+    [paymentTerms, selectedPaymentTermCode]
+  );
+  const selectedPaymentTermTotalDays = (selectedPaymentTerm?.days ?? 0) + (selectedPaymentTerm?.graceDays ?? 0);
+  const defaultCashTermCode = useMemo(() => {
+    if (paymentTerms.length === 0) {
+      return "";
+    }
+    const immediate = paymentTerms.find((term) => term.days + term.graceDays === 0);
+    return immediate?.code ?? paymentTerms[0].code;
+  }, [paymentTerms]);
+  const retailManualActive = retailManualFlow && selectedTableId === NEW_INVOICE_ID;
+  const retailDueDate = useMemo(
+    () => addDaysToDate(invoiceDate, paymentMode === "CREDITO" ? selectedPaymentTermTotalDays : 0),
+    [invoiceDate, paymentMode, selectedPaymentTermTotalDays]
+  );
+  const retailDueDateLabel = useMemo(() => {
+    const date = new Date(`${retailDueDate}T00:00:00`);
+    if (Number.isNaN(date.getTime())) {
+      return retailDueDate;
+    }
+    return date.toLocaleDateString("es-MX", { dateStyle: "long" });
+  }, [retailDueDate]);
+  const retailCreditLimit = selectedRetailCustomer?.creditLimit ?? 0;
+  const retailCreditUsed = selectedRetailCustomer?.creditUsed ?? 0;
+  const retailCreditHold = selectedRetailCustomer?.creditOnHold ?? 0;
+  const retailCreditAvailable = selectedRetailCustomer?.availableCredit ??
+    Math.max(retailCreditLimit - retailCreditUsed - retailCreditHold, 0);
+  const retailCreditUsage = retailCreditLimit > 0 ? (retailCreditUsed + retailCreditHold) / retailCreditLimit : 0;
+  const retailCreditStatus = selectedRetailCustomer?.creditStatus ?? "ACTIVE";
+  const retailCreditAlert = retailCreditUsage >= 0.8 || retailCreditStatus !== "ACTIVE";
+  const retailCreditStatusTone =
+    retailCreditStatus === "ACTIVE"
+      ? "text-emerald-600"
+      : retailCreditStatus === "ON_HOLD"
+        ? "text-amber-600"
+        : "text-destructive";
+  const retailCreditStatusLabel =
+    retailCreditStatus === "ACTIVE"
+      ? "Crédito activo"
+      : retailCreditStatus === "ON_HOLD"
+        ? "En revisión"
+        : "Crédito bloqueado";
+  const allowCreditForCustomer = retailCreditLimit > 0 && retailCreditAvailable > 0 && retailCreditStatus === "ACTIVE";
 
   useEffect(() => {
     if (vatRate === 0) {
@@ -2030,7 +2156,212 @@ function FacturacionWorkspace({
     }
   }, [draftInvoice.items.length, mode, selectedTableId]);
 
+  useEffect(() => {
+    if (!retailManualFlow) {
+      if (selectedCustomerId !== null) {
+        setSelectedCustomerId(null);
+      }
+      if (paymentMode !== "CONTADO") {
+        setPaymentMode("CONTADO");
+      }
+      if (selectedPaymentTermCode !== defaultCashTermCode) {
+        setSelectedPaymentTermCode(defaultCashTermCode);
+      }
+      return;
+    }
+    if (retailCustomers.length === 0) {
+      if (selectedCustomerId !== null) {
+        setSelectedCustomerId(null);
+      }
+      return;
+    }
+    const exists = selectedCustomerId != null && retailCustomers.some((customer) => customer.id === selectedCustomerId);
+    if (!exists) {
+      setSelectedCustomerId(retailCustomers[0].id);
+    }
+  }, [defaultCashTermCode, paymentMode, retailCustomers, retailManualFlow, selectedCustomerId, selectedPaymentTermCode]);
+
+  useEffect(() => {
+    if (!retailManualActive) {
+      return;
+    }
+    if (selectedRetailCustomer) {
+      setCustomerName(selectedRetailCustomer.name);
+      setCustomerTaxId(selectedRetailCustomer.taxId ?? "");
+    } else {
+      setCustomerName(DEFAULT_MANUAL_CUSTOMER_NAME);
+      setCustomerTaxId("");
+    }
+  }, [retailManualActive, selectedRetailCustomer, setCustomerTaxId]);
+
+  useEffect(() => {
+    if (!retailManualActive) {
+      return;
+    }
+    if ((!allowCreditForCustomer || paymentTerms.length === 0) && paymentMode === "CREDITO") {
+      setPaymentMode("CONTADO");
+    }
+  }, [allowCreditForCustomer, paymentMode, paymentTerms.length, retailManualActive]);
+
+  useEffect(() => {
+    if (!retailManualActive) {
+      return;
+    }
+    if (paymentMode === "CREDITO") {
+      const preferred = selectedRetailCustomer?.paymentTermCode;
+      if (preferred && preferred !== selectedPaymentTermCode) {
+        setSelectedPaymentTermCode(preferred);
+        return;
+      }
+      if (!preferred) {
+        const fallbackCreditTerm = paymentTerms.find((term) => term.days + term.graceDays > 0);
+        if (fallbackCreditTerm && fallbackCreditTerm.code !== selectedPaymentTermCode) {
+          setSelectedPaymentTermCode(fallbackCreditTerm.code);
+        }
+      }
+    } else if (paymentMode === "CONTADO" && defaultCashTermCode && selectedPaymentTermCode !== defaultCashTermCode) {
+      setSelectedPaymentTermCode(defaultCashTermCode);
+    }
+  }, [defaultCashTermCode, paymentMode, paymentTerms, retailManualActive, selectedPaymentTermCode, selectedRetailCustomer?.paymentTermCode]);
+
   const { toast } = useToast();
+
+  const loadRetailCustomers = useCallback(async () => {
+    if (retailCustomersRequestedRef.current) {
+      return;
+    }
+    retailCustomersRequestedRef.current = true;
+    setRetailCustomersLoading(true);
+    try {
+      const response = await fetch("/api/cxc/clientes?summary=true&limit=100", {
+        cache: "no-store",
+        credentials: "include",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload?.message ?? "No se pudieron obtener los clientes";
+        throw new Error(message);
+      }
+
+      const items: unknown[] = Array.isArray(payload?.items) ? payload.items : [];
+      const normalized: RetailCustomerRecord[] = items
+        .filter((entry: unknown): entry is Partial<RetailCustomerRecord> & { id: number; code: string; name: string } => {
+          if (!entry || typeof entry !== "object") {
+            return false;
+          }
+          const candidate = entry as Record<string, unknown>;
+          return typeof candidate.id === "number" && typeof candidate.code === "string" && typeof candidate.name === "string";
+        })
+        .map((entry) => ({
+          id: entry.id,
+          code: entry.code,
+          name: entry.name,
+          taxId: typeof entry.taxId === "string" && entry.taxId.length > 0 ? entry.taxId : null,
+          paymentTermCode:
+            typeof entry.paymentTermCode === "string" && entry.paymentTermCode.length > 0
+              ? entry.paymentTermCode
+              : null,
+          creditLimit: Number(entry.creditLimit ?? 0) || 0,
+          creditUsed: Number(entry.creditUsed ?? 0) || 0,
+          creditOnHold: Number(entry.creditOnHold ?? 0) || 0,
+          availableCredit: Number(entry.availableCredit ?? 0) || 0,
+          creditStatus:
+            entry.creditStatus === "BLOCKED" || entry.creditStatus === "ON_HOLD"
+              ? entry.creditStatus
+              : "ACTIVE",
+        }));
+
+      const sorted = normalized.sort((a, b) => a.name.localeCompare(b.name, "es"));
+      setRetailCustomers(sorted);
+      setRetailCustomersError(null);
+    } catch (error) {
+      retailCustomersRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron obtener los clientes";
+      setRetailCustomersError(message);
+      toast({ variant: "error", title: "Clientes", description: message });
+    } finally {
+      setRetailCustomersLoading(false);
+    }
+  }, [toast]);
+
+  const loadRetailPaymentTerms = useCallback(async () => {
+    if (paymentTermsRequestedRef.current) {
+      return;
+    }
+    paymentTermsRequestedRef.current = true;
+    setPaymentTermsLoading(true);
+    try {
+      const response = await fetch("/api/preferencias/terminos-pago", {
+        cache: "no-store",
+        credentials: "include",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload?.message ?? "No se pudieron obtener las condiciones de pago";
+        throw new Error(message);
+      }
+
+      const items: unknown[] = Array.isArray(payload?.items) ? payload.items : [];
+      const normalized: RetailPaymentTerm[] = items
+        .filter((item: unknown): item is Record<string, unknown> => !!item && typeof item === "object")
+        .map((item) => {
+          const candidate = item as Record<string, unknown>;
+          const code = typeof candidate.code === "string" ? candidate.code : "";
+          const name = typeof candidate.name === "string" ? candidate.name : code;
+          const description = typeof candidate.description === "string" ? candidate.description : null;
+          const days = typeof candidate.days === "number" ? candidate.days : 0;
+          const graceDays = typeof candidate.graceDays === "number" ? candidate.graceDays : 0;
+          const isActive = candidate.isActive !== false;
+          return { code, name, description, days, graceDays, isActive } satisfies RetailPaymentTerm;
+        })
+        .filter((term) => term.code.length > 0 && term.name.length > 0 && term.isActive);
+
+      const sorted = normalized.sort((a, b) => a.days - b.days || a.code.localeCompare(b.code, "es"));
+      setPaymentTerms(sorted);
+      setPaymentTermsError(null);
+    } catch (error) {
+      paymentTermsRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron obtener las condiciones de pago";
+      setPaymentTermsError(message);
+      toast({ variant: "error", title: "Condiciones de pago", description: message });
+    } finally {
+      setPaymentTermsLoading(false);
+    }
+  }, [toast]);
+
+  const handleRetryRetailCustomers = useCallback(() => {
+    if (retailCustomersLoading) {
+      return;
+    }
+    retailCustomersRequestedRef.current = false;
+    void loadRetailCustomers();
+  }, [loadRetailCustomers, retailCustomersLoading]);
+
+  const handleRetryPaymentTerms = useCallback(() => {
+    if (paymentTermsLoading) {
+      return;
+    }
+    paymentTermsRequestedRef.current = false;
+    void loadRetailPaymentTerms();
+  }, [loadRetailPaymentTerms, paymentTermsLoading]);
+
+  useEffect(() => {
+    if (!retailManualFlow) {
+      return;
+    }
+    if (!retailCustomersRequestedRef.current) {
+      void loadRetailCustomers();
+    }
+  }, [loadRetailCustomers, retailManualFlow]);
+
+  useEffect(() => {
+    if (!retailManualFlow) {
+      return;
+    }
+    if (!paymentTermsRequestedRef.current) {
+      void loadRetailPaymentTerms();
+    }
+  }, [loadRetailPaymentTerms, retailManualFlow]);
 
   const loadCashSession = useCallback(async () => {
     if (!canManageCashRegisters) {
@@ -2122,10 +2453,6 @@ function FacturacionWorkspace({
     void loadCashSession();
   }, [loadCashSession]);
   // Datos del cliente y edición rápida de productos
-  const [customerName, setCustomerName] = useState(() =>
-    mode === "sin-pedido" ? DEFAULT_MANUAL_CUSTOMER_NAME : ""
-  );
-  const [customerTaxId, setCustomerTaxId] = useState("");
   // Eliminado agregado manual libre (se quitan estados newItemName/newItemPrice/newItemQty)
   // Búsqueda de artículos del catálogo
   type CatalogEntry = {
@@ -2913,7 +3240,12 @@ function FacturacionWorkspace({
     setCustomerName(mode === "sin-pedido" ? DEFAULT_MANUAL_CUSTOMER_NAME : "");
     setCustomerTaxId("");
     setAddItemModalOpen(false);
-  }, [defaultPriceListCode, mode, priceLists, serviceRate, vatRate]);
+    if (retailManualFlow) {
+      setSelectedCustomerId(retailCustomers.length > 0 ? retailCustomers[0].id : null);
+      setPaymentMode("CONTADO");
+      setSelectedPaymentTermCode(defaultCashTermCode);
+    }
+  }, [defaultCashTermCode, defaultPriceListCode, mode, priceLists, retailManualFlow, retailCustomers, serviceRate, vatRate]);
 
   type SaveInvoiceResult = { id: number | null; invoiceNumber: string | null };
 
@@ -2930,6 +3262,22 @@ function FacturacionWorkspace({
     if (items.length === 0) {
   toast({ variant: "warning", title: "Facturación", description: "Agrega al menos un producto antes de generar la factura." });
   return { id: null, invoiceNumber: null };
+    }
+    if (retailManualActive && !selectedRetailCustomer) {
+      toast({ variant: "warning", title: "Cliente requerido", description: "Selecciona un cliente antes de emitir la factura en modo retail." });
+      return { id: null, invoiceNumber: null };
+    }
+    if (retailManualActive && paymentMode === "CREDITO" && !selectedPaymentTerm) {
+      toast({ variant: "warning", title: "Condición de pago", description: "Selecciona un plazo de crédito válido." });
+      return { id: null, invoiceNumber: null };
+    }
+    if (retailManualActive && paymentMode === "CREDITO" && retailCreditAvailable < summary.total) {
+      toast({
+        variant: "warning",
+        title: "Crédito insuficiente",
+        description: "El cliente no cuenta con saldo disponible para cubrir el total de la factura.",
+      });
+      return { id: null, invoiceNumber: null };
     }
     if (hasPendingBalance) {
       toast({ variant: "warning", title: "Pago incompleto", description: "Registra los pagos pendientes antes de guardar la factura." });
@@ -2976,6 +3324,19 @@ function FacturacionWorkspace({
         })),
       origin_order_id: isDraft ? null : selectedOrder!.orderId,
     };
+
+    if (retailManualActive && selectedRetailCustomer) {
+      Object.assign(payload, {
+        customer_name: selectedRetailCustomer.name,
+        customer_tax_id: selectedRetailCustomer.taxId ?? null,
+        customer_code: selectedRetailCustomer.code,
+        customer_id: selectedRetailCustomer.id,
+        sale_type: paymentMode,
+        payment_term_code: paymentMode === "CREDITO" ? selectedPaymentTerm?.code ?? null : null,
+        payment_term_days: paymentMode === "CREDITO" ? selectedPaymentTermTotalDays : 0,
+        due_date: paymentMode === "CREDITO" ? retailDueDate : invoiceDate,
+      });
+    }
 
     try {
       const res = await fetch("/api/invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -3208,34 +3569,180 @@ function FacturacionWorkspace({
              </div>
            ) : null}
          </div>
-         {/* Bloque Cliente/RUC trasladado arriba */}
-         <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-           <div className="space-y-1">
-             <Label className="text-xs uppercase text-muted-foreground">Razón social</Label>
-              <Input
-                placeholder="Nombre o razón social"
-                className="rounded-2xl bg-background/95"
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-              />
-           </div>
-           <div className="space-y-1">
-             <Label className="text-xs uppercase text-muted-foreground">RUC / NIT</Label>
-              <Input
-                placeholder="Identificador fiscal (opcional)"
-                className="rounded-2xl bg-background/95"
-                value={customerTaxId}
-                onChange={(e) => setCustomerTaxId(e.target.value.toUpperCase())}
-              />
-           </div>
-           <div className="space-y-1 sm:text-right">
-             <Label className="text-xs uppercase text-muted-foreground">Fecha</Label>
-             <div className="flex justify-end">
-               <DatePicker value={invoiceDate} onChange={setInvoiceDate} className="w-full sm:w-48" />
-             </div>
-           </div>
-           {/* Edición de notas se reubica inline en el detalle de consumo */}
-         </div>
+          {isRetailMode ? (
+            <div className="rounded-3xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-50">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <span>Modo Retail activo: el cliente es obligatorio y puedes planear ventas a crédito desde esta pantalla.</span>
+                <span className="text-xs font-semibold uppercase tracking-wide">NEXT_PUBLIC_ES_RESTAURANTE = false</span>
+              </div>
+            </div>
+          ) : null}
+
+          {retailManualActive ? (
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr),minmax(0,0.9fr)]">
+              <div className="space-y-3 rounded-3xl border border-primary/30 bg-primary/5 p-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                  <div className="flex-1">
+                    <Combobox<number>
+                      value={selectedCustomerId}
+                      onChange={(value) => setSelectedCustomerId(value)}
+                      options={customerOptions}
+                      placeholder="Selecciona un cliente"
+                      label="Cliente"
+                      ariaLabel="Seleccionar cliente retail"
+                      className="w-full"
+                    />
+                    {retailCustomersLoading ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground">Cargando clientes…</p>
+                    ) : null}
+                    {retailCustomersError ? (
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-destructive">
+                        <span>{retailCustomersError}</span>
+                        <button
+                          type="button"
+                          onClick={handleRetryRetailCustomers}
+                          className="font-semibold underline"
+                        >
+                          Reintentar
+                        </button>
+                      </div>
+                    ) : null}
+                    {!retailCustomersLoading && !retailCustomersError && retailCustomers.length === 0 ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground">No hay clientes disponibles.</p>
+                    ) : null}
+                  </div>
+                  <Button type="button" variant="outline" className="rounded-2xl md:w-fit" asChild>
+                    <Link href={"/cuentas-por-cobrar" as Route}>Gestionar clientes</Link>
+                  </Button>
+                </div>
+                {selectedRetailCustomer ? (
+                  <div className="rounded-2xl border border-primary/20 bg-background/90 p-3 text-xs text-muted-foreground">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="font-semibold text-foreground">
+                        {selectedRetailCustomer.code} • {selectedRetailCustomer.name}
+                      </span>
+                      <span className={cn("text-[11px] font-semibold uppercase", retailCreditStatusTone)}>
+                        {retailCreditStatusLabel}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
+                      <span>RUC/NIT: <strong>{selectedRetailCustomer.taxId ?? "—"}</strong></span>
+                      <span>Límite: <strong>{formatCurrency(retailCreditLimit, { currency: "local" })}</strong></span>
+                      <span>En uso: <strong>{formatCurrency(retailCreditUsed, { currency: "local" })}</strong></span>
+                      <span>Retenido: <strong>{formatCurrency(retailCreditHold, { currency: "local" })}</strong></span>
+                      <span>
+                        Disponible:
+                        <strong className={cn("ml-1", retailCreditAlert ? "text-amber-600" : "text-emerald-600")}>
+                          {formatCurrency(retailCreditAvailable, { currency: "local" })}
+                        </strong>
+                      </span>
+                      <span>Uso actual: {(retailCreditUsage * 100).toFixed(0)}%</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-muted bg-muted/10 p-4 text-xs text-muted-foreground">
+                    Selecciona un cliente para continuar. Estos datos se sincronizarán con el módulo de Cuentas por Cobrar.
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3 rounded-3xl border border-muted bg-background/90 p-4">
+                <div className="space-y-1">
+                  <Label className="text-xs uppercase text-muted-foreground">Fecha de emisión</Label>
+                  <DatePicker value={invoiceDate} onChange={setInvoiceDate} className="w-full" />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs uppercase text-muted-foreground">Condición de pago</Label>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant={paymentMode === "CONTADO" ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => setPaymentMode("CONTADO")}
+                    >
+                      Contado
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={paymentMode === "CREDITO" ? "default" : "outline"}
+                      className="rounded-2xl"
+                      disabled={!allowCreditForCustomer || paymentTerms.length === 0}
+                      onClick={() => setPaymentMode("CREDITO")}
+                    >
+                      Crédito
+                    </Button>
+                  </div>
+                  {paymentMode === "CREDITO" ? (
+                    <>
+                      <Combobox<string>
+                        value={selectedPaymentTermCode}
+                        onChange={(value) => setSelectedPaymentTermCode(value)}
+                        options={paymentTermOptions}
+                        placeholder="Selecciona plazo"
+                        label="Plazo"
+                        ariaLabel="Seleccionar condición de pago"
+                        disabled={paymentTermsLoading || paymentTerms.length === 0}
+                      />
+                      {paymentTermsLoading ? (
+                        <p className="mt-1 text-[11px] text-muted-foreground">Cargando condiciones de pago…</p>
+                      ) : null}
+                      {paymentTermsError ? (
+                        <div className="mt-1 flex items-center gap-2 text-[11px] text-destructive">
+                          <span>{paymentTermsError}</span>
+                          <button
+                            type="button"
+                            onClick={handleRetryPaymentTerms}
+                            className="font-semibold underline"
+                          >
+                            Reintentar
+                          </button>
+                        </div>
+                      ) : null}
+                      {!paymentTermsLoading && !paymentTermsError && paymentTerms.length === 0 ? (
+                        <p className="mt-1 text-[11px] text-muted-foreground">Sin condiciones de pago disponibles.</p>
+                      ) : null}
+                      <div className="rounded-2xl bg-muted/30 p-3 text-xs text-muted-foreground">
+                        <div className="flex items-center justify-between text-sm text-foreground">
+                          <span>Fecha de vencimiento</span>
+                          <span className="font-semibold">{retailDueDateLabel}</span>
+                        </div>
+                        <p className="mt-1">{selectedPaymentTerm?.description}</p>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">El saldo se liquida al momento.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Razón social</Label>
+                <Input
+                  placeholder="Nombre o razón social"
+                  className="rounded-2xl bg-background/95"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">RUC / NIT</Label>
+                <Input
+                  placeholder="Identificador fiscal (opcional)"
+                  className="rounded-2xl bg-background/95"
+                  value={customerTaxId}
+                  onChange={(e) => setCustomerTaxId(e.target.value.toUpperCase())}
+                />
+              </div>
+              <div className="space-y-1 sm:text-right">
+                <Label className="text-xs uppercase text-muted-foreground">Fecha</Label>
+                <div className="flex justify-end">
+                  <DatePicker value={invoiceDate} onChange={setInvoiceDate} className="w-full sm:w-48" />
+                </div>
+              </div>
+            </div>
+          )}
        </header>
 
         <div className="grid gap-6 xl:grid-cols-[1.7fr,1fr] xl:items-stretch xl:min-h-[calc(100vh-310px)]">

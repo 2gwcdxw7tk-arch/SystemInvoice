@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { parseSessionCookie, SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { env } from "@/lib/env";
+import { RESTAURANT_DISABLED_MESSAGE } from "@/lib/features/guards";
 import { waiterService } from "@/lib/services/WaiterService";
 
 const createWaiterSchema = z.object({
@@ -35,6 +37,10 @@ const createWaiterSchema = z.object({
 });
 
 export async function GET(request: NextRequest) {
+  if (!env.features.isRestaurant) {
+    return NextResponse.json({ message: RESTAURANT_DISABLED_MESSAGE }, { status: 403 });
+  }
+
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   const session = await parseSessionCookie(rawSession);
   if (!session || session.role !== "admin") {
@@ -52,6 +58,10 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!env.features.isRestaurant) {
+    return NextResponse.json({ message: RESTAURANT_DISABLED_MESSAGE }, { status: 403 });
+  }
+
   const rawSession = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   const session = await parseSessionCookie(rawSession);
   if (!session || session.role !== "admin") {

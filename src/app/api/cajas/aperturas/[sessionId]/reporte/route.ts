@@ -288,7 +288,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
     return NextResponse.json({ success: false, message: "No tienes permisos para consultar aperturas" }, { status: 403 });
   }
 
-  const sessionRecord = await cashRegisterService.getCashRegisterSessionById(normalizedSessionId);
+  const sessionLookupId = sessionIdIsSafe ? sessionIdNumeric : normalizedSessionId;
+  const sessionRecord = await cashRegisterService.getCashRegisterSessionById(sessionLookupId);
   if (!sessionRecord) {
     return NextResponse.json({ success: false, message: "No se encontró la sesión solicitada" }, { status: 404 });
   }

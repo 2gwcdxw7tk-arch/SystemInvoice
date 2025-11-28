@@ -398,6 +398,85 @@ CREATE INDEX IF NOT EXISTS ix_cash_register_session_payments_session
   ON app.cash_register_session_payments (session_id);
 
 -- ========================================================
+-- Tabla: app.payment_terms
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.payment_terms (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code VARCHAR(30) NOT NULL UNIQUE,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(250),
+  days SMALLINT NOT NULL,
+  grace_days SMALLINT,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_payment_terms_touch_updated_at ON app.payment_terms;
+CREATE TRIGGER trg_payment_terms_touch_updated_at
+BEFORE UPDATE ON app.payment_terms
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_payment_terms_active
+  ON app.payment_terms (is_active, code);
+
+INSERT INTO app.payment_terms (code, name, days, is_active)
+VALUES
+  ('CONTADO', 'Contado', 0, TRUE),
+  ('PT-15', 'Crédito 15 días', 15, TRUE),
+  ('PT-30', 'Crédito 30 días', 30, TRUE),
+  ('PT-60', 'Crédito 60 días', 60, TRUE),
+  ('PT-90', 'Crédito 90 días', 90, TRUE),
+  ('PT-120', 'Crédito 120 días', 120, TRUE)
+ON CONFLICT (code) DO UPDATE
+SET
+  name = EXCLUDED.name,
+  days = EXCLUDED.days,
+  is_active = EXCLUDED.is_active;
+
+-- ========================================================
+-- Tabla: app.customers
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.customers (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code VARCHAR(40) NOT NULL UNIQUE,
+  name VARCHAR(200) NOT NULL,
+  trade_name VARCHAR(200),
+  tax_id VARCHAR(30),
+  email VARCHAR(150),
+  phone VARCHAR(50),
+  mobile_phone VARCHAR(50),
+  billing_address VARCHAR(250),
+  city VARCHAR(120),
+  state VARCHAR(120),
+  country_code VARCHAR(3) DEFAULT 'NI',
+  postal_code VARCHAR(20),
+  payment_term_id INTEGER REFERENCES app.payment_terms(id) ON DELETE SET NULL,
+  credit_limit NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (credit_limit >= 0),
+  credit_used NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (credit_used >= 0),
+  credit_on_hold NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (credit_on_hold >= 0),
+  credit_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+  credit_hold_reason VARCHAR(250),
+  last_credit_review_at TIMESTAMPTZ,
+  next_credit_review_at TIMESTAMPTZ,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  notes VARCHAR(400),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_customers_touch_updated_at ON app.customers;
+CREATE TRIGGER trg_customers_touch_updated_at
+BEFORE UPDATE ON app.customers
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_customers_active_status
+  ON app.customers (is_active, credit_status, code);
+
+CREATE INDEX IF NOT EXISTS ix_customers_tax_id
+  ON app.customers (tax_id);
+
+-- ========================================================
 -- Tabla: app.invoices (cabecera de facturas)
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.invoices (
@@ -416,6 +495,9 @@ CREATE TABLE IF NOT EXISTS app.invoices (
   notes VARCHAR(400),
   customer_name VARCHAR(160),
   customer_tax_id VARCHAR(30),
+  customer_id BIGINT REFERENCES app.customers(id) ON DELETE SET NULL,
+  payment_term_id INTEGER REFERENCES app.payment_terms(id) ON DELETE SET NULL,
+  due_date DATE,
   issuer_admin_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
   cash_register_id INTEGER REFERENCES app.cash_registers(id) ON DELETE SET NULL,
   cash_register_session_id BIGINT REFERENCES app.cash_register_sessions(id) ON DELETE SET NULL,
@@ -437,6 +519,12 @@ CREATE INDEX IF NOT EXISTS ix_invoices_waiter_code
 
 CREATE INDEX IF NOT EXISTS ix_invoices_cash_session
   ON app.invoices (cash_register_session_id);
+
+CREATE INDEX IF NOT EXISTS ix_invoices_customer
+  ON app.invoices (customer_id);
+
+CREATE INDEX IF NOT EXISTS ix_invoices_payment_term
+  ON app.invoices (payment_term_id);
 
 -- Cambios: Estado y fecha de anulación en facturas
 ALTER TABLE app.invoices
@@ -485,6 +573,131 @@ CREATE INDEX IF NOT EXISTS ix_invoice_items_invoice
 CREATE INDEX IF NOT EXISTS ix_invoice_items_article
   ON app.invoice_items (article_code)
   WHERE article_code IS NOT NULL;
+
+-- ========================================================
+-- Tabla: app.customer_documents (documentos CxC)
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.customer_documents (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE,
+  payment_term_id INTEGER REFERENCES app.payment_terms(id) ON DELETE SET NULL,
+  related_invoice_id BIGINT REFERENCES app.invoices(id) ON DELETE SET NULL,
+  document_type VARCHAR(12) NOT NULL,
+  document_number VARCHAR(60) NOT NULL,
+  document_date DATE NOT NULL,
+  due_date DATE,
+  currency_code VARCHAR(3) NOT NULL DEFAULT 'NIO',
+  original_amount NUMERIC(18,2) NOT NULL CHECK (original_amount >= 0),
+  balance_amount NUMERIC(18,2) NOT NULL CHECK (balance_amount >= 0),
+  status VARCHAR(12) NOT NULL DEFAULT 'PENDIENTE',
+  reference VARCHAR(120),
+  notes VARCHAR(400),
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (document_type, document_number)
+);
+
+DROP TRIGGER IF EXISTS trg_customer_documents_touch_updated_at ON app.customer_documents;
+CREATE TRIGGER trg_customer_documents_touch_updated_at
+BEFORE UPDATE ON app.customer_documents
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_customer_documents_customer_status
+  ON app.customer_documents (customer_id, status, document_date DESC);
+
+CREATE INDEX IF NOT EXISTS ix_customer_documents_invoice
+  ON app.customer_documents (related_invoice_id);
+
+-- ========================================================
+-- Tabla: app.customer_document_applications
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.customer_document_applications (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  applied_document_id BIGINT NOT NULL REFERENCES app.customer_documents(id) ON DELETE CASCADE,
+  target_document_id BIGINT NOT NULL REFERENCES app.customer_documents(id) ON DELETE CASCADE,
+  application_date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  amount NUMERIC(18,2) NOT NULL CHECK (amount > 0),
+  reference VARCHAR(120),
+  notes VARCHAR(400),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS ix_customer_document_applications_applied
+  ON app.customer_document_applications (applied_document_id);
+
+CREATE INDEX IF NOT EXISTS ix_customer_document_applications_target
+  ON app.customer_document_applications (target_document_id);
+
+-- ========================================================
+-- Tabla: app.customer_credit_lines
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.customer_credit_lines (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+  approved_limit NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (approved_limit >= 0),
+  available_limit NUMERIC(18,2) NOT NULL DEFAULT 0,
+  blocked_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+  reviewer_admin_user_id INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
+  review_notes VARCHAR(400),
+  reviewed_at TIMESTAMPTZ,
+  next_review_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_customer_credit_lines_touch_updated_at ON app.customer_credit_lines;
+CREATE TRIGGER trg_customer_credit_lines_touch_updated_at
+BEFORE UPDATE ON app.customer_credit_lines
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_customer_credit_lines_status
+  ON app.customer_credit_lines (customer_id, status);
+
+-- ========================================================
+-- Tabla: app.collection_logs
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.collection_logs (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE,
+  document_id BIGINT REFERENCES app.customer_documents(id) ON DELETE SET NULL,
+  contact_method VARCHAR(40),
+  contact_name VARCHAR(160),
+  notes VARCHAR(500),
+  outcome VARCHAR(120),
+  follow_up_at TIMESTAMPTZ,
+  created_by INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS ix_collection_logs_follow_up
+  ON app.collection_logs (customer_id, follow_up_at);
+
+-- ========================================================
+-- Tabla: app.customer_disputes
+-- ========================================================
+CREATE TABLE IF NOT EXISTS app.customer_disputes (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE,
+  document_id BIGINT REFERENCES app.customer_documents(id) ON DELETE SET NULL,
+  dispute_code VARCHAR(40),
+  description VARCHAR(400),
+  status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+  resolution_notes VARCHAR(400),
+  resolved_at TIMESTAMPTZ,
+  created_by INTEGER REFERENCES app.admin_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_customer_disputes_touch_updated_at ON app.customer_disputes;
+CREATE TRIGGER trg_customer_disputes_touch_updated_at
+BEFORE UPDATE ON app.customer_disputes
+FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+
+CREATE INDEX IF NOT EXISTS ix_customer_disputes_status
+  ON app.customer_disputes (customer_id, status);
 
 -- ========================================================
 -- Vista: app.invoice_items_movements (ventas por item)
@@ -658,7 +871,15 @@ VALUES
   ('menu.usuarios.view',      'Acceso a Usuarios',           'Permite administrar usuarios administrativos'),
   ('menu.roles.view',         'Acceso a Roles',              'Permite administrar roles y permisos'),
   ('menu.reportes.view',      'Acceso a Reportes',           'Permite acceder a reportes y descargas'),
-  ('menu.preferencias.view',  'Acceso a Preferencias',       'Permite acceder a preferencias y configuraciones')
+  ('menu.preferencias.view',  'Acceso a Preferencias',       'Permite acceder a preferencias y configuraciones'),
+  ('menu.cxc.view',           'Acceso a Cuentas por Cobrar', 'Permite consultar clientes, documentos y gestiones de cartera'),
+  ('customers.manage',        'Gestión de clientes',         'Permite crear y editar clientes del catálogo'),
+  ('payment-terms.manage',    'Gestión de condiciones',      'Permite administrar las condiciones de pago disponibles'),
+  ('customer.documents.manage','Gestión de documentos CxC',  'Permite crear documentos de cuentas por cobrar y notas asociadas'),
+  ('customer.documents.apply','Aplicación de documentos',    'Permite aplicar y revertir pagos, recibos y retenciones'),
+  ('customer.credit.manage',  'Gestión de líneas de crédito','Permite asignar y ajustar límites de crédito por cliente'),
+  ('customer.collections.manage','Gestión de cobranza',      'Permite registrar seguimientos, promesas y actividades de cobranza'),
+  ('customer.disputes.manage','Gestión de disputas',         'Permite registrar y resolver disputas asociadas a documentos')
 ON CONFLICT (code) DO UPDATE
 SET name = EXCLUDED.name,
     description = EXCLUDED.description,
@@ -712,7 +933,15 @@ JOIN app.permissions p ON p.code IN (
   'menu.usuarios.view',
   'menu.roles.view',
   'menu.reportes.view',
-  'menu.preferencias.view'
+  'menu.preferencias.view',
+  'menu.cxc.view',
+  'customers.manage',
+  'payment-terms.manage',
+  'customer.documents.manage',
+  'customer.documents.apply',
+  'customer.credit.manage',
+  'customer.collections.manage',
+  'customer.disputes.manage'
 )
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 

@@ -71,6 +71,51 @@ Para inicializar la base de datos desde cero, importa `database/schema_master.sq
 
 El endpoint `GET /api/health` valida la conectividad.
 
+### Fundamentos de Cuentas por Cobrar
+
+La migración `20251128101500_cxc_core_tables` introduce el bloque de datos para operar el modo retail/CxC directamente en PostgreSQL:
+
+- `app.payment_terms`: catálogo de condiciones de pago (contado, 15/30/60/90/120 días). El script maestro incluye los seis valores iniciales y la UI/servicios utilizarán este catálogo para calcular vencimientos.
+- `app.customers`: registro maestro de clientes con datos fiscales, contacto, estado de crédito y vínculo a `payment_terms`.
+- `app.customer_documents` + `app.customer_document_applications`: ledger de documentos CxC (facturas espejo, notas, recibos, retenciones) y sus aplicaciones RET ➜ ROC.
+- `app.customer_credit_lines`, `app.collection_logs` y `app.customer_disputes`: estructuras para evaluar límites de crédito, registrar gestiones y dar seguimiento a disputas.
+- `app.invoices` ahora enlaza `customer_id`, `payment_term_id` y `due_date` para sincronizar cada factura retail con su documento en cartera.
+
+#### Endpoints CxC disponibles
+
+| Método | Ruta | Servicio |
+| --- | --- | --- |
+| GET / POST | `/api/preferencias/terminos-pago` | `paymentTermService.list/create`
+| GET / PATCH / DELETE | `/api/preferencias/terminos-pago/[code]` | `paymentTermService`
+| GET / POST | `/api/cxc/clientes` | `customerService.list/create`
+| GET / PATCH | `/api/cxc/clientes/[code]` | `customerService.getByCode/update`
+| GET / POST | `/api/cxc/documentos` | `customerDocumentService.list/create`
+| GET / POST | `/api/cxc/documentos/aplicaciones` | `customerDocumentApplicationService.list/apply`
+| DELETE | `/api/cxc/documentos/aplicaciones/[id]` | `customerDocumentApplicationService.delete`
+
+Todas las rutas respetan la bandera `MOCK_DATA` y delegan en los servicios del dominio para mantener compatibilidad con el modo demo.
+Antes de ejecutar cualquier handler se valida que la sesión posea los permisos CxC necesarios mediante `requireCxCPermissions` (`src/lib/auth/cxc-access.ts`), garantizando que solo roles autorizados puedan administrar cartera.
+
+#### Pruebas planificadas
+
+Se agregarán suites en `tests/api/cxc.*` cubriendo:
+
+1. Condiciones de pago: creación, actualización, eliminación y validaciones de duplicidad.
+2. Clientes: búsqueda con filtros, creación con vínculo a `payment_terms` y actualización de crédito/estatus.
+3. Documentos: emisión de facturas espejo/notas y filtros por cliente, estado y tipo.
+4. Aplicaciones: flujo RET ➜ ROC, validación de saldos y reversión por `DELETE`.
+
+Sugerencias específicas:
+- `tests/api/cxc.payment-terms.test.ts`: mock + base real, validar `requireCxCPermissions`, deduplicación por `code`, edge cases de vigencia y bandera `is_active`.
+- `tests/api/cxc.customers.test.ts`: escenarios con `credit_limit`, actualización parcial, rechazo cuando falta `payment_term_id` y filtro `status`.
+- `tests/api/cxc.documents.test.ts`: creación de documentos `INVOICE`, `CREDIT_NOTE`, `RECEIPT`, verificación de `due_date` normalizado, folios generados por `SequenceService` y bloqueos por saldo negativo.
+- `tests/api/cxc.document-applications.test.ts`: aplicación de recibos parciales, reversión (DELETE) con recuperación de saldo y doble ejecución protegida.
+- Pruebas unitarias en `tests/services/paymentTerm.service.test.ts`, `tests/services/customer.service.test.ts` y `tests/services/customerDocument.service.test.ts` para validar reglas de negocio sin HTTP.
+
+Cada suite deberá ejecutarse con `MOCK_DATA=true` y contra la base real para garantizar paridad.
+
+Si necesitas recrear estos objetos en un entorno limpio, basta con volver a ejecutar `database/schema_master.sql` o aplicar la migración Prisma correspondiente.
+
 ### Inicialización de base y primer administrador
 
 1. Crea la base desde `postgres` (ajusta el nombre si lo requires):
@@ -112,6 +157,8 @@ El endpoint `GET /api/health` valida la conectividad.
 | `NEXT_PUBLIC_CLIENT_LOGO_URL` | Ruta absoluta o relativa del logotipo mostrado en login y barra superior | `/logos/client.svg` |
 | `NEXT_APP_URL` | URL base usada en redirecciones, enlaces absolutos y correos | `http://localhost:3000` |
 > Importante: esta URL también se usa para generar los enlaces de reportes de caja (apertura/cierre). Configúrala con el dominio público para evitar respuestas `https://0.0.0.0`. 
+| `NEXT_PUBLIC_ES_RESTAURANTE` | Activa flujos exclusivos de restaurantes (mesas, meseros, facturación con pedido). Usa `false` para habilitar el modo retail con CxC. | `true` |
+| `LICENSE_MAX_CASH_REGISTERS` | Número máximo de cajas activas/licenciadas. Usa `0` o deja vacío para operar sin límite. | `5` |
 | `NEXT_PUBLIC_LOCAL_CURRENCY_CODE` | Código ISO de la moneda principal | `MXN` |
 | `NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL` | Símbolo de moneda principal | `$` |
 | `NEXT_PUBLIC_FOREIGN_CURRENCY_CODE` | Código ISO de la moneda secundaria | `USD` |
@@ -304,8 +351,21 @@ El guardado de sesión funciona igual: aunque el origen de datos sea simulado, l
 
 ### Roles y permisos disponibles
 
-- `ADMINISTRADOR`: acceso completo a mantenimiento y operaciones. Incluye permisos `cash.register.open`, `cash.register.close`, `invoice.issue`, `cash.report.view` y `admin.users.manage`.
-- `FACTURADOR`: orientado al punto de venta. Permite abrir/cerrar caja, emitir facturas y consultar reportes de caja (`cash.register.open`, `cash.register.close`, `invoice.issue`, `cash.report.view`).
+- `ADMINISTRADOR`: acceso completo a mantenimiento y operaciones. Además de los permisos operativos (`cash.register.open`, `cash.register.close`, `invoice.issue`, `cash.report.view`, `admin.users.manage`) incluye todos los accesos de menú (`menu.*`) y las nuevas capacidades de cuentas por cobrar documentadas debajo.
+- `FACTURADOR`: orientado al punto de venta. Permite abrir/cerrar caja, emitir facturas y consultar reportes (`cash.register.open`, `cash.register.close`, `invoice.issue`, `cash.report.view`, `menu.dashboard.view`, `menu.facturacion.view`, `menu.caja.view`, `menu.reportes.view`). Por defecto no tiene acceso al módulo de CxC.
+
+Permisos recientemente añadidos para habilitar el módulo de Cuentas por Cobrar (visibles solo cuando `NEXT_PUBLIC_ES_RESTAURANTE=false`):
+
+| Código | Propósito |
+| --- | --- |
+| `menu.cxc.view` | Controla el acceso al menú/vista principal de CxC. |
+| `customers.manage` | Autoriza la administración del catálogo de clientes. |
+| `payment-terms.manage` | Permite mantener las condiciones de pago asignables a cada cliente. |
+| `customer.documents.manage` | Habilita la generación de documentos (facturas espejo, notas de crédito, recibos, retenciones) dentro de CxC. |
+| `customer.documents.apply` | Permite aplicar o revertir pagos, recibos y retenciones sobre documentos abiertos. |
+| `customer.credit.manage` | Gestiona líneas de crédito, bloqueos y ajustes de límite por cliente. |
+| `customer.collections.manage` | Autoriza el registro de gestiones y seguimientos de cobranza. |
+| `customer.disputes.manage` | Permite documentar y resolver disputas o reclamos asociados a los documentos de CxC. |
 
 El usuario de demostración (`admin@facturador.demo`) posee el rol `ADMINISTRADOR`. Desde el nuevo módulo **Usuarios** puedes crear cuentas adicionales y asignarles roles. Para validar el aislamiento de permisos, crea un usuario con el rol `FACTURADOR`: tendrá acceso al flujo de facturación pero no podrá administrar otros usuarios ni catálogos restringidos.
 

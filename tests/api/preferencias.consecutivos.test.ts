@@ -2,23 +2,23 @@ import { GET as DefinitionsGET, POST as DefinitionsPOST, PATCH as DefinitionsPAT
 import { GET as InventoryGET, POST as InventoryPOST } from "@/app/api/preferencias/consecutivos/inventario/route";
 import { GET as CashGET, POST as CashPOST } from "@/app/api/preferencias/consecutivos/cajas/route";
 
-const mockSequenceService = {
-  listDefinitions: jest.fn(async () => []),
-  createDefinition: jest.fn(async (payload: any) => ({ id: 1, ...payload })),
-  updateDefinition: jest.fn(async (_code: string, payload: any) => ({ id: 1, code: _code, ...payload })),
-  listInventoryAssignments: jest.fn(async () => []),
-  setInventorySequence: jest.fn(async () => undefined),
-  listCashRegisterAssignments: jest.fn(async () => []),
-  setCashRegisterSequence: jest.fn(async () => ({ id: 1, code: "POS-1" })),
-};
-
 jest.mock("@/lib/auth/access", () => ({
   requireAdministrator: async () => ({ userId: 1 }),
 }));
 
 jest.mock("@/lib/services/SequenceService", () => ({
-  sequenceService: mockSequenceService,
+  sequenceService: {
+    listDefinitions: jest.fn(async () => []),
+    createDefinition: jest.fn(async (payload: any) => ({ id: 1, ...payload })),
+    updateDefinition: jest.fn(async (code: string, payload: any) => ({ id: 1, code, ...payload })),
+    listInventoryAssignments: jest.fn(async () => []),
+    setInventorySequence: jest.fn(async () => undefined),
+    listCashRegisterAssignments: jest.fn(async () => []),
+    setCashRegisterSequence: jest.fn(async () => ({ id: 1, code: "POS-1" })),
+  },
 }));
+
+const { sequenceService: mockSequenceService } = jest.requireMock("@/lib/services/SequenceService");
 
 describe("API Preferencias Consecutivos", () => {
   beforeEach(() => {

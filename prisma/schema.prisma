@@ -38,6 +38,9 @@ model admin_users {
   cash_register_sessions_cash_register_sessions_closing_user_idToadmin_users cash_register_sessions[] @relation("cash_register_sessions_closing_user_idToadmin_users")
   cash_register_users                                                        cash_register_users[]
   invoices_invoices_issuer_admin_user_idToadmin_users                        invoices[]              @relation("invoices_issuer_admin_user_idToadmin_users")
+  customer_credit_lines_customer_credit_lines_reviewer_admin_user_idToadmin_users customer_credit_lines[] @relation("customer_credit_lines_reviewer_admin_user_idToadmin_users")
+  collection_logs_collection_logs_created_byToadmin_users                    collection_logs[]        @relation("collection_logs_created_byToadmin_users")
+  customer_disputes_customer_disputes_created_byToadmin_users                customer_disputes[]      @relation("customer_disputes_created_byToadmin_users")
 
   @@schema("app")
 }
@@ -276,6 +279,9 @@ model invoices {
   notes                    String?                 @db.VarChar(400)
   customer_name            String?                 @db.VarChar(160)
   customer_tax_id          String?                 @db.VarChar(30)
+  customer_id              BigInt?
+  payment_term_id          Int?
+  due_date                 DateTime?               @db.Date
   issuer_admin_user_id     Int?
   cash_register_id         Int?
   cash_register_session_id BigInt?
@@ -287,9 +293,14 @@ model invoices {
   issuer_admin_user        admin_users?            @relation("invoices_issuer_admin_user_idToadmin_users", fields: [issuer_admin_user_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   cash_register            cash_registers?         @relation("invoices_cash_register_idTocash_registers", fields: [cash_register_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
   cash_register_session    cash_register_sessions? @relation("invoices_cash_register_session_idTocash_register_sessions", fields: [cash_register_session_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  customer                 customers?              @relation(fields: [customer_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  payment_terms            payment_terms?          @relation(fields: [payment_term_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  customer_documents_customer_documents_related_invoice_idToinvoices customer_documents[] @relation("customer_documents_related_invoice_idToinvoices")
 
   @@index([created_at], map: "ix_invoices_created_at")
   @@index([cash_register_session_id], map: "ix_invoices_cash_session")
+  @@index([customer_id], map: "ix_invoices_customer")
+  @@index([payment_term_id], map: "ix_invoices_payment_term")
   @@map("invoices")
   @@schema("app")
 }
@@ -539,6 +550,177 @@ model price_lists {
   article_price_rules article_price_rules[]
   article_prices      article_prices[]
 
+  @@schema("app")
+}
+
+model payment_terms {
+  id                      Int                         @id @default(autoincrement())
+  code                    String                      @unique @db.VarChar(30)
+  name                    String                      @db.VarChar(120)
+  description             String?                     @db.VarChar(250)
+  days                    Int                         @db.SmallInt
+  grace_days              Int?                        @db.SmallInt
+  is_active               Boolean                     @default(true)
+  created_at              DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?                   @default(now()) @db.Timestamptz(6)
+  customers               customers[]
+  invoices                invoices[]
+  customer_documents      customer_documents[]
+
+  @@index([is_active, code], map: "ix_payment_terms_active")
+  @@map("payment_terms")
+  @@schema("app")
+}
+
+model customers {
+  id                      BigInt                      @id @default(autoincrement())
+  code                    String                      @unique @db.VarChar(40)
+  name                    String                      @db.VarChar(200)
+  trade_name              String?                     @db.VarChar(200)
+  tax_id                  String?                     @db.VarChar(30)
+  email                   String?                     @db.VarChar(150)
+  phone                   String?                     @db.VarChar(50)
+  mobile_phone            String?                     @db.VarChar(50)
+  billing_address         String?                     @db.VarChar(250)
+  city                    String?                     @db.VarChar(120)
+  state                   String?                     @db.VarChar(120)
+  country_code            String?                     @default("NI") @db.VarChar(3)
+  postal_code             String?                     @db.VarChar(20)
+  payment_term_id         Int?
+  credit_limit            Decimal                     @default(0) @db.Decimal(18, 2)
+  credit_used             Decimal                     @default(0) @db.Decimal(18, 2)
+  credit_on_hold          Decimal                     @default(0) @db.Decimal(18, 2)
+  credit_status           String                      @default("ACTIVE") @db.VarChar(20)
+  credit_hold_reason      String?                     @db.VarChar(250)
+  last_credit_review_at   DateTime?                   @db.Timestamptz(6)
+  next_credit_review_at   DateTime?                   @db.Timestamptz(6)
+  is_active               Boolean                     @default(true)
+  notes                   String?                     @db.VarChar(400)
+  created_at              DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?                   @default(now()) @db.Timestamptz(6)
+  payment_terms           payment_terms?              @relation(fields: [payment_term_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  invoices                invoices[]
+  customer_documents      customer_documents[]
+  customer_credit_lines   customer_credit_lines[]
+  collection_logs         collection_logs[]
+  customer_disputes       customer_disputes[]
+
+  @@index([is_active, credit_status, code], map: "ix_customers_active_status")
+  @@index([tax_id], map: "ix_customers_tax_id")
+  @@map("customers")
+  @@schema("app")
+}
+
+model customer_documents {
+  id                       BigInt                              @id @default(autoincrement())
+  customer_id              BigInt
+  payment_term_id          Int?
+  related_invoice_id       BigInt?
+  document_type            String                              @db.VarChar(12)
+  document_number          String                              @db.VarChar(60)
+  document_date            DateTime                            @db.Date
+  due_date                 DateTime?                           @db.Date
+  currency_code            String                              @default("NIO") @db.VarChar(3)
+  original_amount          Decimal                             @db.Decimal(18, 2)
+  balance_amount           Decimal                             @db.Decimal(18, 2)
+  status                   String                              @default("PENDIENTE") @db.VarChar(12)
+  reference                String?                             @db.VarChar(120)
+  notes                    String?                             @db.VarChar(400)
+  metadata                 Json?
+  created_at               DateTime                            @default(now()) @db.Timestamptz(6)
+  updated_at               DateTime?                           @default(now()) @db.Timestamptz(6)
+  customers                customers                           @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  payment_terms            payment_terms?                      @relation(fields: [payment_term_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  invoices                 invoices?                           @relation("customer_documents_related_invoice_idToinvoices", fields: [related_invoice_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  customer_document_applications_customer_document_applications_applied_document_idTocustomer_documents customer_document_applications[] @relation("customer_document_applications_applied_document_idTocustomer_documents")
+  customer_document_applications_customer_document_applications_target_document_idTocustomer_documents customer_document_applications[] @relation("customer_document_applications_target_document_idTocustomer_documents")
+  collection_logs          collection_logs[]
+  customer_disputes        customer_disputes[]
+
+  @@unique([document_type, document_number], map: "uq_customer_documents_type_number")
+  @@index([customer_id, status, document_date(sort: Desc)], map: "ix_customer_documents_customer_status")
+  @@index([related_invoice_id], map: "ix_customer_documents_invoice")
+  @@map("customer_documents")
+  @@schema("app")
+}
+
+model customer_document_applications {
+  id                   BigInt             @id @default(autoincrement())
+  applied_document_id  BigInt
+  target_document_id   BigInt
+  application_date     DateTime           @default(now()) @db.Timestamptz(6)
+  amount               Decimal            @db.Decimal(18, 2)
+  reference            String?            @db.VarChar(120)
+  notes                String?            @db.VarChar(400)
+  created_at           DateTime           @default(now()) @db.Timestamptz(6)
+  applied_document     customer_documents @relation("customer_document_applications_applied_document_idTocustomer_documents", fields: [applied_document_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  target_document      customer_documents @relation("customer_document_applications_target_document_idTocustomer_documents", fields: [target_document_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([applied_document_id], map: "ix_customer_document_applications_applied")
+  @@index([target_document_id], map: "ix_customer_document_applications_target")
+  @@map("customer_document_applications")
+  @@schema("app")
+}
+
+model customer_credit_lines {
+  id                     BigInt      @id @default(autoincrement())
+  customer_id            BigInt
+  status                 String      @default("ACTIVE") @db.VarChar(20)
+  approved_limit         Decimal     @default(0) @db.Decimal(18, 2)
+  available_limit        Decimal     @default(0) @db.Decimal(18, 2)
+  blocked_amount         Decimal     @default(0) @db.Decimal(18, 2)
+  reviewer_admin_user_id Int?
+  review_notes           String?     @db.VarChar(400)
+  reviewed_at            DateTime?   @db.Timestamptz(6)
+  next_review_at         DateTime?   @db.Timestamptz(6)
+  created_at             DateTime    @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime?   @default(now()) @db.Timestamptz(6)
+  customers              customers   @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  admin_users            admin_users? @relation("customer_credit_lines_reviewer_admin_user_idToadmin_users", fields: [reviewer_admin_user_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([customer_id, status], map: "ix_customer_credit_lines_status")
+  @@map("customer_credit_lines")
+  @@schema("app")
+}
+
+model collection_logs {
+  id             BigInt             @id @default(autoincrement())
+  customer_id    BigInt
+  document_id    BigInt?
+  contact_method String?           @db.VarChar(40)
+  contact_name   String?           @db.VarChar(160)
+  notes          String?           @db.VarChar(500)
+  outcome        String?           @db.VarChar(120)
+  follow_up_at   DateTime?         @db.Timestamptz(6)
+  created_by     Int?
+  created_at     DateTime          @default(now()) @db.Timestamptz(6)
+  customers      customers         @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  document       customer_documents? @relation(fields: [document_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  admin_users    admin_users?      @relation("collection_logs_created_byToadmin_users", fields: [created_by], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([customer_id, follow_up_at], map: "ix_collection_logs_follow_up")
+  @@map("collection_logs")
+  @@schema("app")
+}
+
+model customer_disputes {
+  id               BigInt             @id @default(autoincrement())
+  customer_id      BigInt
+  document_id      BigInt?
+  dispute_code     String?           @db.VarChar(40)
+  description      String?           @db.VarChar(400)
+  status           String            @default("OPEN") @db.VarChar(20)
+  resolution_notes String?           @db.VarChar(400)
+  resolved_at      DateTime?         @db.Timestamptz(6)
+  created_by       Int?
+  created_at       DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?         @default(now()) @db.Timestamptz(6)
+  customers        customers         @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  document         customer_documents? @relation(fields: [document_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  admin_users      admin_users?      @relation("customer_disputes_created_byToadmin_users", fields: [created_by], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([customer_id, status], map: "ix_customer_disputes_status")
+  @@map("customer_disputes")
   @@schema("app")
 }
 

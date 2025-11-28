@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 
 import { env } from "@/lib/env";
+import { assertRestaurantFeatureEnabled } from "@/lib/features/guards";
 import type {
   IWaiterRepository,
   WaiterUser,
@@ -100,6 +101,7 @@ export class WaiterService {
   constructor(private readonly repository: IWaiterRepository = new WaiterRepository()) {}
 
   async verifyWaiterPin(pin: string, meta: VerifyWaiterPinMeta): Promise<VerifyWaiterPinResult> {
+    assertRestaurantFeatureEnabled();
     if (env.useMockData && mockContext) {
       const signature = computePinSignature(pin);
       const record = mockContext.waiters.find((waiter) => waiter.pinSignature === signature);
@@ -150,6 +152,7 @@ export class WaiterService {
   }
 
   async getWaiterById(waiterId: number): Promise<WaiterUser | null> {
+    assertRestaurantFeatureEnabled();
     if (env.useMockData && mockContext) {
       const record = mockContext.waiters.find((waiter) => waiter.id === waiterId);
       if (!record || !record.isActive) {
@@ -166,6 +169,7 @@ export class WaiterService {
   }
 
   async listWaiterDirectory(options: { includeInactive?: boolean } = {}): Promise<WaiterDirectoryEntry[]> {
+    assertRestaurantFeatureEnabled();
     const includeInactive = options.includeInactive ?? false;
 
     if (env.useMockData && mockContext) {
@@ -178,6 +182,7 @@ export class WaiterService {
   }
 
   async createWaiterDirectoryEntry(params: CreateWaiterParams): Promise<WaiterDirectoryEntry> {
+    assertRestaurantFeatureEnabled();
     const code = normalizeWaiterCode(params.code);
     const fullName = params.fullName.trim();
     const phone = sanitizeContact(params.phone, 30);
@@ -220,6 +225,7 @@ export class WaiterService {
   }
 
   async updateWaiterDirectoryEntry(waiterId: number, params: UpdateWaiterParams): Promise<WaiterDirectoryEntry> {
+    assertRestaurantFeatureEnabled();
     if (env.useMockData && mockContext) {
       const record = mockContext.waiters.find((waiter) => waiter.id === waiterId);
       if (!record) {
@@ -254,6 +260,7 @@ export class WaiterService {
   }
 
   async resetWaiterPin(waiterId: number, newPin: string): Promise<WaiterDirectoryEntry> {
+    assertRestaurantFeatureEnabled();
     if (env.useMockData && mockContext) {
       const record = mockContext.waiters.find((waiter) => waiter.id === waiterId);
       if (!record) {

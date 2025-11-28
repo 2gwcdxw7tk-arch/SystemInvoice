@@ -1,9 +1,14 @@
 import { env } from "@/lib/env";
 import { toCentralClosedDate } from "@/lib/utils/date";
 import { inventoryService } from "@/lib/services/InventoryService";
-import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
+import { customerService } from "@/lib/services/cxc/CustomerService";
+import { customerDocumentService } from "@/lib/services/cxc/CustomerDocumentService";
+import { customerCreditLineService } from "@/lib/services/cxc/CustomerCreditLineService";
+import { paymentTermService } from "@/lib/services/cxc/PaymentTermService";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
 import { sequenceService } from "@/lib/services/SequenceService";
+import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
+import type { PaymentTermDTO } from "@/lib/types/cxc";
 import type {
   IInvoiceRepository,
   InvoiceInsertInput,
@@ -12,6 +17,7 @@ import type {
   InvoiceItemPersistence,
   InvoicePaymentInput,
   InvoicePersistenceInput,
+  InvoiceSaleType,
 } from "@/lib/repositories/invoices/IInvoiceRepository";
 import { InvoiceRepository } from "@/lib/repositories/invoices/InvoiceRepository";
 import { OrderRepository } from "@/lib/repositories/orders/OrderRepository";
@@ -44,6 +50,7 @@ function normalizeItemsForPersistence(items: InvoiceItemInput[] | undefined): In
   return items.map((item) => {
     const lineTotal = Math.round(item.quantity * item.unit_price * 100) / 100;
     return {
+      article_code: item.article_code ?? null,
       description: item.description,
       quantity: item.quantity,
       unit_price: item.unit_price,
@@ -79,25 +86,145 @@ export class InvoiceService {
 
     const invoiceNumber = await this.resolveInvoiceNumber(input);
 
+    const roundCurrency = (value: number) => Math.round(value * 100) / 100;
+    const totalAmount = roundCurrency(input.total_amount);
+    const paymentsTotal = roundCurrency(payments.reduce((acc, payment) => acc + payment.amount, 0));
+    const missingAmount = Math.max(roundCurrency(totalAmount - paymentsTotal), 0);
+
+    const isRetailMode = env.features.retailModeEnabled;
+
+    const resolvedCustomerId: number | null = input.customer_id ?? null;
+    let resolvedCustomerCode: string | null = input.customer_code ?? null;
+    let resolvedSaleType: InvoiceSaleType | null = input.sale_type ?? null;
+    let resolvedPaymentTerm: PaymentTermDTO | null = null;
+    let resolvedDueDate: Date | null = input.due_date ?? null;
+    let outstandingAmount = 0;
+    let customerDocumentPayload: InvoicePersistenceInput["customerDocument"];
+
+    if (isRetailMode) {
+      if (!resolvedCustomerId || resolvedCustomerId <= 0) {
+        throw new Error("Debes seleccionar un cliente para facturar en modo retail");
+      }
+
+      const customerRecord = await customerService.getById(resolvedCustomerId);
+      if (!customerRecord) {
+        throw new Error("El cliente indicado no existe");
+      }
+
+      resolvedCustomerCode = customerRecord.code;
+      resolvedSaleType = resolvedSaleType ?? "CONTADO";
+
+      if (resolvedSaleType === "CONTADO" && missingAmount > 0) {
+        throw new Error("No puedes guardar la factura con saldo pendiente. Registra el cobro completo antes de continuar.");
+      }
+
+      if (resolvedSaleType === "CREDITO") {
+        outstandingAmount = missingAmount > 0 ? missingAmount : roundCurrency(totalAmount - paymentsTotal);
+        outstandingAmount = Math.max(outstandingAmount, 0);
+
+        if (customerRecord.creditStatus === "BLOCKED") {
+          throw new Error("El cliente está bloqueado para crédito");
+        }
+
+        const overview = await customerCreditLineService.getOverview(customerRecord.code);
+        if (overview.customer.creditStatus === "BLOCKED") {
+          throw new Error("El cliente está bloqueado para crédito");
+        }
+
+        const creditLimit = roundCurrency(overview.customer.creditLimit);
+        if (creditLimit > 0) {
+          const projectedUsage = roundCurrency(overview.customer.creditUsed + outstandingAmount);
+          if (outstandingAmount > 0 && projectedUsage > creditLimit + 0.0001) {
+            throw new Error("El cliente no cuenta con crédito disponible para esta factura");
+          }
+        }
+
+        if (outstandingAmount <= 0) {
+          resolvedSaleType = "CONTADO";
+        }
+      } else {
+        outstandingAmount = 0;
+      }
+
+      const requestedPaymentTermCode = input.payment_term_code ?? customerRecord.paymentTermCode ?? null;
+      if (requestedPaymentTermCode) {
+        const term = await paymentTermService.getByCode(requestedPaymentTermCode);
+        if (!term) {
+          throw new Error("La condición de pago indicada no existe");
+        }
+        resolvedPaymentTerm = term;
+      } else if (customerRecord.paymentTermId) {
+        const term = await paymentTermService.getById(customerRecord.paymentTermId);
+        if (term) {
+          resolvedPaymentTerm = term;
+        }
+      }
+
+      const dueDate = paymentTermService.calculateDueDate(input.invoiceDate, resolvedPaymentTerm);
+      resolvedDueDate = dueDate;
+
+      const documentStatus = outstandingAmount > 0 ? "PENDIENTE" : "PAGADO";
+      customerDocumentPayload = {
+        customerId: resolvedCustomerId,
+        documentType: "INVOICE",
+        documentNumber: invoiceNumber,
+        documentDate: input.invoiceDate,
+        dueDate,
+        currencyCode: input.currency_code,
+        originalAmount: totalAmount,
+        balanceAmount: outstandingAmount,
+        status: documentStatus,
+        reference: null,
+        notes: input.notes ?? null,
+        paymentTermId: resolvedPaymentTerm?.id ?? null,
+        metadata: { saleType: resolvedSaleType ?? "CONTADO" },
+      };
+    } else if (missingAmount > 0) {
+      throw new Error("No puedes guardar la factura con saldo pendiente. Registra el cobro completo antes de continuar.");
+    }
+
     if (env.useMockData) {
       return this.createInvoiceMock(
-        { ...input, invoice_number: invoiceNumber, payments, items: normalizedItems },
+        {
+          ...input,
+          customer_id: resolvedCustomerId,
+          customer_code: resolvedCustomerCode ?? null,
+          sale_type: resolvedSaleType,
+          payment_term_id: resolvedPaymentTerm?.id ?? null,
+          payment_term_code: resolvedPaymentTerm?.code ?? null,
+          due_date: resolvedDueDate ?? null,
+          invoice_number: invoiceNumber,
+          payments,
+          items: normalizedItems,
+          customerDocument: customerDocumentPayload,
+        },
         movementLines
       );
     }
 
     const persistencePayload: InvoicePersistenceInput = {
       ...input,
+      customer_id: resolvedCustomerId,
+      customer_code: resolvedCustomerCode ?? null,
+      sale_type: resolvedSaleType,
+      payment_term_id: resolvedPaymentTerm?.id ?? null,
+      payment_term_code: resolvedPaymentTerm?.code ?? null,
+      due_date: resolvedDueDate ?? null,
       invoice_number: invoiceNumber,
       payments,
       items: normalizedItems,
       movementLines,
+      customerDocument: customerDocumentPayload,
     };
 
     const result = await this.invoiceRepository.createInvoice(persistencePayload);
 
     if (input.originOrderId) {
       await this.orderService.markOrderAsInvoiced(input.originOrderId, input.invoiceDate);
+    }
+
+    if (env.features.retailModeEnabled && resolvedCustomerId) {
+      await customerCreditLineService.syncCustomerCreditUsageByCustomerId(resolvedCustomerId);
     }
 
     return result;
@@ -244,6 +371,13 @@ export class InvoiceService {
 
     if (input.originOrderId) {
       await this.orderService.markOrderAsInvoiced(input.originOrderId, input.invoiceDate);
+    }
+
+    if (input.customerDocument) {
+      await customerDocumentService.create({
+        ...input.customerDocument,
+        relatedInvoiceId: id,
+      });
     }
 
     return record;

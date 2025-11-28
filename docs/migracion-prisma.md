@@ -18,17 +18,19 @@ Este documento resume el estado real de la migración hacia la arquitectura basa
 | Listas de precios           | `PriceListService`, `/api/precios`, resolución en `ArticleService`                                   | ✅     | UI espera `items[].price.base_price`. |
 | Clasificaciones             | `ArticleClassificationService`, endpoints asociados                                                  | ✅     | Jerarquía niveles 1–6. |
 | Reportes                    | `ReportService`, `ReportRepository`, `/api/reportes/**`                                             | ✅     | Endpoints migrados a servicio; soporte `format=html` y botón de impresión (modal) en `/reportes`. |
+| Cuentas por cobrar          | `PaymentTermService`, `CustomerService`, `CustomerDocumentService`, `CustomerDocumentApplicationService`, `/api/preferencias/terminos-pago`, `/api/cxc/clientes`, `/api/cxc/documentos`, `/api/cxc/documentos/aplicaciones` | ✅ | Servicios con modo mock, permisos `requireCxCPermissions` y migración `20251128101500_cxc_core_tables`. |
 
 ## 2. Backlog priorizado
 
-1. **Reportes**
-   - Diseñar `ReportService` y repositorios por dominio (ventas, caja, inventario).
-   - Migrar `/api/reportes/**` a servicios Prisma con Zod en handlers.
-2. **Limpieza final**
+1. **Autenticación pendiente**
+   - Completar `AuthRepository/Service` para cubrir login y refresh tokens sin helpers legacy.
+   - Retirar dependencias residuales de `src/lib/db/auth.ts`.
+2. **Pruebas CxC**
+   - Incorporar suites Jest para `/api/preferencias/terminos-pago`, `/api/cxc/clientes` y `/api/cxc/documentos(+aplicaciones)` en modo mock y real.
+   - Documentar fixtures y datos seed reutilizables.
+3. **Hardening general**
    - Verificar que no existan importaciones de `src/lib/db/**` legacy; retirar archivos residuales.
-   - Evaluar eliminación de `src/lib/db/postgres.ts` si no hay consumidores.
-3. **Pruebas y hardening**
-   - Completar pruebas unitarias de servicios clave y smoke de endpoints.
+   - Auditar `SequenceService` y handlers que dependan de folios para detectar escenarios sin asignación.
 
 ## 3. Checklist por módulo
 

@@ -134,6 +134,64 @@ export class CashRegisterService {
     }
   }
 
+  private resolveLicenseLimit(): number | null {
+    const { hasCashRegisterLimit, maxCashRegisters } = env.licenses;
+    if (!hasCashRegisterLimit) {
+      return null;
+    }
+    return typeof maxCashRegisters === "number" && maxCashRegisters > 0 ? maxCashRegisters : null;
+  }
+
+  private buildLicenseLimitMessage(limit: number): string {
+    return `Se alcanzó el tope de cajas licenciadas (${limit})`;
+  }
+
+  private buildSessionLicenseLimitMessage(limit: number): string {
+    return `${this.buildLicenseLimitMessage(limit)}. Cierra otra sesión antes de continuar.`;
+  }
+
+  private async countActiveCashRegisters(): Promise<number> {
+    if (env.useMockData) {
+      return this.mockCashRegisters.filter((register) => register.isActive).length;
+    }
+    return this.repository.countActiveCashRegisters();
+  }
+
+  private async ensureActiveRegisterCapacity(): Promise<void> {
+    const limit = this.resolveLicenseLimit();
+    if (!limit) {
+      return;
+    }
+    const activeCount = await this.countActiveCashRegisters();
+    if (activeCount >= limit) {
+      throw new Error(this.buildLicenseLimitMessage(limit));
+    }
+  }
+
+  private async countOpenSessions(): Promise<number> {
+    if (env.useMockData && this.mockSessions) {
+      let openCount = 0;
+      for (const session of this.mockSessions.values()) {
+        if (session.status === "OPEN") {
+          openCount += 1;
+        }
+      }
+      return openCount;
+    }
+    return this.repository.countOpenCashRegisterSessions();
+  }
+
+  private async ensureSessionCapacity(): Promise<void> {
+    const limit = this.resolveLicenseLimit();
+    if (!limit) {
+      return;
+    }
+    const openCount = await this.countOpenSessions();
+    if (openCount >= limit) {
+      throw new Error(this.buildSessionLicenseLimitMessage(limit));
+    }
+  }
+
   private ensureMockAssignments(adminUserId: number): CashRegisterAssignment[] {
     if (!env.useMockData || !this.mockAssignments) {
       return [];
@@ -181,6 +239,7 @@ export class CashRegisterService {
 
   async createCashRegister(input: CreateCashRegisterInput): Promise<CashRegisterRecord> {
     if (!env.useMockData) {
+      await this.ensureActiveRegisterCapacity();
       return this.repository.createCashRegister(input);
     }
 
@@ -188,6 +247,8 @@ export class CashRegisterService {
     if (this.mockCashRegisters.some((register) => register.code === normalizedCode)) {
       throw new Error("Ya existe una caja con ese código");
     }
+
+    await this.ensureActiveRegisterCapacity();
 
     const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
     const warehouse = await warehouseService.getWarehouseByCode(normalizedWarehouseCode);
@@ -217,11 +278,21 @@ export class CashRegisterService {
   }
 
   async updateCashRegister(code: string, input: UpdateCashRegisterInput): Promise<CashRegisterRecord> {
+    const normalizedCode = normalizeCode(code);
+
     if (!env.useMockData) {
-      return this.repository.updateCashRegister(code, input);
+      if (input.isActive === true) {
+        const current = await this.repository.getCashRegisterByCode(normalizedCode);
+        if (!current) {
+          throw new Error(`La caja ${normalizedCode} no existe`);
+        }
+        if (!current.isActive) {
+          await this.ensureActiveRegisterCapacity();
+        }
+      }
+      return this.repository.updateCashRegister(normalizedCode, input);
     }
 
-    const normalizedCode = normalizeCode(code);
     const target = this.mockCashRegisters.find((register) => register.code === normalizedCode);
     if (!target) {
       throw new Error("Caja no encontrada (mock)");
@@ -236,6 +307,9 @@ export class CashRegisterService {
     }
 
     if (typeof input.isActive === "boolean") {
+      if (input.isActive && !target.isActive) {
+        await this.ensureActiveRegisterCapacity();
+      }
       target.isActive = input.isActive;
     }
 
@@ -529,6 +603,9 @@ export class CashRegisterService {
       if (hasOpen) {
         throw new Error("Ya existe una apertura activa para el usuario o la caja seleccionada");
       }
+
+      await this.ensureSessionCapacity();
+
       const id = this.mockSessionSeq++;
       const nowIso = new Date().toISOString();
       const newSession: CashRegisterSessionRecord = {
@@ -552,6 +629,8 @@ export class CashRegisterService {
       this.mockSessions.set(id, newSession);
       return cloneSession(newSession);
     }
+
+    await this.ensureSessionCapacity();
 
     return this.repository.openCashRegisterSession({
       adminUserId: input.adminUserId,

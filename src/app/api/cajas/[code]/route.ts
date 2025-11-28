@@ -74,7 +74,11 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   } catch (error) {
     console.error(`PATCH /api/cajas/${code}`, error);
     const message = error instanceof Error ? error.message : "No se pudo actualizar la caja";
-    const status = /no existe/i.test(message) ? 404 : 500;
+    const status = /(licenci|tope)/i.test(message)
+      ? 409
+      : /no existe/i.test(message)
+        ? 404
+        : 500;
     return NextResponse.json({ success: false, message }, { status });
   }
 }

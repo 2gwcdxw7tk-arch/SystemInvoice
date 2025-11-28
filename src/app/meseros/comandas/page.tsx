@@ -13,6 +13,8 @@ import { formatCurrency } from "@/config/currency";
 import { SERVICE_RATE, VAT_RATE, formatPercent } from "@/config/taxes";
 import { cn } from "@/lib/utils";
 import type { OrderLine, OrderStatus } from "@/lib/orders/types";
+import { publicFeatures } from "@/lib/features/public";
+import { FeatureGuardNotice } from "@/components/layout/feature-guard-notice";
 
 interface WaiterProfile {
   id: number;
@@ -158,7 +160,20 @@ function sumQuantities(lines: OrderLine[] | undefined | null): number {
   if (!lines || lines.length === 0) return 0;
   return lines.reduce((total, line) => total + line.quantity, 0);
 }
-export default function MeserosComandasPage() {
+
+export default function MeserosComandasPage(): JSX.Element | null {
+  const isRestaurant = publicFeatures.isRestaurant;
+  const hasAccess = isRestaurant;
+
+  const guardContent = hasAccess
+    ? null
+    : (
+        <FeatureGuardNotice
+          title="Comandas deshabilitadas"
+          description="El registro táctil de pedidos solo está disponible en instalaciones con modo restaurante. Configura NEXT_PUBLIC_ES_RESTAURANTE en true para reactivarlo."
+        />
+      );
+
   const { toast } = useToast();
 
   const [waiter, setWaiter] = useState<WaiterProfile | null>(null);
@@ -200,6 +215,11 @@ export default function MeserosComandasPage() {
   const [now, setNow] = useState(() => new Date());
 
   const loadProfile = useCallback(async () => {
+    if (!hasAccess) {
+      setWaiter(null);
+      setLoadingProfile(false);
+      return;
+    }
     setLoadingProfile(true);
     try {
       const res = await fetch("/api/meseros/me");
@@ -220,9 +240,14 @@ export default function MeserosComandasPage() {
     } finally {
       setLoadingProfile(false);
     }
-  }, [toast]);
+  }, [hasAccess, toast]);
 
   const loadTables = useCallback(async () => {
+    if (!hasAccess) {
+      setTables([]);
+      setLoadingTables(false);
+      return;
+    }
     setLoadingTables(true);
     try {
       const res = await fetch("/api/meseros/tables", { cache: "no-store" });
@@ -238,9 +263,14 @@ export default function MeserosComandasPage() {
     } finally {
       setLoadingTables(false);
     }
-  }, [toast]);
+  }, [hasAccess, toast]);
 
   const loadArticles = useCallback(async () => {
+    if (!hasAccess) {
+      setArticles([]);
+      setLoadingArticles(false);
+      return;
+    }
     setLoadingArticles(true);
     try {
       const res = await fetch("/api/articulos?unit=RETAIL");
@@ -254,9 +284,12 @@ export default function MeserosComandasPage() {
     } finally {
       setLoadingArticles(false);
     }
-  }, [toast]);
+  }, [hasAccess, toast]);
 
   const loadClassifications = useCallback(async (level: ActiveLevel, parentFullCode?: string | null) => {
+    if (!hasAccess) {
+      return;
+    }
     setLevelLoading(true);
     try {
       const url = new URL("/api/clasificaciones", window.location.origin);
@@ -277,28 +310,37 @@ export default function MeserosComandasPage() {
     } finally {
       setLevelLoading(false);
     }
-  }, [toast]);
+  }, [hasAccess, toast]);
 
   useEffect(() => {
+    if (!hasAccess) {
+      return;
+    }
     void loadProfile();
-  }, [loadProfile]);
+  }, [hasAccess, loadProfile]);
 
   useEffect(() => {
-    if (!waiter) return;
+    if (!hasAccess || !waiter) return;
     void loadTables();
-  }, [waiter, loadTables]);
+  }, [hasAccess, waiter, loadTables]);
 
   useEffect(() => {
+    if (!hasAccess) {
+      return;
+    }
     void loadArticles();
     void loadClassifications(1);
-  }, [loadArticles, loadClassifications]);
+  }, [hasAccess, loadArticles, loadClassifications]);
 
   useEffect(() => {
+    if (!hasAccess) {
+      return;
+    }
     const timer = window.setInterval(() => {
       setNow(new Date());
     }, 1000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [hasAccess]);
 
   const handleSelectTable = useCallback(async (tableId: string) => {
     if (!waiter) {
@@ -341,7 +383,7 @@ export default function MeserosComandasPage() {
   }, [waiter, toast, loadTables]);
 
   const persistOrder = useCallback(async (pending: OrderLine[], sent: OrderLine[]) => {
-    if (!selectedTable) return;
+    if (!hasAccess || !selectedTable) return;
     try {
       const res = await fetch(`/api/meseros/tables/${encodeURIComponent(selectedTable.id)}`, {
         method: "PATCH",
@@ -361,16 +403,16 @@ export default function MeserosComandasPage() {
       const message = error instanceof Error ? error.message : "No se pudo guardar la comanda";
       toast({ variant: "warning", title: "Comanda", description: message });
     }
-  }, [selectedTable, toast]);
+  }, [hasAccess, selectedTable, toast]);
 
   useEffect(() => {
-    if (!selectedTable) return;
+    if (!hasAccess || !selectedTable) return;
     if (skipSyncRef.current) {
       skipSyncRef.current = false;
       return;
     }
     void persistOrder(pendingItems, sentItems);
-  }, [pendingItems, sentItems, selectedTable, persistOrder]);
+  }, [hasAccess, pendingItems, persistOrder, selectedTable, sentItems]);
 
   const doChangeTable = useCallback(() => {
     skipSyncRef.current = true;
@@ -612,6 +654,11 @@ export default function MeserosComandasPage() {
     const text = DATE_FORMATTER.format(now);
     return text.charAt(0).toUpperCase() + text.slice(1);
   }, [now]);
+
+  if (!hasAccess) {
+    return guardContent ?? null;
+  }
+
   if (loadingProfile) {
     return (
       <div className="flex h-full items-center justify-center p-6">

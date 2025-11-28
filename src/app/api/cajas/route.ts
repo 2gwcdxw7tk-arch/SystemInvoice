@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("POST /api/cajas", error);
     const message = error instanceof Error ? error.message : "No se pudo registrar la caja";
-    const status = /existe|duplic/i.test(message) ? 409 : 500;
+    const status = /(existe|duplic|licenci|tope)/i.test(message) ? 409 : 500;
     return NextResponse.json({ success: false, message }, { status });
   }
 }

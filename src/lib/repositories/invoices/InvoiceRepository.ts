@@ -1,6 +1,7 @@
 import { PrismaClient, prisma } from "@/lib/db/prisma";
 import type { Prisma } from "@prisma/client"; // Type-only Prisma namespace for TransactionClient
 import { inventoryService } from "@/lib/services/InventoryService";
+import { customerDocumentRepository } from "@/lib/repositories/cxc/CustomerDocumentRepository";
 import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
 import type { IInvoiceRepository, InvoiceInsertResult, InvoicePersistenceInput } from "@/lib/repositories/invoices/IInvoiceRepository";
 import { toCentralClosedDate, toCentralEndOfDay } from "@/lib/utils/date";
@@ -50,6 +51,9 @@ export class InvoiceRepository implements IInvoiceRepository {
           notes: data.notes,
           customer_name: data.customer_name,
           customer_tax_id: data.customer_tax_id,
+          customer_id: data.customer_id ? BigInt(data.customer_id) : null,
+          payment_term_id: data.payment_term_id ?? null,
+          due_date: data.due_date ?? null,
           issuer_admin_user_id: data.issuer_admin_user_id,
           cash_register_id: data.cash_register_id,
           cash_register_session_id: data.cash_register_session_id,
@@ -112,6 +116,16 @@ export class InvoiceRepository implements IInvoiceRepository {
           customerName: data.customer_name ?? null,
           lines: movementLines,
         });
+      }
+
+      if (data.customerDocument) {
+        await customerDocumentRepository.create(
+          {
+            ...data.customerDocument,
+            relatedInvoiceId: invoiceId,
+          },
+          tx,
+        );
       }
 
       return { id: invoiceId, invoice_number: invoice.invoice_number } satisfies InvoiceInsertResult;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
+import { env } from "@/lib/env";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
 import { invoiceService } from "@/lib/services/InvoiceService";
 import { toCentralClosedDate } from "@/lib/utils/date";
@@ -32,6 +33,12 @@ const invoiceSchema = z.object({
   notes: z.string().trim().max(300).nullable().optional(),
   customer_name: z.string().trim().max(150).nullable().optional(),
   customer_tax_id: z.string().trim().max(40).nullable().optional(),
+  customer_id: z.number().int().positive().nullable().optional(),
+  customer_code: z.string().trim().max(40).nullable().optional(),
+  sale_type: z.enum(["CONTADO", "CREDITO"]).nullable().optional(),
+  payment_term_code: z.string().trim().max(32).nullable().optional(),
+  payment_term_days: z.number().int().min(0).nullable().optional(),
+  due_date: z.union([z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/), z.date(), z.literal(null)]).optional(),
   items: z.array(z.object({
     article_code: z.string().trim().min(1).max(40).nullable().optional(),
     description: z.string().trim().min(1).max(200),
@@ -52,6 +59,19 @@ function parseInvoiceDate(value: string): Date {
   } catch {
     throw new Error("Fecha inválida");
   }
+}
+
+function parseOptionalDueDate(value: string | Date | null | undefined): Date | null {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return toCentralClosedDate(value);
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    return parseInvoiceDate(value);
+  }
+  return null;
 }
 
 export async function POST(request: NextRequest) {
@@ -91,11 +111,26 @@ export async function POST(request: NextRequest) {
     const payload = parsed.data;
     const paymentsTotal = payload.payments.reduce((acc, payment) => acc + payment.amount, 0);
     const missingAmount = Math.max(Math.round((payload.total_amount - paymentsTotal) * 100) / 100, 0);
+    const retailMode = env.features.retailModeEnabled;
+    const saleType = payload.sale_type ?? null;
+
+    if (retailMode) {
+      if (!payload.customer_id || payload.customer_id <= 0) {
+        return NextResponse.json(
+          { success: false, message: "Debes seleccionar un cliente para facturar en modo retail" },
+          { status: 400 },
+        );
+      }
+    }
+
+    const allowPendingBalance = retailMode && saleType === "CREDITO";
     if (missingAmount > 0) {
-      return NextResponse.json(
-        { success: false, message: "No puedes guardar la factura con saldo pendiente. Registra el cobro completo antes de continuar." },
-        { status: 409 }
-      );
+      if (!allowPendingBalance) {
+        return NextResponse.json(
+          { success: false, message: "No puedes guardar la factura con saldo pendiente. Registra el cobro completo antes de continuar." },
+          { status: 409 }
+        );
+      }
     }
 
     let invoiceDate: Date;
@@ -119,6 +154,12 @@ export async function POST(request: NextRequest) {
       notes: payload.notes ?? null,
       customer_name: payload.customer_name ?? null,
       customer_tax_id: payload.customer_tax_id ?? null,
+      customer_id: payload.customer_id ?? null,
+      customer_code: payload.customer_code ?? null,
+      sale_type: saleType ?? null,
+      payment_term_code: payload.payment_term_code ?? null,
+      payment_term_days: payload.payment_term_days ?? null,
+      due_date: parseOptionalDueDate(payload.due_date),
       items: payload.items?.map((i) => ({
         article_code: i.article_code ? i.article_code.toUpperCase() : null,
         description: i.description,
