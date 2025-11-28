@@ -464,6 +464,8 @@ CREATE TABLE IF NOT EXISTS app.customers (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+-- Asegura la columna payment_term_id en instalaciones previas
+ALTER TABLE app.customers ADD COLUMN IF NOT EXISTS payment_term_id INTEGER REFERENCES app.payment_terms(id) ON DELETE SET NULL;
 
 DROP TRIGGER IF EXISTS trg_customers_touch_updated_at ON app.customers;
 CREATE TRIGGER trg_customers_touch_updated_at
@@ -476,8 +478,6 @@ CREATE INDEX IF NOT EXISTS ix_customers_active_status
 CREATE INDEX IF NOT EXISTS ix_customers_tax_id
   ON app.customers (tax_id);
 
--- ========================================================
--- Tabla: app.invoices (cabecera de facturas)
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.invoices (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -505,6 +505,11 @@ CREATE TABLE IF NOT EXISTS app.invoices (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (invoice_number)
 );
+-- Asegura la columna payment_term_id en instalaciones previas
+ALTER TABLE app.invoices ADD COLUMN IF NOT EXISTS payment_term_id INTEGER REFERENCES app.payment_terms(id) ON DELETE SET NULL;
+
+-- Asegura la columna customer_id en instalaciones previas
+ALTER TABLE app.invoices ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES app.customers(id) ON DELETE SET NULL;
 
 DROP TRIGGER IF EXISTS trg_invoices_touch_updated_at ON app.invoices;
 CREATE TRIGGER trg_invoices_touch_updated_at
@@ -575,8 +580,6 @@ CREATE INDEX IF NOT EXISTS ix_invoice_items_article
   WHERE article_code IS NOT NULL;
 
 -- ========================================================
--- Tabla: app.customer_documents (documentos CxC)
--- ========================================================
 CREATE TABLE IF NOT EXISTS app.customer_documents (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE,
@@ -597,6 +600,11 @@ CREATE TABLE IF NOT EXISTS app.customer_documents (
   updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (document_type, document_number)
 );
+-- Asegura la columna payment_term_id en instalaciones previas
+ALTER TABLE app.customer_documents ADD COLUMN IF NOT EXISTS payment_term_id INTEGER REFERENCES app.payment_terms(id) ON DELETE SET NULL;
+
+-- Asegura la columna customer_id en instalaciones previas
+ALTER TABLE app.customer_documents ADD COLUMN IF NOT EXISTS customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE;
 
 DROP TRIGGER IF EXISTS trg_customer_documents_touch_updated_at ON app.customer_documents;
 CREATE TRIGGER trg_customer_documents_touch_updated_at
@@ -630,8 +638,6 @@ CREATE INDEX IF NOT EXISTS ix_customer_document_applications_target
   ON app.customer_document_applications (target_document_id);
 
 -- ========================================================
--- Tabla: app.customer_credit_lines
--- ========================================================
 CREATE TABLE IF NOT EXISTS app.customer_credit_lines (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE,
@@ -647,6 +653,9 @@ CREATE TABLE IF NOT EXISTS app.customer_credit_lines (
   updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Asegura la columna customer_id en instalaciones previas
+ALTER TABLE app.customer_credit_lines ADD COLUMN IF NOT EXISTS customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE;
+
 DROP TRIGGER IF EXISTS trg_customer_credit_lines_touch_updated_at ON app.customer_credit_lines;
 CREATE TRIGGER trg_customer_credit_lines_touch_updated_at
 BEFORE UPDATE ON app.customer_credit_lines
@@ -655,8 +664,6 @@ FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE INDEX IF NOT EXISTS ix_customer_credit_lines_status
   ON app.customer_credit_lines (customer_id, status);
 
--- ========================================================
--- Tabla: app.collection_logs
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.collection_logs (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -671,11 +678,12 @@ CREATE TABLE IF NOT EXISTS app.collection_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Asegura la columna customer_id en instalaciones previas
+ALTER TABLE app.collection_logs ADD COLUMN IF NOT EXISTS customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS ix_collection_logs_follow_up
   ON app.collection_logs (customer_id, follow_up_at);
 
--- ========================================================
--- Tabla: app.customer_disputes
 -- ========================================================
 CREATE TABLE IF NOT EXISTS app.customer_disputes (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -690,6 +698,9 @@ CREATE TABLE IF NOT EXISTS app.customer_disputes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Asegura la columna customer_id en instalaciones previas
+ALTER TABLE app.customer_disputes ADD COLUMN IF NOT EXISTS customer_id BIGINT NOT NULL REFERENCES app.customers(id) ON DELETE CASCADE;
 
 DROP TRIGGER IF EXISTS trg_customer_disputes_touch_updated_at ON app.customer_disputes;
 CREATE TRIGGER trg_customer_disputes_touch_updated_at
