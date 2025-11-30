@@ -208,6 +208,8 @@ interface DraftInvoice {
 }
 
 function FacturacionHomeMenu({ allowPriceLists }: { allowPriceLists: boolean }) {
+
+  const isRetailMode = publicFeatures.retailModeEnabled;
   const cards: Array<{ key: FacturacionMode; title: string; description: string; icon: LucideIcon; highlight?: string }> = [
     {
       key: "sin-pedido",
@@ -216,13 +218,14 @@ function FacturacionHomeMenu({ allowPriceLists }: { allowPriceLists: boolean }) 
       icon: Receipt,
       highlight: "Manual",
     },
-    {
+    // Oculta 'con-pedido' si está en modo retail
+    ...(!isRetailMode ? [{
       key: "con-pedido",
       title: "Facturación con pedido",
       description: "Convierte órdenes de mesas ocupadas en facturas listas para cobro y cierre.",
       icon: UtensilsCrossed,
       highlight: "Pedidos",
-    },
+    }] : []),
     {
       key: "historial",
       title: "Historial de facturas",
@@ -1163,7 +1166,7 @@ function PriceListWorkspace({
             </div>
           </div>
 
-          <div className="rounded-2xl border border-muted bg-background/95">
+          <div className="rounded-2xl border border-muted bg-background/90">
             <div className="max-h-[420px] overflow-y-auto">
               <table className="min-w-full table-auto text-left text-sm text-foreground">
                 <thead className="border-b text-xs uppercase text-muted-foreground">
@@ -1596,12 +1599,12 @@ function InvoicesHistory() {
     invoice_date: string;
     table_code: string | null;
     waiter_code: string | null;
+    customer_name: string | null;
     subtotal: number;
     service_charge: number;
     vat_amount: number;
     total_amount: number;
     currency_code: string;
-    customer_name: string | null;
   }>>([]);
   const [total, setTotal] = useState(0);
   const [detail, setDetail] = useState<InvoiceDetail | null>(null);
@@ -1860,7 +1863,7 @@ function InvoicesHistory() {
           <p className="text-sm text-muted-foreground">
             Esta operación es irreversible a nivel de estado. La factura será marcada como <span className="font-semibold text-foreground">ANULADA</span> y se revertirán los movimientos de inventario asociados.
           </p>
-          <div className="flex items-center justify-end gap-2">
+          <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" className="rounded-xl" onClick={() => { setCancelOpen(false); setCancelTarget(null); }} disabled={!!mutatingId}>Cancelar</Button>
             <Button type="button" variant="destructive" className="rounded-xl" onClick={() => cancelTarget && doCancelInvoice(cancelTarget.id)} disabled={!cancelTarget || !!mutatingId}>
               {cancelTarget && mutatingId === cancelTarget.id ? "Anulando..." : "Anular ahora"}
@@ -1954,7 +1957,7 @@ function InvoicesHistory() {
                />
              ) : (
                <div className="hidden sm:block" aria-hidden="true" />
-             )}
+             }
             <div className="flex items-center justify-end gap-2">
               <Button
                 type="button"
@@ -2193,6 +2196,18 @@ function FacturacionWorkspace({
       setCustomerTaxId("");
     }
   }, [retailManualActive, selectedRetailCustomer, setCustomerTaxId]);
+
+  // Sincronizar campos cuando cambia el cliente seleccionado (por id)
+  useEffect(() => {
+    if (!selectedCustomerId) return;
+    const found = retailCustomers.find(c => c.id === selectedCustomerId);
+    if (found) {
+      setCustomerCodeInput(found.code);
+      setCustomerNameInput(found.name);
+      setCustomerTaxId(found.taxId || "");
+      setSelectedPaymentTermCode(found.paymentTermCode || defaultCashTermCode);
+    }
+  }, [selectedCustomerId, retailCustomers, defaultCashTermCode]);
 
   useEffect(() => {
     if (!retailManualActive) {
@@ -3202,7 +3217,7 @@ function FacturacionWorkspace({
       });
       return false;
     }
-  }, [mode, refreshOrders, selectedOrder, serviceRate, toast, vatRate]);
+  }, [mode, refreshOrders, selectedOrder, serviceRate, toast]);
 
    useEffect(() => {
      // sincroniza monto recibido con suma de pagos
@@ -3245,7 +3260,7 @@ function FacturacionWorkspace({
       setPaymentMode("CONTADO");
       setSelectedPaymentTermCode(defaultCashTermCode);
     }
-  }, [defaultCashTermCode, defaultPriceListCode, mode, priceLists, retailManualFlow, retailCustomers, serviceRate, vatRate]);
+  }, [defaultCashTermCode, draftInvoice.items, mode, priceLists, retailManualFlow, retailCustomers, serviceRate, vatRate]);
 
   type SaveInvoiceResult = { id: number | null; invoiceNumber: string | null };
 
@@ -3542,7 +3557,7 @@ function FacturacionWorkspace({
     <>
       <section className="space-y-8 pb-8">
         <header className="space-y-3">
-         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
            <div className="space-y-3">
              <Button
                type="button"
@@ -3578,20 +3593,63 @@ function FacturacionWorkspace({
             </div>
           ) : null}
 
+
           {retailManualActive ? (
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr),minmax(0,0.9fr)]">
               <div className="space-y-3 rounded-3xl border border-primary/30 bg-primary/5 p-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-end">
                   <div className="flex-1">
-                    <Combobox<number>
-                      value={selectedCustomerId}
-                      onChange={(value) => setSelectedCustomerId(value)}
-                      options={customerOptions}
-                      placeholder="Selecciona un cliente"
-                      label="Cliente"
-                      ariaLabel="Seleccionar cliente retail"
-                      className="w-full"
-                    />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <Label className="text-xs uppercase text-muted-foreground">Código cliente</Label>
+                        <Input
+                          value={customerCodeInput || ""}
+                          onChange={e => setCustomerCodeInput(e.target.value.toUpperCase())}
+                          onKeyDown={async (e) => {
+                            if (e.key === "Enter" && customerCodeInput.trim()) {
+                              const found = retailCustomers.find(c => c.code.toUpperCase() === customerCodeInput.trim().toUpperCase());
+                              if (found) {
+                                setSelectedCustomerId(found.id);
+                                setCustomerName(found.name);
+                                setCustomerTaxId(found.taxId || "");
+                                // Asignar condición de pago asociada
+                                if (found.paymentTermCode) setSelectedPaymentTermCode(found.paymentTermCode);
+                                else setSelectedPaymentTermCode(defaultCashTermCode);
+                              } else {
+                                setShowCustomerModal(true);
+                              }
+                            }
+                          }}
+                          onDoubleClick={() => setShowCustomerModal(true)}
+                          placeholder="Ej: CLI-001"
+                          className="rounded-2xl"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs uppercase text-muted-foreground">Nombre cliente</Label>
+                        <Input
+                          value={customerNameInput || ""}
+                          onChange={e => setCustomerNameInput(e.target.value)}
+                          onKeyDown={async (e) => {
+                            if (e.key === "Enter" && customerNameInput.trim()) {
+                              const found = retailCustomers.find(c => c.name.toLowerCase() === customerNameInput.trim().toLowerCase());
+                              if (found) {
+                                setSelectedCustomerId(found.id);
+                                setCustomerCodeInput(found.code);
+                                setCustomerTaxId(found.taxId || "");
+                                if (found.paymentTermCode) setSelectedPaymentTermCode(found.paymentTermCode);
+                                else setSelectedPaymentTermCode(defaultCashTermCode);
+                              } else {
+                                setShowCustomerModal(true);
+                              }
+                            }
+                          }}
+                          onDoubleClick={() => setShowCustomerModal(true)}
+                          placeholder="Nombre o razón social"
+                          className="rounded-2xl"
+                        />
+                      </div>
+                    </div>
                     {retailCustomersLoading ? (
                       <p className="mt-1 text-[11px] text-muted-foreground">Cargando clientes…</p>
                     ) : null}
@@ -3606,9 +3664,6 @@ function FacturacionWorkspace({
                           Reintentar
                         </button>
                       </div>
-                    ) : null}
-                    {!retailCustomersLoading && !retailCustomersError && retailCustomers.length === 0 ? (
-                      <p className="mt-1 text-[11px] text-muted-foreground">No hay clientes disponibles.</p>
                     ) : null}
                   </div>
                   <Button type="button" variant="outline" className="rounded-2xl md:w-fit" asChild>
@@ -3632,7 +3687,7 @@ function FacturacionWorkspace({
                       <span>Retenido: <strong>{formatCurrency(retailCreditHold, { currency: "local" })}</strong></span>
                       <span>
                         Disponible:
-                        <strong className={cn("ml-1", retailCreditAlert ? "text-amber-600" : "text-emerald-600")}>
+                        <strong className={cn("ml-1", retailCreditAlert ? "text-amber-600" : "text-emerald-600")}> 
                           {formatCurrency(retailCreditAvailable, { currency: "local" })}
                         </strong>
                       </span>
@@ -3644,6 +3699,93 @@ function FacturacionWorkspace({
                     Selecciona un cliente para continuar. Estos datos se sincronizarán con el módulo de Cuentas por Cobrar.
                   </div>
                 )}
+                <Modal
+                  open={showCustomerModal}
+                  onClose={() => setShowCustomerModal(false)}
+                  title="Buscar cliente"
+                  description="Busca y selecciona un cliente para la factura."
+                  contentClassName="max-w-4xl"
+                >
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                      <div className="flex-1 space-y-1">
+                        <Label htmlFor="customer-search" className="text-xs uppercase text-muted-foreground">Buscar cliente</Label>
+                        <Input
+                          id="customer-search"
+                          autoFocus
+                          placeholder="Filtrar por código, nombre o RUC/NIT"
+                          value={customerSearch}
+                          onChange={e => setCustomerSearch(e.target.value)}
+                          className="rounded-2xl"
+                        />
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-muted bg-background/90">
+                      <div className="max-h-72 overflow-y-auto">
+                        <table className="min-w-full table-auto text-left text-sm text-foreground">
+                          <thead className="border-b text-xs uppercase text-muted-foreground">
+                            <tr>
+                              <th className="px-4 py-2 font-medium">Código</th>
+                              <th className="px-4 py-2 font-medium">Nombre</th>
+                              <th className="px-4 py-2 font-medium">RUC/NIT</th>
+                              <th className="px-4 py-2 font-medium">Cond. pago</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {filteredCustomers.length > 0 ? (
+                              filteredCustomers.map((c) => (
+                                <tr
+                                  key={c.id}
+                                  tabIndex={0}
+                                  role="button"
+                                  aria-pressed={selectedCustomerId === c.id}
+                                  className={cn(
+                                    "cursor-pointer align-top border-l-2 border-transparent transition hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+                                    selectedCustomerId === c.id ? "border-primary bg-primary/10" : ""
+                                  )}
+                                  onClick={() => handleSelectCustomerModal(c)}
+                                  onFocus={() => handleSelectCustomerModal(c)}
+                                  onDoubleClick={() => handleSelectCustomerModal(c, true)}
+                                  onKeyDown={event => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                      event.preventDefault();
+                                      handleSelectCustomerModal(c, true);
+                                    }
+                                  }}
+                                >
+                                  <td className="px-4 py-2 font-mono text-xs text-muted-foreground">{c.code}</td>
+                                  <td className="px-4 py-2">{c.name}</td>
+                                  <td className="px-4 py-2">{c.taxId ?? "—"}</td>
+                                  <td className="px-4 py-2">{c.paymentTermCode ?? "CONTADO"}</td>
+                                </tr>
+                              ))
+                            ) : (
+                              <tr>
+                                <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                                  No se encontraron clientes con los filtros aplicados.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-3 border-t border-muted pt-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-xs text-muted-foreground">
+                        {selectedCustomerId ? (
+                          <span>
+                            Seleccionado: <strong>{customerCodeInput}</strong> • {customerNameInput}. Doble clic o Enter para confirmar.
+                          </span>
+                        ) : (
+                          <span>Selecciona un cliente de la tabla y presiona Enter o doble clic para agregarlo.</span>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setShowCustomerModal(false)}>Cancelar</Button>
+                      </div>
+                    </div>
+                  </div>
+                </Modal>
               </div>
 
               <div className="space-y-3 rounded-3xl border border-muted bg-background/90 p-4">

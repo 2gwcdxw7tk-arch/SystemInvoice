@@ -111,7 +111,7 @@ export async function getDashboardSnapshot(forDate: string): Promise<DashboardSn
     getTopItemsReport({ from: forDate, to: forDate, limit: 10 }),
     getWaiterPerformanceReport({ from: forDate, to: forDate }),
     inventoryService.getStockSummary(),
-    listTableAdminSnapshots(),
+      env.features.isRestaurant ? listTableAdminSnapshots() : Promise.resolve([]),
   ]);
 
   const firstSession = sessionRows[0] ?? null;
@@ -129,21 +129,24 @@ export async function getDashboardSnapshot(forDate: string): Promise<DashboardSn
     cashOnHand: lastSessionWithClosure?.closing_amount != null ? Number(lastSessionWithClosure.closing_amount) : null,
   };
 
-  const tableStatus = tables.reduce<DashboardTableStatus>(
-    (acc, table) => {
-      if (!table.is_active) return acc;
-      acc.total += 1;
-      if (table.reservation) {
-        acc.reserved += 1;
-      } else if (table.order_status === "libre") {
-        acc.available += 1;
-      } else {
-        acc.occupied += 1;
-      }
-      return acc;
-    },
-    { occupied: 0, available: 0, reserved: 0, total: 0 }
-  );
+    let tableStatus: DashboardTableStatus = { occupied: 0, available: 0, reserved: 0, total: 0 };
+    if (env.features.isRestaurant && tables) {
+      tableStatus = tables.reduce<DashboardTableStatus>(
+        (acc, table) => {
+          if (!table.is_active) return acc;
+          acc.total += 1;
+          if (table.reservation) {
+            acc.reserved += 1;
+          } else if (table.order_status === "libre") {
+            acc.available += 1;
+          } else {
+            acc.occupied += 1;
+          }
+          return acc;
+        },
+        { occupied: 0, available: 0, reserved: 0, total: 0 }
+      );
+    }
 
   const topProducts: DashboardProductRow[] = topItems.map((item) => ({
     name: item.description,
