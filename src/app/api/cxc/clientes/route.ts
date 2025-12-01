@@ -146,7 +146,13 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("POST /api/cxc/clientes", error);
     const message = error instanceof Error ? error.message : "No se pudo crear el cliente";
-    const status = /existe/i.test(message) ? 409 : 500;
+    const normalized = message.toLowerCase();
+    let status = 500;
+    if (normalized.includes("condición de pago")) {
+      status = 400;
+    } else if (normalized.includes("ya existe") && normalized.includes("cliente")) {
+      status = 409;
+    }
     return NextResponse.json({ success: false, message }, { status });
   }
 }

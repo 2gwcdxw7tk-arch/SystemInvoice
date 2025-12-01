@@ -18,6 +18,7 @@ import { buildClosureSummary } from "@/lib/services/cash-registers/summary";
 import type { ICashRegisterRepository } from "@/lib/repositories/cash-registers/ICashRegisterRepository";
 import { CashRegisterRepository } from "@/lib/repositories/cash-registers/CashRegisterRepository";
 import { warehouseService } from "@/lib/services/WarehouseService";
+import { customerService } from "@/lib/services/cxc/CustomerService";
 
 const normalizeCode = (value: string) => value.trim().toUpperCase();
 
@@ -48,6 +49,10 @@ type MockCashRegister = {
   invoiceSequenceDefinitionId: number | null;
   invoiceSequenceCode: string | null;
   invoiceSequenceName: string | null;
+  defaultCustomerId: number | null;
+  defaultCustomerCode: string | null;
+  defaultCustomerName: string | null;
+  defaultCustomerPaymentTermCode: string | null;
 };
 
 function cloneRegister(register: MockCashRegister): MockCashRegister {
@@ -59,6 +64,10 @@ function cloneRegister(register: MockCashRegister): MockCashRegister {
     invoiceSequenceDefinitionId: register.invoiceSequenceDefinitionId,
     invoiceSequenceCode: register.invoiceSequenceCode,
     invoiceSequenceName: register.invoiceSequenceName,
+    defaultCustomerId: register.defaultCustomerId,
+    defaultCustomerCode: register.defaultCustomerCode,
+    defaultCustomerName: register.defaultCustomerName,
+    defaultCustomerPaymentTermCode: register.defaultCustomerPaymentTermCode,
   };
 }
 
@@ -78,6 +87,15 @@ function mapRegisterToRecord(register: MockCashRegister): CashRegisterRecord {
     invoiceSequenceDefinitionId: register.invoiceSequenceDefinitionId,
     invoiceSequenceCode: register.invoiceSequenceCode,
     invoiceSequenceName: register.invoiceSequenceName,
+    defaultCustomer:
+      register.defaultCustomerId != null
+        ? {
+            id: register.defaultCustomerId,
+            code: register.defaultCustomerCode ?? "",
+            name: register.defaultCustomerName ?? "",
+            paymentTermCode: register.defaultCustomerPaymentTermCode,
+          }
+        : null,
   } satisfies CashRegisterRecord;
 }
 
@@ -117,6 +135,10 @@ export class CashRegisterService {
           invoiceSequenceDefinitionId: null,
           invoiceSequenceCode: null,
           invoiceSequenceName: null,
+          defaultCustomerId: null,
+          defaultCustomerCode: null,
+          defaultCustomerName: null,
+          defaultCustomerPaymentTermCode: null,
         },
       ];
       this.mockAssignments = new Map();
@@ -209,6 +231,15 @@ export class CashRegisterService {
       warehouseCode: register.warehouseCode,
       warehouseName: register.warehouseName,
       isDefault: index === 0,
+      defaultCustomer:
+        register.defaultCustomerId != null
+          ? {
+              id: register.defaultCustomerId,
+              code: register.defaultCustomerCode ?? "",
+              name: register.defaultCustomerName ?? "",
+              paymentTermCode: register.defaultCustomerPaymentTermCode,
+            }
+          : null,
     } satisfies CashRegisterAssignment));
     this.mockAssignments.set(adminUserId, assignments);
     return assignments.map(cloneAssignment);
@@ -256,6 +287,22 @@ export class CashRegisterService {
       throw new Error(`El almacén ${normalizedWarehouseCode} no existe o está inactivo (mock)`);
     }
 
+    let defaultCustomerId: number | null = null;
+    let defaultCustomerCode: string | null = null;
+    let defaultCustomerName: string | null = null;
+    let defaultCustomerPaymentTermCode: string | null = null;
+
+    if (typeof input.defaultCustomerCode === "string" && input.defaultCustomerCode.trim().length > 0) {
+      const customer = await customerService.getByCode(input.defaultCustomerCode.trim());
+      if (!customer) {
+        throw new Error(`El cliente ${input.defaultCustomerCode.trim().toUpperCase()} no existe (mock)`);
+      }
+      defaultCustomerId = Number(customer.id);
+      defaultCustomerCode = customer.code;
+      defaultCustomerName = customer.name;
+      defaultCustomerPaymentTermCode = customer.paymentTermCode ?? null;
+    }
+
     const nowIso = new Date().toISOString();
     const newRegister: MockCashRegister = {
       id: this.mockRegisterSeq++,
@@ -272,6 +319,10 @@ export class CashRegisterService {
       invoiceSequenceDefinitionId: null,
       invoiceSequenceCode: null,
       invoiceSequenceName: null,
+      defaultCustomerId,
+      defaultCustomerCode,
+      defaultCustomerName,
+      defaultCustomerPaymentTermCode,
     };
     this.mockCashRegisters.push(newRegister);
     return mapRegisterToRecord(cloneRegister(newRegister));
@@ -332,6 +383,32 @@ export class CashRegisterService {
       target.warehouseId = warehouse.id;
       target.warehouseCode = warehouse.code;
       target.warehouseName = warehouse.name;
+    }
+
+    if (typeof input.defaultCustomerCode !== "undefined") {
+      if (input.defaultCustomerCode === null) {
+        target.defaultCustomerId = null;
+        target.defaultCustomerCode = null;
+        target.defaultCustomerName = null;
+        target.defaultCustomerPaymentTermCode = null;
+      } else {
+        const trimmed = input.defaultCustomerCode.trim();
+        if (trimmed.length === 0) {
+          target.defaultCustomerId = null;
+          target.defaultCustomerCode = null;
+          target.defaultCustomerName = null;
+          target.defaultCustomerPaymentTermCode = null;
+        } else {
+          const customer = await customerService.getByCode(trimmed);
+          if (!customer) {
+            throw new Error(`El cliente ${trimmed.toUpperCase()} no existe (mock)`);
+          }
+          target.defaultCustomerId = Number(customer.id);
+          target.defaultCustomerCode = customer.code;
+          target.defaultCustomerName = customer.name;
+          target.defaultCustomerPaymentTermCode = customer.paymentTermCode ?? null;
+        }
+      }
     }
 
     target.updatedAt = new Date().toISOString();
@@ -424,6 +501,15 @@ export class CashRegisterService {
         warehouseCode: register.warehouseCode,
         warehouseName: register.warehouseName,
         isDefault: Boolean(params.makeDefault),
+        defaultCustomer:
+          register.defaultCustomerId != null
+            ? {
+                id: register.defaultCustomerId,
+                code: register.defaultCustomerCode ?? "",
+                name: register.defaultCustomerName ?? "",
+                paymentTermCode: register.defaultCustomerPaymentTermCode,
+              }
+            : null,
       });
     }
 
@@ -589,6 +675,15 @@ export class CashRegisterService {
           warehouseCode: register.warehouseCode,
           warehouseName: register.warehouseName,
           isDefault: false,
+          defaultCustomer:
+            register.defaultCustomerId != null
+              ? {
+                  id: register.defaultCustomerId,
+                  code: register.defaultCustomerCode ?? "",
+                  name: register.defaultCustomerName ?? "",
+                  paymentTermCode: register.defaultCustomerPaymentTermCode,
+                }
+              : null,
         } satisfies CashRegisterAssignment;
       }
       if (!target) {

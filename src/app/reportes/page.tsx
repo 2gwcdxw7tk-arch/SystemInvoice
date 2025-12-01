@@ -14,6 +14,7 @@ import {
   Table2,
   TrendingUp,
   Users,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -70,6 +71,111 @@ type WarehouseOption = {
   code: string;
   name: string;
 };
+
+type CustomerMultiPickerProps = {
+  label: string;
+  selectedCodes: string[];
+  onChange: (codes: string[]) => void;
+  options: Array<ComboboxOption<string>>;
+  loading: boolean;
+  className?: string;
+};
+
+function CustomerMultiPicker({ label, selectedCodes, onChange, options, loading, className }: CustomerMultiPickerProps) {
+  const optionMap = useMemo(() => {
+    const map = new Map<string, ComboboxOption<string>>();
+    options.forEach((option) => {
+      map.set(option.value, option);
+    });
+    return map;
+  }, [options]);
+
+  const availableOptions = useMemo(
+    () => options.filter((option) => !selectedCodes.includes(option.value)),
+    [options, selectedCodes]
+  );
+
+  const handleAdd = useCallback(
+    (code: string) => {
+      if (!code || selectedCodes.includes(code)) return;
+      onChange([...selectedCodes, code]);
+    },
+    [onChange, selectedCodes]
+  );
+
+  const handleRemove = useCallback(
+    (code: string) => {
+      onChange(selectedCodes.filter((item) => item !== code));
+    },
+    [onChange, selectedCodes]
+  );
+
+  const handleClear = useCallback(() => {
+    onChange([]);
+  }, [onChange]);
+
+  const placeholder = useMemo(() => {
+    if (loading) return "Cargando clientes...";
+    if (availableOptions.length === 0) {
+      return selectedCodes.length > 0 ? "Sin clientes disponibles" : "No hay clientes registrados";
+    }
+    return "Agregar cliente";
+  }, [availableOptions.length, loading, selectedCodes.length]);
+
+  return (
+    <div className={cn("space-y-2", className)}>
+      <Label className="text-xs uppercase text-muted-foreground">{label}</Label>
+      <Combobox
+        value={null}
+        onChange={handleAdd}
+        options={availableOptions}
+        placeholder={placeholder}
+        emptyText={loading ? "Cargando clientes..." : "Sin coincidencias"}
+        disabled={loading || availableOptions.length === 0}
+        className="rounded-2xl"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        {selectedCodes.length === 0 ? (
+          <span className="text-xs text-muted-foreground">Sin clientes seleccionados (se incluyen todos).</span>
+        ) : (
+          <>
+            {selectedCodes.map((code) => {
+              const option = optionMap.get(code);
+              const labelText = option?.label ?? code;
+              const description = option?.description;
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  onClick={() => handleRemove(code)}
+                  className="group flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-foreground shadow-sm transition hover:bg-muted/80"
+                >
+                  <div className="flex flex-col items-start">
+                    <span className="font-medium leading-none">{labelText}</span>
+                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground group-hover:text-muted-foreground/80">
+                      {description ?? code}
+                    </span>
+                  </div>
+                  <X className="h-3 w-3 text-muted-foreground transition group-hover:text-foreground" aria-hidden="true" />
+                  <span className="sr-only">Remover {labelText}</span>
+                </button>
+              );
+            })}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 rounded-full px-3 text-xs"
+              onClick={handleClear}
+            >
+              Limpiar
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const reportOptions: Array<{ id: ReportId; label: string; description: string }> = [
   {
@@ -404,7 +510,7 @@ export default function ReportesPage() {
   const [cxcSummaryFilters, setCxcSummaryFilters] = useState({
     from: defaultFrom,
     to: defaultTo,
-    customer: "",
+    customerCodes: [] as string[],
     status: "",
     documentTypes: "",
   });
@@ -413,7 +519,7 @@ export default function ReportesPage() {
   const [cxcDueFilters, setCxcDueFilters] = useState({
     from: defaultFrom,
     to: defaultTo,
-    customer: "",
+    customerCodes: [] as string[],
     includeFuture: true,
   });
   const [cxcDueState, setCxcDueState] = useState<FetchState<CxcDueAnalysisResult>>({ loading: false, data: null });
@@ -421,7 +527,7 @@ export default function ReportesPage() {
   const [cxcAgingFilters, setCxcAgingFilters] = useState({
     from: defaultFrom,
     to: defaultTo,
-    customer: "",
+    customerCodes: [] as string[],
     limit: "50",
   });
   const [cxcAgingState, setCxcAgingState] = useState<FetchState<CxcAgingResult>>({ loading: false, data: null });
@@ -437,6 +543,9 @@ export default function ReportesPage() {
 
   const [warehouseOptions, setWarehouseOptions] = useState<WarehouseOption[]>([]);
   const [warehousesLoading, setWarehousesLoading] = useState(false);
+
+  const [customerOptions, setCustomerOptions] = useState<ComboboxOption<string>[]>([]);
+  const [customerOptionsLoading, setCustomerOptionsLoading] = useState(false);
 
   const [topItemsSelectedArticle, setTopItemsSelectedArticle] = useState<ArticlePickerOption | null>(null);
   const [inventorySelectedArticle, setInventorySelectedArticle] = useState<ArticlePickerOption | null>(null);
@@ -606,7 +715,10 @@ export default function ReportesPage() {
       const query = buildQuery({
         from: cxcSummaryFilters.from,
         to: cxcSummaryFilters.to,
-        customer: cxcSummaryFilters.customer || undefined,
+        customer_codes:
+          cxcSummaryFilters.customerCodes.length > 0
+            ? cxcSummaryFilters.customerCodes.join(",")
+            : undefined,
         status: statusParam || undefined,
         document_types: documentTypesParam || undefined,
       });
@@ -631,7 +743,8 @@ export default function ReportesPage() {
       const query = buildQuery({
         from: cxcDueFilters.from,
         to: cxcDueFilters.to,
-        customer: cxcDueFilters.customer || undefined,
+        customer_codes:
+          cxcDueFilters.customerCodes.length > 0 ? cxcDueFilters.customerCodes.join(",") : undefined,
         include_future: cxcDueFilters.includeFuture ? "1" : "0",
       });
       const response = await fetch(`/api/reportes/cxc/vencimientos?${query}`, { cache: "no-store" });
@@ -655,7 +768,8 @@ export default function ReportesPage() {
       const query = buildQuery({
         from: cxcAgingFilters.from,
         to: cxcAgingFilters.to,
-        customer: cxcAgingFilters.customer || undefined,
+        customer_codes:
+          cxcAgingFilters.customerCodes.length > 0 ? cxcAgingFilters.customerCodes.join(",") : undefined,
         limit: cxcAgingFilters.limit || undefined,
       });
       const response = await fetch(`/api/reportes/cxc/antiguedad?${query}`, { cache: "no-store" });
@@ -697,6 +811,30 @@ export default function ReportesPage() {
       setCxcStatementState({ loading: false, data: null });
     }
   }, [cxcStatementFilters, toast]);
+
+  const loadCustomerOptions = useCallback(async () => {
+    setCustomerOptionsLoading(true);
+    try {
+      const response = await fetch("/api/cxc/clientes?summary=1&limit=250", { cache: "no-store", credentials: "include" });
+      if (!response.ok) throw new Error("No se pudieron obtener los clientes");
+      const payload = (await response.json()) as { items?: Array<{ code: string; name: string; taxId?: string | null }> };
+      const mapped: ComboboxOption<string>[] = Array.isArray(payload.items)
+        ? payload.items
+            .map((item) => ({
+              value: item.code,
+              label: item.name,
+              description: item.taxId ? `${item.code} · ${item.taxId}` : item.code,
+            }))
+            .sort((a, b) => a.label.localeCompare(b.label))
+        : [];
+      setCustomerOptions(mapped);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "No se pudieron obtener los clientes";
+      toast({ variant: "warning", title: "Clientes", description: message });
+    } finally {
+      setCustomerOptionsLoading(false);
+    }
+  }, [toast]);
 
   const loadWarehouses = useCallback(async () => {
     setWarehousesLoading(true);
@@ -877,7 +1015,10 @@ export default function ReportesPage() {
           query = buildQuery({
             from: cxcSummaryFilters.from,
             to: cxcSummaryFilters.to,
-            customer: cxcSummaryFilters.customer || undefined,
+            customer_codes:
+              cxcSummaryFilters.customerCodes.length > 0
+                ? cxcSummaryFilters.customerCodes.join(",")
+                : undefined,
             status: statusCsv || undefined,
             document_types: documentTypesCsv || undefined,
             format: "html",
@@ -889,7 +1030,8 @@ export default function ReportesPage() {
           query = buildQuery({
             from: cxcDueFilters.from,
             to: cxcDueFilters.to,
-            customer: cxcDueFilters.customer || undefined,
+            customer_codes:
+              cxcDueFilters.customerCodes.length > 0 ? cxcDueFilters.customerCodes.join(",") : undefined,
             include_future: cxcDueFilters.includeFuture ? "1" : "0",
             format: "html",
           });
@@ -900,7 +1042,8 @@ export default function ReportesPage() {
           query = buildQuery({
             from: cxcAgingFilters.from,
             to: cxcAgingFilters.to,
-            customer: cxcAgingFilters.customer || undefined,
+            customer_codes:
+              cxcAgingFilters.customerCodes.length > 0 ? cxcAgingFilters.customerCodes.join(",") : undefined,
             limit: cxcAgingFilters.limit || undefined,
             format: "html",
           });
@@ -961,6 +1104,12 @@ export default function ReportesPage() {
   useEffect(() => {
     void loadWarehouses();
   }, [loadWarehouses]);
+
+  useEffect(() => {
+    if (customerOptions.length === 0 && !customerOptionsLoading) {
+      void loadCustomerOptions();
+    }
+  }, [customerOptions.length, customerOptionsLoading, loadCustomerOptions]);
 
   const openArticleModal = useCallback(
     (target: "inventory" | "topItems") => {
@@ -1927,15 +2076,13 @@ export default function ReportesPage() {
                 <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
                 <DatePicker value={cxcSummaryFilters.to} onChange={(value) => setCxcSummaryFilters((prev) => ({ ...prev, to: value }))} />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
-                <Input
-                  value={cxcSummaryFilters.customer}
-                  onChange={(event) => setCxcSummaryFilters((prev) => ({ ...prev, customer: event.target.value }))}
-                  placeholder="Nombre, código o RFC"
-                  className="rounded-2xl"
-                />
-              </div>
+              <CustomerMultiPicker
+                label="Clientes"
+                selectedCodes={cxcSummaryFilters.customerCodes}
+                onChange={(codes) => setCxcSummaryFilters((prev) => ({ ...prev, customerCodes: codes }))}
+                options={customerOptions}
+                loading={customerOptionsLoading}
+              />
               <div className="space-y-1">
                 <Label className="text-xs uppercase text-muted-foreground">Estatus (CSV)</Label>
                 <Input
@@ -2091,15 +2238,13 @@ export default function ReportesPage() {
                 <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
                 <DatePicker value={cxcDueFilters.to} onChange={(value) => setCxcDueFilters((prev) => ({ ...prev, to: value }))} />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
-                <Input
-                  value={cxcDueFilters.customer}
-                  onChange={(event) => setCxcDueFilters((prev) => ({ ...prev, customer: event.target.value }))}
-                  placeholder="Nombre, código o RFC"
-                  className="rounded-2xl"
-                />
-              </div>
+              <CustomerMultiPicker
+                label="Clientes"
+                selectedCodes={cxcDueFilters.customerCodes}
+                onChange={(codes) => setCxcDueFilters((prev) => ({ ...prev, customerCodes: codes }))}
+                options={customerOptions}
+                loading={customerOptionsLoading}
+              />
               <div className="space-y-1">
                 <Label className="text-xs uppercase text-muted-foreground">Incluir vencimientos futuros</Label>
                 <Combobox
@@ -2245,15 +2390,13 @@ export default function ReportesPage() {
                 <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
                 <DatePicker value={cxcAgingFilters.to} onChange={(value) => setCxcAgingFilters((prev) => ({ ...prev, to: value }))} />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
-                <Input
-                  value={cxcAgingFilters.customer}
-                  onChange={(event) => setCxcAgingFilters((prev) => ({ ...prev, customer: event.target.value }))}
-                  placeholder="Nombre, código o RFC"
-                  className="rounded-2xl"
-                />
-              </div>
+              <CustomerMultiPicker
+                label="Clientes"
+                selectedCodes={cxcAgingFilters.customerCodes}
+                onChange={(codes) => setCxcAgingFilters((prev) => ({ ...prev, customerCodes: codes }))}
+                options={customerOptions}
+                loading={customerOptionsLoading}
+              />
               <div className="space-y-1">
                 <Label className="text-xs uppercase text-muted-foreground">Límite de filas</Label>
                 <Input

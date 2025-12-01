@@ -147,4 +147,39 @@ describe('Invoices API – retail CxC integration (mock mode)', () => {
       .reduce((acc, doc) => acc + doc.balanceAmount, 0);
     expect(updatedCustomer?.creditUsed).toBeCloseTo(outstandingTotal, 5);
   });
+
+  it('rechaza la emisión sin seleccionar cliente en modo retail', async () => {
+    const payload = {
+      invoice_number: 'RET-INV-2',
+      invoice_date: new Date().toISOString().slice(0, 10),
+      table_code: null,
+      waiter_code: null,
+      origin_order_id: null,
+      subtotal: 50,
+      service_charge: 0,
+      vat_amount: 7.5,
+      vat_rate: 0.15,
+      total_amount: 57.5,
+      currency_code: 'NIO',
+      items: [
+        { article_code: 'A-RET-1', description: 'Producto retail', quantity: 1, unit_price: 50, unit: 'RETAIL' },
+      ],
+      payments: [],
+      customer_id: null,
+      customer_code: null,
+      sale_type: 'CREDITO' as const,
+      payment_term_code: 'NETO15',
+    };
+
+    const request = buildNextRequest('http://localhost/api/invoices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const response = await InvoicesPOST(request);
+    expect(response.status).toBe(400);
+    const body: any = await response.json();
+    expect(body.message).toMatch(/Debes seleccionar un cliente/i);
+  });
 });

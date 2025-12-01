@@ -27,6 +27,7 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
 - Consecutivos: `SequenceService` con repositorio Prisma, UI en `/preferencias` (tab **Consecutivos**), endpoints `/api/preferencias/consecutivos`, `/api/preferencias/consecutivos/cajas` e `/api/preferencias/consecutivos/inventario`, y pruebas en `tests/api/preferencias.consecutivos.test.ts`.
 - Fundamentos CxC: migración `20251128101500_cxc_core_tables` agrega tablas `payment_terms`, `customers`, `customer_documents`, `customer_document_applications`, `customer_credit_lines`, `collection_logs`, `customer_disputes` y enlaza `invoices` con `customer_id/payment_term_id/due_date`.
 - API CxC inicial: `/api/preferencias/terminos-pago`, `/api/cxc/clientes`, `/api/cxc/documentos` y `/api/cxc/documentos/aplicaciones` reutilizan `PaymentTermService`, `CustomerService`, `CustomerDocumentService` y `CustomerDocumentApplicationService`, más `requireCxCPermissions` para permisos; soportan `MOCK_DATA`.
+- UI CxC Documentos: modal controlado para altas manuales (facturas, recibos, notas) en `/cuentas-por-cobrar` que carga catálogos bajo demanda, calcula vencimiento con la condición de pago y sincroniza saldo ↔ monto original.
 - Documentación actualizada (`README.md`, `.github/copilot-instructions.md`, `docs/propuesta-arquitectura-mejoras.md`).
 - Los nuevos handlers CxC deben importar `requireCxCPermissions` y sólo invocar métodos de servicio (nunca repositorios) para mantener paridad entre DB y modo mock.
 

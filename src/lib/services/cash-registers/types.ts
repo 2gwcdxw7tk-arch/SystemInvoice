@@ -7,6 +7,14 @@ export type CashRegisterAssignment = {
   warehouseCode: string;
   warehouseName: string;
   isDefault: boolean;
+  defaultCustomer: CashRegisterDefaultCustomer | null;
+};
+
+export type CashRegisterDefaultCustomer = {
+  id: number;
+  code: string;
+  name: string;
+  paymentTermCode: string | null;
 };
 
 export type CashRegisterRecord = {
@@ -24,6 +32,7 @@ export type CashRegisterRecord = {
   invoiceSequenceDefinitionId: number | null;
   invoiceSequenceCode: string | null;
   invoiceSequenceName: string | null;
+  defaultCustomer: CashRegisterDefaultCustomer | null;
 };
 
 export type CashRegisterSessionRecord = {
@@ -91,6 +100,7 @@ export interface CreateCashRegisterInput {
   warehouseCode: string;
   allowManualWarehouseOverride?: boolean;
   notes?: string | null;
+  defaultCustomerCode?: string | null;
 }
 
 export interface UpdateCashRegisterInput {
@@ -100,6 +110,7 @@ export interface UpdateCashRegisterInput {
   isActive?: boolean;
   notes?: string | null;
   invoiceSequenceDefinitionId?: number | null;
+  defaultCustomerCode?: string | null;
 }
 
 export interface AssignInvoiceSequenceInput {

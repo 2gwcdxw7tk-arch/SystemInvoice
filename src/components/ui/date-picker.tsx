@@ -11,6 +11,7 @@ interface DatePickerProps {
   max?: string;
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
 }
 
 function parseISODate(value?: string | null) {
@@ -45,7 +46,7 @@ function buildCalendarGrid(viewDate: Date) {
   });
 }
 
-export function DatePicker({ value, onChange, min, max, placeholder = "Selecciona fecha", className }: DatePickerProps) {
+export function DatePicker({ value, onChange, min, max, placeholder = "Selecciona fecha", className, disabled = false }: DatePickerProps) {
   const selectedDate = useMemo(() => parseISODate(value), [value]);
   const [open, setOpen] = useState(false);
   const [viewDate, setViewDate] = useState<Date>(() => selectedDate || new Date());
@@ -83,6 +84,12 @@ export function DatePicker({ value, onChange, min, max, placeholder = "Seleccion
     }
   }, [selectedDate]);
 
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
+
   const isWithinBounds = (date: Date) => {
     const iso = formatISODate(date);
     if (min && iso < min) return false;
@@ -94,19 +101,24 @@ export function DatePicker({ value, onChange, min, max, placeholder = "Seleccion
     <div ref={containerRef} className={cn("relative inline-block w-full", className)}>
       <button
         type="button"
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => {
+          if (disabled) return;
+          setOpen((prev) => !prev);
+        }}
         className={cn(
           "flex h-10 w-full items-center justify-between gap-3 rounded-2xl border border-muted bg-background px-3 text-left text-sm font-medium text-foreground shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60",
-          open ? "ring-2 ring-primary/60" : ""
+          open ? "ring-2 ring-primary/60" : "",
+          disabled && "cursor-not-allowed bg-muted/40 text-muted-foreground"
         )}
         aria-haspopup="dialog"
         aria-expanded={open}
+        disabled={disabled}
       >
         <span className={cn("flex-1 whitespace-nowrap", !selectedDate && "text-muted-foreground")}>{localizedLabel}</span>
         <Calendar className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
       </button>
 
-      {open && (
+      {open && !disabled && (
         <div className="absolute right-0 z-50 mt-3 w-[296px] rounded-3xl border border-muted bg-background p-4 shadow-2xl">
           <div className="flex items-center justify-between text-sm font-medium text-foreground">
             <button

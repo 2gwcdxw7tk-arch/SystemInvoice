@@ -11,6 +11,7 @@ const querySchema = z.object({
   to: DATE_SCHEMA,
   customer: z.string().trim().optional(),
   limit: z.string().trim().optional(),
+  customer_codes: z.string().trim().optional(),
 });
 
 const viewPermissions = [
@@ -25,6 +26,16 @@ const parseLimit = (value: string | undefined): number | undefined => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return undefined;
   return numeric > 0 ? numeric : undefined;
+};
+
+const parseCustomerCodes = (value: string | undefined): string[] | undefined => {
+  if (!value) return undefined;
+  const tokens = value
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter((item) => item.length > 0);
+  if (tokens.length === 0) return undefined;
+  return Array.from(new Set(tokens));
 };
 
 export async function GET(request: NextRequest) {
@@ -43,14 +54,15 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { from, to, customer, limit } = parsed.data;
+  const { from, to, customer, limit, customer_codes } = parsed.data;
   const url = new URL(request.url);
   const format = (url.searchParams.get("format") || "json").toLowerCase();
+  const customerCodes = parseCustomerCodes(customer_codes);
 
   try {
-    const report = await reportService.getCxcAging({ from, to, customer, limit: parseLimit(limit) });
+    const report = await reportService.getCxcAging({ from, to, customer, customerCodes, limit: parseLimit(limit) });
     if (format === "html") {
-      const html = reportService.renderCxcAgingHtml({ from, to, customer, limit: parseLimit(limit) }, report);
+      const html = reportService.renderCxcAgingHtml({ from, to, customer, customerCodes, limit: parseLimit(limit) }, report);
       return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
     return NextResponse.json({ success: true, report });

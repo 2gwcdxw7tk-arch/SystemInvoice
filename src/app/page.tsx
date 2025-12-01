@@ -118,6 +118,14 @@ export default function Home() {
                 name: data.user.defaultCashRegister.cashRegisterName,
                 warehouseCode: data.user.defaultCashRegister.warehouseCode,
                 warehouseName: data.user.defaultCashRegister.warehouseName,
+                defaultCustomer: data.user.defaultCashRegister.defaultCustomer
+                  ? {
+                      id: data.user.defaultCashRegister.defaultCustomer.id,
+                      code: data.user.defaultCashRegister.defaultCustomer.code,
+                      name: data.user.defaultCashRegister.defaultCustomer.name,
+                      paymentTermCode: data.user.defaultCashRegister.defaultCustomer.paymentTermCode,
+                    }
+                  : null,
               }
             : null;
 

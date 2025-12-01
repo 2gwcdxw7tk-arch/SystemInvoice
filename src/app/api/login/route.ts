@@ -38,6 +38,17 @@ function extractIp(request: NextRequest): string | null {
   return null;
 }
 
+function shouldUseSecureCookies(request: NextRequest): boolean {
+  if (!env.isProduction) {
+    return false;
+  }
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  if (forwardedProto) {
+    return forwardedProto === "https";
+  }
+  return request.nextUrl.protocol === "https:";
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
 
@@ -69,6 +80,14 @@ export async function POST(request: NextRequest) {
           name: defaultCashRegisterAssignment.cashRegisterName,
           warehouseCode: defaultCashRegisterAssignment.warehouseCode,
           warehouseName: defaultCashRegisterAssignment.warehouseName,
+          defaultCustomer: defaultCashRegisterAssignment.defaultCustomer
+            ? {
+                id: defaultCashRegisterAssignment.defaultCustomer.id,
+                code: defaultCashRegisterAssignment.defaultCustomer.code,
+                name: defaultCashRegisterAssignment.defaultCustomer.name,
+                paymentTermCode: defaultCashRegisterAssignment.defaultCustomer.paymentTermCode,
+              }
+            : null,
         }
       : null;
     const response = NextResponse.json(
@@ -88,6 +107,8 @@ export async function POST(request: NextRequest) {
       { status: result.success ? 200 : 401 }
     );
 
+    const secureCookie = shouldUseSecureCookies(request);
+
     if (result.success && result.user) {
       const session = await createSessionCookie({
         sub: String(result.user.id),
@@ -102,7 +123,7 @@ export async function POST(request: NextRequest) {
         name: SESSION_COOKIE_NAME,
         value: session.value,
         httpOnly: true,
-        secure: env.isProduction,
+        secure: secureCookie,
         sameSite: "lax",
         expires: session.expires,
         path: "/",
@@ -113,7 +134,7 @@ export async function POST(request: NextRequest) {
         name: SESSION_COOKIE_NAME,
         value: emptySession.value,
         httpOnly: true,
-        secure: env.isProduction,
+        secure: secureCookie,
         sameSite: "lax",
         expires: emptySession.expires,
         path: "/",
@@ -133,6 +154,8 @@ export async function POST(request: NextRequest) {
     { status: result.success ? 200 : 401 }
   );
 
+  const secureCookie = shouldUseSecureCookies(request);
+
   if (result.success && result.waiter) {
     const session = await createSessionCookie({
       sub: String(result.waiter.id),
@@ -146,7 +169,7 @@ export async function POST(request: NextRequest) {
       name: SESSION_COOKIE_NAME,
       value: session.value,
       httpOnly: true,
-      secure: env.isProduction,
+      secure: secureCookie,
       sameSite: "lax",
       expires: session.expires,
       path: "/",
@@ -157,7 +180,7 @@ export async function POST(request: NextRequest) {
       name: SESSION_COOKIE_NAME,
       value: emptySession.value,
       httpOnly: true,
-      secure: env.isProduction,
+      secure: secureCookie,
       sameSite: "lax",
       expires: emptySession.expires,
       path: "/",

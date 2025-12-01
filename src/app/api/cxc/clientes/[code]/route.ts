@@ -49,7 +49,7 @@ const updateCustomerSchema = z.object({
   notes: optionalNullableString,
 });
 
-type RouteContext = { params: { code: string } };
+type RouteContext = { params: Promise<{ code: string }> };
 
 const viewPermissions = [
   CXC_PERMISSIONS.MENU_VIEW,
@@ -61,9 +61,9 @@ const viewPermissions = [
   CXC_PERMISSIONS.CUSTOMER_DISPUTES_MANAGE,
 ];
 
-function getCode(context: RouteContext): string {
-  const raw = context.params?.code ?? "";
-  return decodeURIComponent(raw).trim();
+async function getCode(context: RouteContext): Promise<string> {
+  const { code } = await context.params;
+  return decodeURIComponent(code).trim();
 }
 
 export async function GET(request: NextRequest, context: RouteContext) {
@@ -75,7 +75,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     return access.response;
   }
 
-  const code = getCode(context);
+  const code = await getCode(context);
   if (!code) {
     return NextResponse.json({ success: false, message: "Debe indicar el código" }, { status: 400 });
   }
@@ -101,7 +101,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     return access.response;
   }
 
-  const code = getCode(context);
+  const code = await getCode(context);
   if (!code) {
     return NextResponse.json({ success: false, message: "Debe indicar el código" }, { status: 400 });
   }
@@ -158,7 +158,13 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   } catch (error) {
     console.error("PATCH /api/cxc/clientes/[code]", error);
     const message = error instanceof Error ? error.message : "No se pudo actualizar el cliente";
-    const status = /no existe/i.test(message) ? 404 : 500;
+    const normalized = message.toLowerCase();
+    let status = 500;
+    if (normalized.includes("condición de pago")) {
+      status = 400;
+    } else if (normalized.includes("no existe") && normalized.includes("cliente")) {
+      status = 404;
+    }
     return NextResponse.json({ success: false, message }, { status });
   }
 }

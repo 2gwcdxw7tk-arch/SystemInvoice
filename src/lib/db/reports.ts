@@ -152,6 +152,7 @@ export interface CxcSummaryFilters {
   from: string;
   to: string;
   customer?: string;
+  customerCodes?: string[];
   status?: CustomerDocumentStatus[];
   documentTypes?: CustomerDocumentType[];
 }
@@ -199,6 +200,7 @@ export interface CxcDueAnalysisFilters {
   from: string;
   to: string;
   customer?: string;
+  customerCodes?: string[];
   includeFuture?: boolean;
 }
 
@@ -237,6 +239,7 @@ export interface CxcAgingFilters {
   from: string;
   to: string;
   customer?: string;
+  customerCodes?: string[];
   limit?: number;
 }
 
@@ -936,6 +939,15 @@ const sanitizeCustomerFilter = (value?: string): string | null => {
   return `%${normalized.toUpperCase()}%`;
 };
 
+const sanitizeCustomerCodeList = (values?: string[]): string[] | null => {
+  if (!values || values.length === 0) return null;
+  const normalized = values
+    .map((code) => (typeof code === "string" ? code.trim().toUpperCase() : ""))
+    .filter((code) => code.length > 0);
+  if (normalized.length === 0) return null;
+  return Array.from(new Set(normalized));
+};
+
 const sanitizeStatusFilter = (statuses?: CustomerDocumentStatus[]): CustomerDocumentStatus[] | null => {
   if (!statuses || statuses.length === 0) return null;
   const normalized = statuses
@@ -991,10 +1003,26 @@ export async function getCxcSummaryReport(filters: CxcSummaryFilters): Promise<C
         creditStatus: index === 0 ? "ACTIVE" : index === 3 ? "ON_HOLD" : "ACTIVE",
       } satisfies CxcSummaryTopCustomerRow;
     });
+    const codeFilter = sanitizeCustomerCodeList(filters.customerCodes);
+    const term = filters.customer?.trim().toUpperCase() ?? "";
+    const normalizedTerm = term.length > 0 ? term : null;
+    const filteredTopCustomers = topCustomers.filter((row) => {
+      if (codeFilter && !codeFilter.includes(row.customerCode.toUpperCase())) {
+        return false;
+      }
+      if (normalizedTerm) {
+        const matchesCode = row.customerCode.toUpperCase().includes(normalizedTerm);
+        const matchesName = row.customerName.toUpperCase().includes(normalizedTerm);
+        if (!matchesCode && !matchesName) {
+          return false;
+        }
+      }
+      return true;
+    });
     return {
       totals,
       byStatus,
-      topCustomers,
+      topCustomers: filteredTopCustomers,
       generatedAt: new Date().toISOString(),
     } satisfies CxcSummaryResult;
   }
@@ -1021,6 +1049,12 @@ export async function getCxcSummaryReport(filters: CxcSummaryFilters): Promise<C
     params.push(customerTerm);
     const placeholder = `$${params.length}`;
     conditions.push(`(UPPER(c.code) LIKE ${placeholder} OR UPPER(c.name) LIKE ${placeholder} OR UPPER(COALESCE(c.tax_id, '')) LIKE ${placeholder})`);
+  }
+
+  const customerCodes = sanitizeCustomerCodeList(filters.customerCodes);
+  if (customerCodes) {
+    params.push(customerCodes);
+    conditions.push(`UPPER(c.code) = ANY($${params.length}::text[])`);
   }
 
   const baseQuery = `
@@ -1173,30 +1207,104 @@ WITH open_docs AS (
 
 export async function getCxcDueAnalysisReport(filters: CxcDueAnalysisFilters): Promise<CxcDueAnalysisResult> {
   if (env.useMockData) {
-    const buckets: CxcDueBucketRow[] = [
-      { bucket: "OVERDUE", label: dueBucketLabelMap.OVERDUE, documents: 7, customers: 5, originalAmount: 25_000, balanceAmount: 18_400 },
-      { bucket: "TODAY", label: dueBucketLabelMap.TODAY, documents: 3, customers: 3, originalAmount: 8_750, balanceAmount: 8_750 },
-      { bucket: "DUE_7", label: dueBucketLabelMap.DUE_7, documents: 5, customers: 4, originalAmount: 12_430, balanceAmount: 12_430 },
-      { bucket: "DUE_30", label: dueBucketLabelMap.DUE_30, documents: 4, customers: 4, originalAmount: 15_590, balanceAmount: 9_200 },
-      { bucket: "DUE_60", label: dueBucketLabelMap.DUE_60, documents: 2, customers: 2, originalAmount: 7_800, balanceAmount: 5_200 },
-      { bucket: "FUTURE", label: dueBucketLabelMap.FUTURE, documents: 6, customers: 6, originalAmount: 32_000, balanceAmount: 32_000 },
-    ];
-    const documents: CxcDueDocumentRow[] = Array.from({ length: 12 }, (_, index) => ({
-      documentId: 500 + index,
-      documentNumber: `FAC-2025-${1200 + index}`,
-      customerId: 100 + (index % 3),
-      customerCode: `CLI-${100 + (index % 3)}`,
-      customerName: `Cliente Demo ${(index % 3) + 1}`,
-      documentType: "INVOICE",
-      documentDate: new Date(Date.parse(filters.from) + index * 86_400_000).toISOString(),
-      dueDate: new Date(Date.parse(filters.from) + (index + 2) * 86_400_000).toISOString(),
-      daysDelta: index - 4,
-      originalAmount: 2_500 + index * 320,
-      balanceAmount: 2_500 + index * 320,
-      status: "PENDIENTE",
-      paymentTermCode: "NET30",
-    }));
-    return { buckets, documents, generatedAt: new Date().toISOString() } satisfies CxcDueAnalysisResult;
+    const msPerDay = 86_400_000;
+    const fromDate = new Date(filters.from);
+    const baseTimestamp = Number.isNaN(fromDate.getTime()) ? Date.now() - 14 * msPerDay : fromDate.getTime();
+    const today = new Date();
+    const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+
+    const baseDocuments: CxcDueDocumentRow[] = Array.from({ length: 12 }, (_, index) => {
+      const documentDate = new Date(baseTimestamp + index * msPerDay);
+      const dueDate = new Date(baseTimestamp + (index + 2) * msPerDay);
+      const dueUtc = new Date(Date.UTC(dueDate.getUTCFullYear(), dueDate.getUTCMonth(), dueDate.getUTCDate()));
+      const diffMs = todayUtc.getTime() - dueUtc.getTime();
+      const daysDelta = Math.round(diffMs / msPerDay);
+      return {
+        documentId: 500 + index,
+        documentNumber: `FAC-2025-${1200 + index}`,
+        customerId: 100 + (index % 3),
+        customerCode: `CLI-${100 + (index % 3)}`,
+        customerName: `Cliente Demo ${(index % 3) + 1}`,
+        documentType: "INVOICE",
+        documentDate: documentDate.toISOString(),
+        dueDate: dueDate.toISOString(),
+        daysDelta,
+        originalAmount: 2_500 + index * 320,
+        balanceAmount: 2_500 + index * 320,
+        status: "PENDIENTE",
+        paymentTermCode: "NET30",
+      } satisfies CxcDueDocumentRow;
+    });
+
+    const includeFuture = filters.includeFuture !== false;
+    const codeFilter = sanitizeCustomerCodeList(filters.customerCodes);
+    const term = filters.customer?.trim().toUpperCase() ?? "";
+    const normalizedTerm = term.length > 0 ? term : null;
+
+    const filteredDocuments = baseDocuments.filter((doc) => {
+      if (codeFilter && !codeFilter.includes(doc.customerCode.toUpperCase())) {
+        return false;
+      }
+      if (normalizedTerm) {
+        const matchesCode = doc.customerCode.toUpperCase().includes(normalizedTerm);
+        const matchesName = doc.customerName.toUpperCase().includes(normalizedTerm);
+        if (!matchesCode && !matchesName) {
+          return false;
+        }
+      }
+      if (!includeFuture && doc.daysDelta < 0) {
+        return false;
+      }
+      return true;
+    });
+
+    const bucketOrder: CxcDueBucketRow["bucket"][] = ["OVERDUE", "TODAY", "DUE_7", "DUE_30", "DUE_60", "FUTURE"];
+    const aggregates = new Map<CxcDueBucketRow["bucket"], { documents: number; customers: Set<number>; original: number; balance: number }>(
+      bucketOrder.map((bucket) => [bucket, { documents: 0, customers: new Set<number>(), original: 0, balance: 0 }])
+    );
+
+    const normalizedDocuments = filteredDocuments.map((doc) => {
+      const dueDate = new Date(doc.dueDate);
+      const dueUtc = new Date(Date.UTC(dueDate.getUTCFullYear(), dueDate.getUTCMonth(), dueDate.getUTCDate()));
+      const diffMs = todayUtc.getTime() - dueUtc.getTime();
+      const daysDelta = Math.round(diffMs / msPerDay);
+      const diffUntilDue = Math.round((dueUtc.getTime() - todayUtc.getTime()) / msPerDay);
+      let bucket: CxcDueBucketRow["bucket"];
+      if (diffUntilDue < 0) bucket = "OVERDUE";
+      else if (diffUntilDue === 0) bucket = "TODAY";
+      else if (diffUntilDue <= 7) bucket = "DUE_7";
+      else if (diffUntilDue <= 30) bucket = "DUE_30";
+      else if (diffUntilDue <= 60) bucket = "DUE_60";
+      else bucket = "FUTURE";
+      if (!includeFuture && bucket === "FUTURE") {
+        return { ...doc, daysDelta } satisfies CxcDueDocumentRow;
+      }
+      const aggregate = aggregates.get(bucket);
+      if (aggregate) {
+        aggregate.documents += 1;
+        aggregate.customers.add(doc.customerId);
+        aggregate.original += doc.originalAmount;
+        aggregate.balance += doc.balanceAmount;
+      }
+      return { ...doc, daysDelta } satisfies CxcDueDocumentRow;
+    });
+
+    const buckets = bucketOrder
+      .map((bucket) => {
+        const aggregate = aggregates.get(bucket);
+        if (!aggregate) return null;
+        return {
+          bucket,
+          label: dueBucketLabelMap[bucket],
+          documents: aggregate.documents,
+          customers: aggregate.customers.size,
+          originalAmount: roundNumber(aggregate.original),
+          balanceAmount: roundNumber(aggregate.balance),
+        } satisfies CxcDueBucketRow;
+      })
+      .filter((row): row is CxcDueBucketRow => row !== null && row.documents > 0);
+
+    return { buckets, documents: normalizedDocuments, generatedAt: new Date().toISOString() } satisfies CxcDueAnalysisResult;
   }
 
   const params: unknown[] = [filters.from, filters.to];
@@ -1214,6 +1322,12 @@ export async function getCxcDueAnalysisReport(filters: CxcDueAnalysisFilters): P
     params.push(customerTerm);
     const placeholder = `$${params.length}`;
     conditions.push(`(UPPER(c.code) LIKE ${placeholder} OR UPPER(c.name) LIKE ${placeholder} OR UPPER(COALESCE(c.tax_id, '')) LIKE ${placeholder})`);
+  }
+
+  const customerCodes = sanitizeCustomerCodeList(filters.customerCodes);
+  if (customerCodes) {
+    params.push(customerCodes);
+    conditions.push(`UPPER(c.code) = ANY($${params.length}::text[])`);
   }
 
   if (filters.includeFuture === false) {
@@ -1364,12 +1478,28 @@ export async function getCxcAgingReport(filters: CxcAgingFilters): Promise<CxcAg
       creditLimit: 25_000 + index * 2_000,
       creditStatus: index === 4 ? "ON_HOLD" : "ACTIVE",
     }));
-    const totalsBalance = rows.reduce((acc, row) => acc + row.balanceAmount, 0);
+    const codeFilter = sanitizeCustomerCodeList(filters.customerCodes);
+    const term = filters.customer?.trim().toUpperCase() ?? "";
+    const normalizedTerm = term.length > 0 ? term : null;
+    const filteredRows = rows.filter((row) => {
+      if (codeFilter && !codeFilter.includes(row.customerCode.toUpperCase())) {
+        return false;
+      }
+      if (normalizedTerm) {
+        const matchesCode = row.customerCode.toUpperCase().includes(normalizedTerm);
+        const matchesName = row.customerName.toUpperCase().includes(normalizedTerm);
+        if (!matchesCode && !matchesName) {
+          return false;
+        }
+      }
+      return true;
+    });
+    const totalsBalance = filteredRows.reduce((acc, row) => acc + row.balanceAmount, 0);
     return {
-      rows,
+      rows: filteredRows,
       totals: {
         balanceAmount: roundNumber(totalsBalance),
-        customers: rows.length,
+        customers: filteredRows.length,
       },
       generatedAt: new Date().toISOString(),
     } satisfies CxcAgingResult;

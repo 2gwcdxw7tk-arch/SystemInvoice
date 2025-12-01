@@ -3,6 +3,33 @@ import "server-only";
 import { env } from "@/lib/env";
 import { query, withTransaction } from "@/lib/db/postgres";
 
+type PgDatabaseError = Error & { code?: string; message?: string };
+
+function isMissingDefaultCustomerSchema(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const { code, message } = error as PgDatabaseError;
+  if (!code) {
+    return false;
+  }
+  if (code === "42703" || code === "42P01") {
+    const normalizedMessage = (message ?? "").toLowerCase();
+    return (
+      normalizedMessage.includes("default_customer") ||
+      normalizedMessage.includes("payment_terms")
+    );
+  }
+  return false;
+}
+
+export type CashRegisterDefaultCustomer = {
+  id: number;
+  code: string;
+  name: string;
+  paymentTermCode: string | null;
+};
+
 export type CashRegisterAssignment = {
   cashRegisterId: number;
   cashRegisterCode: string;
@@ -12,6 +39,22 @@ export type CashRegisterAssignment = {
   warehouseCode: string;
   warehouseName: string;
   isDefault: boolean;
+  defaultCustomer: CashRegisterDefaultCustomer | null;
+};
+
+type RegisterRowWithDefault = {
+  cash_register_id: number;
+  cash_register_code: string;
+  cash_register_name: string;
+  allow_manual_warehouse_override: boolean;
+  warehouse_id: number;
+  warehouse_code: string;
+  warehouse_name: string;
+  is_default: boolean;
+  default_customer_id: number | null;
+  default_customer_code: string | null;
+  default_customer_name: string | null;
+  default_customer_payment_term_code: string | null;
 };
 
 export type CashRegisterSessionRecord = {
@@ -88,6 +131,7 @@ type MockCashRegister = {
   warehouseId: number;
   warehouseCode: string;
   warehouseName: string;
+  defaultCustomer: CashRegisterDefaultCustomer | null;
 };
 
 type MockSession = CashRegisterSessionRecord;
@@ -109,6 +153,7 @@ const mockCashRegisters: MockCashRegister[] = env.useMockData
         warehouseId: 1,
         warehouseCode: "PRINCIPAL",
         warehouseName: "Almacen principal",
+        defaultCustomer: null,
       },
     ]
   : [];
@@ -135,6 +180,7 @@ function ensureMockAssignments(adminUserId: number): CashRegisterAssignment[] {
     warehouseCode: register.warehouseCode,
     warehouseName: register.warehouseName,
     isDefault: index === 0,
+    defaultCustomer: register.defaultCustomer,
   }));
   mockAssignments.set(adminUserId, assignments);
   return assignments;
@@ -172,8 +218,7 @@ export async function listCashRegistersForAdmin(adminUserId: number): Promise<Ca
   if (env.useMockData) {
     return ensureMockAssignments(adminUserId);
   }
-
-  const result = await query<{
+  const mapAssignment = (row: {
     cash_register_id: number;
     cash_register_code: string;
     cash_register_name: string;
@@ -182,25 +227,11 @@ export async function listCashRegistersForAdmin(adminUserId: number): Promise<Ca
     warehouse_code: string;
     warehouse_name: string;
     is_default: boolean;
-  }>(
-    `SELECT
-       cru.cash_register_id,
-       cr.code AS cash_register_code,
-       cr.name AS cash_register_name,
-       cr.allow_manual_warehouse_override,
-       cr.warehouse_id,
-       w.code AS warehouse_code,
-       w.name AS warehouse_name,
-       cru.is_default
-     FROM app.cash_register_users cru
-     INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
-     INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
-     WHERE cru.admin_user_id = $1
-     ORDER BY cru.is_default DESC, cr.code ASC` ,
-    [adminUserId]
-  );
-
-  return result.rows.map((row) => ({
+    default_customer_id: number | null;
+    default_customer_code: string | null;
+    default_customer_name: string | null;
+    default_customer_payment_term_code: string | null;
+  }): CashRegisterAssignment => ({
     cashRegisterId: Number(row.cash_register_id),
     cashRegisterCode: row.cash_register_code,
     cashRegisterName: row.cash_register_name,
@@ -209,7 +240,98 @@ export async function listCashRegistersForAdmin(adminUserId: number): Promise<Ca
     warehouseCode: row.warehouse_code,
     warehouseName: row.warehouse_name,
     isDefault: !!row.is_default,
-  }));
+    defaultCustomer:
+      row.default_customer_id != null
+        ? {
+            id: Number(row.default_customer_id),
+            code: row.default_customer_code ?? "",
+            name: row.default_customer_name ?? "",
+            paymentTermCode: row.default_customer_payment_term_code ?? null,
+          }
+        : null,
+  });
+
+  try {
+    const result = await query<{
+      cash_register_id: number;
+      cash_register_code: string;
+      cash_register_name: string;
+      allow_manual_warehouse_override: boolean;
+      warehouse_id: number;
+      warehouse_code: string;
+      warehouse_name: string;
+      is_default: boolean;
+      default_customer_id: number | null;
+      default_customer_code: string | null;
+      default_customer_name: string | null;
+      default_customer_payment_term_code: string | null;
+    }>(
+      `SELECT
+         cru.cash_register_id,
+         cr.code AS cash_register_code,
+         cr.name AS cash_register_name,
+         cr.allow_manual_warehouse_override,
+         cr.warehouse_id,
+         w.code AS warehouse_code,
+         w.name AS warehouse_name,
+         cru.is_default,
+         cr.default_customer_id,
+         dc.code AS default_customer_code,
+         dc.name AS default_customer_name,
+         dpt.code AS default_customer_payment_term_code
+       FROM app.cash_register_users cru
+       INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
+       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
+       LEFT JOIN app.customers dc ON dc.id = cr.default_customer_id
+       LEFT JOIN app.payment_terms dpt ON dpt.id = dc.payment_term_id
+       WHERE cru.admin_user_id = $1
+       ORDER BY cru.is_default DESC, cr.code ASC`,
+      [adminUserId]
+    );
+
+    return result.rows.map(mapAssignment);
+  } catch (error) {
+    if (!isMissingDefaultCustomerSchema(error)) {
+      throw error;
+    }
+
+    const fallback = await query<{
+      cash_register_id: number;
+      cash_register_code: string;
+      cash_register_name: string;
+      allow_manual_warehouse_override: boolean;
+      warehouse_id: number;
+      warehouse_code: string;
+      warehouse_name: string;
+      is_default: boolean;
+    }>(
+      `SELECT
+         cru.cash_register_id,
+         cr.code AS cash_register_code,
+         cr.name AS cash_register_name,
+         cr.allow_manual_warehouse_override,
+         cr.warehouse_id,
+         w.code AS warehouse_code,
+         w.name AS warehouse_name,
+         cru.is_default
+       FROM app.cash_register_users cru
+       INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
+       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
+       WHERE cru.admin_user_id = $1
+       ORDER BY cru.is_default DESC, cr.code ASC`,
+      [adminUserId]
+    );
+
+    return fallback.rows.map((row) =>
+      mapAssignment({
+        ...row,
+        default_customer_id: null,
+        default_customer_code: null,
+        default_customer_name: null,
+        default_customer_payment_term_code: null,
+      })
+    );
+  }
 }
 
 type SessionDbRow = {
@@ -232,6 +354,10 @@ type SessionDbRow = {
   warehouse_code: string;
   warehouse_name: string;
   is_default: boolean | null;
+  default_customer_id: number | null;
+  default_customer_code: string | null;
+  default_customer_name: string | null;
+  default_customer_payment_term_code: string | null;
 };
 
 function mapSessionRow(row: SessionDbRow): CashRegisterSessionRecord {
@@ -256,47 +382,111 @@ function mapSessionRow(row: SessionDbRow): CashRegisterSessionRecord {
       warehouseCode: row.warehouse_code,
       warehouseName: row.warehouse_name,
       isDefault: !!row.is_default,
+      defaultCustomer:
+        row.default_customer_id != null
+          ? {
+              id: Number(row.default_customer_id),
+              code: row.default_customer_code ?? "",
+              name: row.default_customer_name ?? "",
+              paymentTermCode: row.default_customer_payment_term_code ?? null,
+            }
+          : null,
     },
   };
 }
 
 async function fetchSessionByAdminFromDb(adminUserId: number): Promise<CashRegisterSessionRecord | null> {
-  const result = await query<SessionDbRow>(
-    `SELECT
-       s.id,
-       s.status,
-       s.admin_user_id,
-       s.opening_amount,
-       s.opening_at,
-       s.opening_notes,
-       s.closing_amount,
-       s.closing_at,
-       s.closing_notes,
-       s.closing_user_id,
-       s.totals_snapshot,
-       cr.id AS cash_register_id,
-       cr.code AS cash_register_code,
-       cr.name AS cash_register_name,
-       cr.allow_manual_warehouse_override,
-       w.id AS warehouse_id,
-       w.code AS warehouse_code,
-       w.name AS warehouse_name,
-       cru.is_default
-     FROM app.cash_register_sessions s
-     INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
-     INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-     LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
-     WHERE s.admin_user_id = $1 AND s.status = 'OPEN'
-     ORDER BY s.opening_at DESC
-     LIMIT 1`,
-    [adminUserId]
-  );
+  try {
+    const result = await query<SessionDbRow>(
+      `SELECT
+         s.id,
+         s.status,
+         s.admin_user_id,
+         s.opening_amount,
+         s.opening_at,
+         s.opening_notes,
+         s.closing_amount,
+         s.closing_at,
+         s.closing_notes,
+         s.closing_user_id,
+         s.totals_snapshot,
+         cr.id AS cash_register_id,
+         cr.code AS cash_register_code,
+         cr.name AS cash_register_name,
+         cr.allow_manual_warehouse_override,
+         w.id AS warehouse_id,
+         w.code AS warehouse_code,
+         w.name AS warehouse_name,
+         cru.is_default,
+         cr.default_customer_id,
+         dc.code AS default_customer_code,
+         dc.name AS default_customer_name,
+         dpt.code AS default_customer_payment_term_code
+       FROM app.cash_register_sessions s
+       INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
+       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
+       LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
+       LEFT JOIN app.customers dc ON dc.id = cr.default_customer_id
+       LEFT JOIN app.payment_terms dpt ON dpt.id = dc.payment_term_id
+       WHERE s.admin_user_id = $1 AND s.status = 'OPEN'
+       ORDER BY s.opening_at DESC
+       LIMIT 1`,
+      [adminUserId]
+    );
 
-  const row = result.rows[0];
-  if (!row) {
-    return null;
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return mapSessionRow(row);
+  } catch (error) {
+    if (!isMissingDefaultCustomerSchema(error)) {
+      throw error;
+    }
+
+    const fallback = await query<Omit<SessionDbRow, "default_customer_id" | "default_customer_code" | "default_customer_name" | "default_customer_payment_term_code">>(
+      `SELECT
+         s.id,
+         s.status,
+         s.admin_user_id,
+         s.opening_amount,
+         s.opening_at,
+         s.opening_notes,
+         s.closing_amount,
+         s.closing_at,
+         s.closing_notes,
+         s.closing_user_id,
+         s.totals_snapshot,
+         cr.id AS cash_register_id,
+         cr.code AS cash_register_code,
+         cr.name AS cash_register_name,
+         cr.allow_manual_warehouse_override,
+         w.id AS warehouse_id,
+         w.code AS warehouse_code,
+         w.name AS warehouse_name,
+         cru.is_default
+       FROM app.cash_register_sessions s
+       INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
+       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
+       LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
+       WHERE s.admin_user_id = $1 AND s.status = 'OPEN'
+       ORDER BY s.opening_at DESC
+       LIMIT 1`,
+      [adminUserId]
+    );
+
+    const row = fallback.rows[0];
+    if (!row) {
+      return null;
+    }
+    return mapSessionRow({
+      ...row,
+      default_customer_id: null,
+      default_customer_code: null,
+      default_customer_name: null,
+      default_customer_payment_term_code: null,
+    } as SessionDbRow);
   }
-  return mapSessionRow(row);
 }
 
 export async function getActiveCashRegisterSessionByAdmin(adminUserId: number): Promise<CashRegisterSessionRecord | null> {
@@ -317,39 +507,92 @@ export async function getCashRegisterSessionById(sessionId: number): Promise<Cas
     const session = mockSessions.get(sessionId);
     return session ? cloneSessionRecord(session) : null;
   }
+  try {
+    const result = await query<SessionDbRow>(
+      `SELECT
+         s.id,
+         s.status,
+         s.admin_user_id,
+         s.opening_amount,
+         s.opening_at,
+         s.opening_notes,
+         s.closing_amount,
+         s.closing_at,
+         s.closing_notes,
+         s.closing_user_id,
+         s.totals_snapshot,
+         cr.id AS cash_register_id,
+         cr.code AS cash_register_code,
+         cr.name AS cash_register_name,
+         cr.allow_manual_warehouse_override,
+         w.id AS warehouse_id,
+         w.code AS warehouse_code,
+         w.name AS warehouse_name,
+         cru.is_default,
+         cr.default_customer_id,
+         dc.code AS default_customer_code,
+         dc.name AS default_customer_name,
+         dpt.code AS default_customer_payment_term_code
+       FROM app.cash_register_sessions s
+       INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
+       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
+       LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
+       LEFT JOIN app.customers dc ON dc.id = cr.default_customer_id
+       LEFT JOIN app.payment_terms dpt ON dpt.id = dc.payment_term_id
+       WHERE s.id = $1
+       LIMIT 1`,
+      [sessionId]
+    );
 
-  const result = await query<SessionDbRow>(
-    `SELECT
-       s.id,
-       s.status,
-       s.admin_user_id,
-       s.opening_amount,
-       s.opening_at,
-       s.opening_notes,
-       s.closing_amount,
-       s.closing_at,
-       s.closing_notes,
-       s.closing_user_id,
-       s.totals_snapshot,
-       cr.id AS cash_register_id,
-       cr.code AS cash_register_code,
-       cr.name AS cash_register_name,
-       cr.allow_manual_warehouse_override,
-       w.id AS warehouse_id,
-       w.code AS warehouse_code,
-       w.name AS warehouse_name,
-       cru.is_default
-     FROM app.cash_register_sessions s
-     INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
-     INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
-     LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
-     WHERE s.id = $1
-     LIMIT 1`,
-    [sessionId]
-  );
+    const row = result.rows[0];
+    return row ? mapSessionRow(row) : null;
+  } catch (error) {
+    if (!isMissingDefaultCustomerSchema(error)) {
+      throw error;
+    }
 
-  const row = result.rows[0];
-  return row ? mapSessionRow(row) : null;
+    const fallback = await query<Omit<SessionDbRow, "default_customer_id" | "default_customer_code" | "default_customer_name" | "default_customer_payment_term_code">>(
+      `SELECT
+         s.id,
+         s.status,
+         s.admin_user_id,
+         s.opening_amount,
+         s.opening_at,
+         s.opening_notes,
+         s.closing_amount,
+         s.closing_at,
+         s.closing_notes,
+         s.closing_user_id,
+         s.totals_snapshot,
+         cr.id AS cash_register_id,
+         cr.code AS cash_register_code,
+         cr.name AS cash_register_name,
+         cr.allow_manual_warehouse_override,
+         w.id AS warehouse_id,
+         w.code AS warehouse_code,
+         w.name AS warehouse_name,
+         cru.is_default
+       FROM app.cash_register_sessions s
+       INNER JOIN app.cash_registers cr ON cr.id = s.cash_register_id
+       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id
+       LEFT JOIN app.cash_register_users cru ON cru.cash_register_id = cr.id AND cru.admin_user_id = s.admin_user_id
+       WHERE s.id = $1
+       LIMIT 1`,
+      [sessionId]
+    );
+
+    const row = fallback.rows[0];
+    if (!row) {
+      return null;
+    }
+    return mapSessionRow({
+      ...row,
+      default_customer_id: null,
+      default_customer_code: null,
+      default_customer_name: null,
+      default_customer_payment_term_code: null,
+    } as SessionDbRow);
+  }
 }
 
 function buildSummary(params: {
@@ -460,34 +703,71 @@ export async function openCashRegisterSession(input: OpenCashRegisterSessionInpu
   }
 
   return withTransaction(async (client) => {
-    const registerResult = await client.query<{
-      cash_register_id: number;
-      cash_register_code: string;
-      cash_register_name: string;
-      allow_manual_warehouse_override: boolean;
-      warehouse_id: number;
-      warehouse_code: string;
-      warehouse_name: string;
-      is_default: boolean;
-    }>(
-      `SELECT
-         cru.cash_register_id,
-         cr.code AS cash_register_code,
-         cr.name AS cash_register_name,
-         cr.allow_manual_warehouse_override,
-         cr.warehouse_id,
-         w.code AS warehouse_code,
-         w.name AS warehouse_name,
-         cru.is_default
-       FROM app.cash_register_users cru
-       INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
-       INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
-       WHERE cru.admin_user_id = $1 AND UPPER(cr.code) = $2
-       LIMIT 1`,
-      [adminUserId, cashRegisterCode]
-    );
+    const fetchRegister = async (): Promise<RegisterRowWithDefault | null> => {
+      try {
+        const result = await client.query<RegisterRowWithDefault>(
+          `SELECT
+             cru.cash_register_id,
+             cr.code AS cash_register_code,
+             cr.name AS cash_register_name,
+             cr.allow_manual_warehouse_override,
+             cr.warehouse_id,
+             w.code AS warehouse_code,
+             w.name AS warehouse_name,
+             cru.is_default,
+             cr.default_customer_id,
+             dc.code AS default_customer_code,
+             dc.name AS default_customer_name,
+             dpt.code AS default_customer_payment_term_code
+           FROM app.cash_register_users cru
+           INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
+           INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
+           LEFT JOIN app.customers dc ON dc.id = cr.default_customer_id
+           LEFT JOIN app.payment_terms dpt ON dpt.id = dc.payment_term_id
+           WHERE cru.admin_user_id = $1 AND UPPER(cr.code) = $2
+           LIMIT 1`,
+          [adminUserId, cashRegisterCode]
+        );
 
-    const registerRow = registerResult.rows[0];
+        return result.rows[0] ?? null;
+      } catch (error) {
+        if (!isMissingDefaultCustomerSchema(error)) {
+          throw error;
+        }
+
+        const fallback = await client.query<Omit<RegisterRowWithDefault, "default_customer_id" | "default_customer_code" | "default_customer_name" | "default_customer_payment_term_code">>(
+          `SELECT
+             cru.cash_register_id,
+             cr.code AS cash_register_code,
+             cr.name AS cash_register_name,
+             cr.allow_manual_warehouse_override,
+             cr.warehouse_id,
+             w.code AS warehouse_code,
+             w.name AS warehouse_name,
+             cru.is_default
+           FROM app.cash_register_users cru
+           INNER JOIN app.cash_registers cr ON cr.id = cru.cash_register_id AND cr.is_active = TRUE
+           INNER JOIN app.warehouses w ON w.id = cr.warehouse_id AND w.is_active = TRUE
+           WHERE cru.admin_user_id = $1 AND UPPER(cr.code) = $2
+           LIMIT 1`,
+          [adminUserId, cashRegisterCode]
+        );
+
+        const row = fallback.rows[0];
+        if (!row) {
+          return null;
+        }
+        return {
+          ...row,
+          default_customer_id: null,
+          default_customer_code: null,
+          default_customer_name: null,
+          default_customer_payment_term_code: null,
+        } satisfies RegisterRowWithDefault;
+      }
+    };
+
+    const registerRow = await fetchRegister();
     if (!registerRow) {
       throw new Error(`No tienes permisos para operar la caja ${cashRegisterCode}`);
     }
@@ -534,6 +814,10 @@ export async function openCashRegisterSession(input: OpenCashRegisterSessionInpu
       warehouse_code: registerRow.warehouse_code,
       warehouse_name: registerRow.warehouse_name,
       is_default: registerRow.is_default,
+      default_customer_id: registerRow.default_customer_id,
+      default_customer_code: registerRow.default_customer_code,
+      default_customer_name: registerRow.default_customer_name,
+      default_customer_payment_term_code: registerRow.default_customer_payment_term_code,
     });
   });
 }

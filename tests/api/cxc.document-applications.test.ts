@@ -59,11 +59,14 @@ const resetMockCxcStore = () => {
   copyArray(mockCxcStore.documents, snapshot.documents);
   copyArray(mockCxcStore.applications, snapshot.applications);
   copyArray(mockCxcStore.creditLines, snapshot.creditLines);
-  Object.assign(mockCxcStore.sequences, snapshot.sequences);
+  copyArray(mockCxcStore.collectionLogs, snapshot.collectionLogs ?? []);
+  copyArray(mockCxcStore.disputes, snapshot.disputes ?? []);
+  Object.assign(mockCxcStore.sequences, JSON.parse(JSON.stringify(snapshot.sequences)));
 };
 
 describe('API CxC – Aplicaciones de documentos (mock mode)', () => {
   const { GET: ApplicationsGET, POST: ApplicationsPOST } = require('@/app/api/cxc/documentos/aplicaciones/route');
+  const { DELETE: ApplicationsDELETE } = require('@/app/api/cxc/documentos/aplicaciones/[id]/route');
 
   beforeEach(() => {
     resetMockCxcStore();
@@ -125,5 +128,81 @@ describe('API CxC – Aplicaciones de documentos (mock mode)', () => {
     expect(response.status).toBe(400);
     const invoice = mockCxcStore.documents.find((doc) => doc.id === 1);
     expect(invoice?.balanceAmount).toBe(900);
+  });
+
+  it('prioriza retenciones antes que recibos y sincroniza crédito tras aplicar', async () => {
+    const response = await ApplicationsPOST(
+      buildRequest('http://localhost/api/cxc/documentos/aplicaciones', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          applications: [
+            {
+              appliedDocumentId: 3,
+              targetDocumentId: 1,
+              amount: 400,
+            },
+            {
+              appliedDocumentId: 2,
+              targetDocumentId: 1,
+              amount: 200,
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    const body: any = await response.json();
+    expect(body.applications).toHaveLength(2);
+    expect(body.applications[0].appliedDocumentId).toBe(2);
+
+    const invoice = mockCxcStore.documents.find((doc) => doc.id === 1);
+    const retention = mockCxcStore.documents.find((doc) => doc.id === 2);
+    const receipt = mockCxcStore.documents.find((doc) => doc.id === 3);
+    expect(invoice?.balanceAmount).toBeCloseTo(300, 5);
+    expect(retention?.balanceAmount).toBeCloseTo(0, 5);
+    expect(retention?.status).toBe('PAGADO');
+    expect(receipt?.balanceAmount).toBeCloseTo(200, 5);
+
+    const customer = mockCxcStore.customers.find((entry) => entry.id === 2);
+    expect(customer?.creditUsed).toBeCloseTo(300, 5);
+  });
+
+  it('revierte una aplicación y restaura saldos y crédito usado', async () => {
+    const applyResponse = await ApplicationsPOST(
+      buildRequest('http://localhost/api/cxc/documentos/aplicaciones', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          applications: [
+            {
+              appliedDocumentId: 2,
+              targetDocumentId: 1,
+              amount: 200,
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(applyResponse.status).toBe(201);
+    const applyBody: any = await applyResponse.json();
+    const applicationId = applyBody.applications[0].id;
+
+    const deleteResponse = await ApplicationsDELETE(
+      buildRequest(`http://localhost/api/cxc/documentos/aplicaciones/${applicationId}`, { method: 'DELETE' }),
+      { params: Promise.resolve({ id: String(applicationId) }) },
+    );
+
+    expect(deleteResponse.status).toBe(200);
+    const invoice = mockCxcStore.documents.find((doc) => doc.id === 1);
+    const retention = mockCxcStore.documents.find((doc) => doc.id === 2);
+    expect(invoice?.balanceAmount).toBeCloseTo(900, 5);
+    expect(retention?.balanceAmount).toBeCloseTo(200, 5);
+    expect(retention?.status).toBe('PENDIENTE');
+    const customer = mockCxcStore.customers.find((entry) => entry.id === 2);
+    expect(customer?.creditUsed).toBeCloseTo(900, 5);
+    expect(mockCxcStore.applications.length).toBe(0);
   });
 });

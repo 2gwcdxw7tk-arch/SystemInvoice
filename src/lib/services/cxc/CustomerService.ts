@@ -100,28 +100,57 @@ export class CustomerService {
     return this.repo.findByCode(code);
   }
 
-  private async resolvePaymentTermId(input: { paymentTermId?: number | null; paymentTermCode?: string | null }): Promise<{ id: number | null; code: string | null }> {
-    if (typeof input.paymentTermId === "number") {
-      const term = env.useMockData
-        ? mockCxcStore.paymentTerms.find((entry) => entry.id === input.paymentTermId) ?? null
-        : await paymentTermRepository.findById(input.paymentTermId);
-      if (!term) {
-        throw new Error("La condición de pago indicada no existe");
+  private async resolvePaymentTermId(input: {
+    paymentTermId?: number | null;
+    paymentTermCode?: string | null;
+  }): Promise<{ id: number | null; code: string | null }> {
+    const idIsNull = input.paymentTermId === null;
+    const codeIsNull = input.paymentTermCode === null;
+    const hasId = typeof input.paymentTermId === "number" && Number.isFinite(input.paymentTermId);
+    const hasCode = typeof input.paymentTermCode === "string" && input.paymentTermCode.trim().length > 0;
+
+    if (!hasId && !hasCode) {
+      if (idIsNull || codeIsNull) {
+        return { id: null, code: null };
       }
-      return { id: term.id, code: term.code };
+      return { id: null, code: null };
     }
 
-    if (input.paymentTermCode) {
+    const normalizedCode = hasCode ? normalizeCode(input.paymentTermCode!) : null;
+
+    const fetchTermById = async (termId: number) => {
       const term = env.useMockData
-        ? mockCxcStore.paymentTerms.find((entry) => entry.code === normalizeCode(input.paymentTermCode!)) ?? null
-        : await paymentTermRepository.findByCode(input.paymentTermCode);
-      if (!term) {
-        throw new Error("La condición de pago indicada no existe");
-      }
-      return { id: term.id, code: term.code };
+        ? mockCxcStore.paymentTerms.find((entry) => entry.id === termId) ?? null
+        : await paymentTermRepository.findById(termId);
+      return term ?? null;
+    };
+
+    const fetchTermByCode = async (code: string) => {
+      const term = env.useMockData
+        ? mockCxcStore.paymentTerms.find((entry) => entry.code === code) ?? null
+        : await paymentTermRepository.findByCode(code);
+      return term ?? null;
+    };
+
+    const [termById, termByCode] = await Promise.all([
+      hasId ? fetchTermById(input.paymentTermId as number) : Promise.resolve(null),
+      hasCode && normalizedCode ? fetchTermByCode(normalizedCode) : Promise.resolve(null),
+    ]);
+
+    if (hasId && !termById) {
+      throw new Error("La condición de pago indicada no existe");
     }
 
-    return { id: null, code: null };
+    if (hasCode && normalizedCode && !termByCode) {
+      throw new Error("La condición de pago indicada no existe");
+    }
+
+    if (termById && termByCode && termById.id !== termByCode.id) {
+      throw new Error("La condición de pago indicada no coincide con el código proporcionado");
+    }
+
+    const resolved = termById ?? termByCode;
+    return resolved ? { id: resolved.id, code: resolved.code } : { id: null, code: null };
   }
 
   async create(input: CreateCustomerInput): Promise<CustomerDTO> {

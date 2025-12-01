@@ -1096,6 +1096,12 @@ CREATE TABLE IF NOT EXISTS app.inventory_alerts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE app.cash_registers
+  ADD COLUMN IF NOT EXISTS default_customer_id BIGINT REFERENCES app.customers(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS ix_cash_registers_default_customer
+  ON app.cash_registers (default_customer_id);
+
 DROP TRIGGER IF EXISTS trg_inventory_alerts_touch_updated_at ON app.inventory_alerts;
 CREATE TRIGGER trg_inventory_alerts_touch_updated_at
 BEFORE UPDATE ON app.inventory_alerts

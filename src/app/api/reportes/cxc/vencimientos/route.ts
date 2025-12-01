@@ -11,6 +11,7 @@ const querySchema = z.object({
   to: DATE_SCHEMA,
   customer: z.string().trim().optional(),
   include_future: z.string().trim().optional(),
+  customer_codes: z.string().trim().optional(),
 });
 
 const viewPermissions = [
@@ -26,6 +27,16 @@ const parseBoolean = (value: string | undefined): boolean | undefined => {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "off", "no"].includes(normalized)) return false;
   return undefined;
+};
+
+const parseCustomerCodes = (value: string | undefined): string[] | undefined => {
+  if (!value) return undefined;
+  const tokens = value
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter((item) => item.length > 0);
+  if (tokens.length === 0) return undefined;
+  return Array.from(new Set(tokens));
 };
 
 export async function GET(request: NextRequest) {
@@ -44,15 +55,16 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { from, to, customer, include_future } = parsed.data;
+  const { from, to, customer, include_future, customer_codes } = parsed.data;
   const includeFuture = parseBoolean(include_future);
   const url = new URL(request.url);
   const format = (url.searchParams.get("format") || "json").toLowerCase();
+  const customerCodes = parseCustomerCodes(customer_codes);
 
   try {
-    const report = await reportService.getCxcDueAnalysis({ from, to, customer, includeFuture });
+    const report = await reportService.getCxcDueAnalysis({ from, to, customer, customerCodes, includeFuture });
     if (format === "html") {
-      const html = reportService.renderCxcDueAnalysisHtml({ from, to, customer, includeFuture }, report);
+      const html = reportService.renderCxcDueAnalysisHtml({ from, to, customer, customerCodes, includeFuture }, report);
       return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
     return NextResponse.json({ success: true, report });

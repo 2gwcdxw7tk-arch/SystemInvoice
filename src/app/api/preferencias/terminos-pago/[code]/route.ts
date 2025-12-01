@@ -26,11 +26,11 @@ const updateSchema = z
   })
   .refine((value) => Object.keys(value).length > 0, { message: "Debe indicar al menos un campo a actualizar" });
 
-type RouteContext = { params: { code: string } };
+type RouteContext = { params: Promise<{ code: string }> };
 
-function getCode(context: RouteContext): string {
-  const raw = context.params?.code ?? "";
-  return decodeURIComponent(raw).trim().toUpperCase();
+async function getCode(context: RouteContext): Promise<string> {
+  const { code } = await context.params;
+  return decodeURIComponent(code).trim().toUpperCase();
 }
 
 const viewPermissions = [
@@ -48,7 +48,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
     return access.response;
   }
 
-  const code = getCode(context);
+  const code = await getCode(context);
   if (!code) {
     return NextResponse.json({ success: false, message: "Debe indicar el código" }, { status: 400 });
   }
@@ -74,7 +74,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     return access.response;
   }
 
-  const code = getCode(context);
+  const code = await getCode(context);
   if (!code) {
     return NextResponse.json({ success: false, message: "Debe indicar el código" }, { status: 400 });
   }
@@ -116,7 +116,7 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
     return access.response;
   }
 
-  const code = getCode(context);
+  const code = await getCode(context);
   if (!code) {
     return NextResponse.json({ success: false, message: "Debe indicar el código" }, { status: 400 });
   }

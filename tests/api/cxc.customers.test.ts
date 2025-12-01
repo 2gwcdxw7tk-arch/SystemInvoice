@@ -90,6 +90,11 @@ describe('API CxC – Clientes (mock mode)', () => {
     expect(summaryBody.items[0]).toHaveProperty('paymentTermCode');
     expect(summaryBody.items[0]).toHaveProperty('creditUsed');
     expect(summaryBody.items[0]).toHaveProperty('creditOnHold');
+
+    const summaryFullResponse = await CustomersGET(buildRequest('http://localhost/api/cxc/clientes?summary=true'));
+    expect(summaryFullResponse.status).toBe(200);
+    const summaryFullBody: any = await summaryFullResponse.json();
+    expect(summaryFullBody.items.some((item: any) => item.creditStatus === 'BLOCKED')).toBe(true);
   });
 
   it('crea un nuevo cliente y lo consulta por código', async () => {
@@ -171,5 +176,64 @@ describe('API CxC – Clientes (mock mode)', () => {
     const patchBody: any = await patchResponse.json();
     expect(patchBody.customer.creditStatus).toBe('ON_HOLD');
     expect(patchBody.customer.creditHoldReason).toMatch(/cartera/i);
+  });
+
+  it('rechaza condiciones de pago inconsistentes', async () => {
+    const termId = mockCxcStore.paymentTerms.find((term) => term.code === 'NETO15')?.id;
+    expect(termId).toBeDefined();
+
+    const response = await CustomersPOST(
+      buildRequest('http://localhost/api/cxc/clientes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: 'CLI-TERM-ERR',
+          name: 'Cliente con término inválido',
+          paymentTermId: termId,
+          paymentTermCode: 'CONTADO',
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    const body: any = await response.json();
+    expect(body.message).toMatch(/condición de pago/i);
+  });
+
+  it('permite reasignar y limpiar condición de pago', async () => {
+    await CustomersPOST(
+      buildRequest('http://localhost/api/cxc/clientes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'CLI-TERM', name: 'Cliente con término', paymentTermCode: 'NETO15' }),
+      }),
+    );
+
+    const patchResponse = await CustomerByCodePATCH(
+      buildRequest('http://localhost/api/cxc/clientes/CLI-TERM', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentTermCode: 'NETO30' }),
+      }),
+      { params: { code: 'CLI-TERM' } },
+    );
+
+    expect(patchResponse.status).toBe(200);
+    const patched: any = await patchResponse.json();
+    expect(patched.customer.paymentTermCode).toBe('NETO30');
+
+    const clearResponse = await CustomerByCodePATCH(
+      buildRequest('http://localhost/api/cxc/clientes/CLI-TERM', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentTermId: null }),
+      }),
+      { params: { code: 'CLI-TERM' } },
+    );
+
+    expect(clearResponse.status).toBe(200);
+    const cleared: any = await clearResponse.json();
+    expect(cleared.customer.paymentTermCode).toBeNull();
+    expect(cleared.customer.paymentTermId).toBeNull();
   });
 });

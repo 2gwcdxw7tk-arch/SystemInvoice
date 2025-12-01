@@ -24,6 +24,12 @@ export type SessionPayload = {
     name: string;
     warehouseCode: string;
     warehouseName: string;
+    defaultCustomer: {
+      id: number;
+      code: string;
+      name: string;
+      paymentTermCode: string | null;
+    } | null;
   } | null;
 };
 

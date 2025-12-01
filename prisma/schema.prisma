@@ -361,13 +361,16 @@ model cash_registers {
   created_at                      DateTime                 @default(now()) @db.Timestamptz(6)
   updated_at                      DateTime?                @default(now()) @db.Timestamptz(6)
   invoice_sequence_definition_id  Int?
+  default_customer_id             BigInt?
   cash_register_sessions          cash_register_sessions[]
   cash_register_users             cash_register_users[]
   invoices_invoices_cash_register_idTocash_registers invoices[]              @relation("invoices_cash_register_idTocash_registers")
   warehouses                      warehouses               @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sequence_definitions            sequence_definitions?    @relation(fields: [invoice_sequence_definition_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  default_customer                customers?               @relation("cash_registers_default_customer", fields: [default_customer_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([is_active, code, warehouse_id], map: "ix_cash_registers_active")
+  @@index([default_customer_id], map: "ix_cash_registers_default_customer")
   @@schema("app")
 }
 
@@ -604,6 +607,7 @@ model customers {
   customer_credit_lines   customer_credit_lines[]
   collection_logs         collection_logs[]
   customer_disputes       customer_disputes[]
+  default_for_cash_registers cash_registers[] @relation("cash_registers_default_customer")
 
   @@index([is_active, credit_status, code], map: "ix_customers_active_status")
   @@index([tax_id], map: "ix_customers_tax_id")

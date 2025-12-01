@@ -13,6 +13,7 @@ const querySchema = z.object({
   customer: z.string().trim().optional(),
   status: z.string().trim().optional(),
   document_types: z.string().trim().optional(),
+  customer_codes: z.string().trim().optional(),
 });
 
 const STATUS_CODES: CustomerDocumentStatus[] = ["PENDIENTE", "PAGADO", "CANCELADO", "BORRADOR"];
@@ -34,6 +35,16 @@ const parseCsv = <T extends string>(value: string | undefined, allowed: readonly
   return tokens.length > 0 ? tokens : undefined;
 };
 
+const parseCustomerCodes = (value: string | undefined): string[] | undefined => {
+  if (!value) return undefined;
+  const tokens = value
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter((item) => item.length > 0);
+  if (tokens.length === 0) return undefined;
+  return Array.from(new Set(tokens));
+};
+
 export async function GET(request: NextRequest) {
   const access = await requireCxCPermissions(request, {
     anyOf: viewPermissions,
@@ -50,17 +61,25 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { from, to, customer, status, document_types } = parsed.data;
+  const { from, to, customer, status, document_types, customer_codes } = parsed.data;
   const url = new URL(request.url);
   const format = (url.searchParams.get("format") || "json").toLowerCase();
 
   const statusList = parseCsv<CustomerDocumentStatus>(status, STATUS_CODES);
   const documentTypes = parseCsv<CustomerDocumentType>(document_types, DOCUMENT_TYPES);
+  const customerCodes = parseCustomerCodes(customer_codes);
 
   try {
-    const report = await reportService.getCxcSummary({ from, to, customer, status: statusList, documentTypes });
+    const report = await reportService.getCxcSummary({
+      from,
+      to,
+      customer,
+      customerCodes,
+      status: statusList,
+      documentTypes,
+    });
     if (format === "html") {
-      const html = reportService.renderCxcSummaryHtml({ from, to, customer, status: statusList, documentTypes }, report);
+      const html = reportService.renderCxcSummaryHtml({ from, to, customer, customerCodes, status: statusList, documentTypes }, report);
       return new NextResponse(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
     return NextResponse.json({ success: true, report });

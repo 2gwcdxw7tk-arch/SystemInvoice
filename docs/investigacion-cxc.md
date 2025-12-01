@@ -1,9 +1,10 @@
 # Módulo de Cuentas por Cobrar (CxC) - Guía Completa de Implementación
 
 ## 0. Estado actual (30 nov 2025)
-- **Completado**: repositorios y servicios de condiciones de pago, clientes, documentos, aplicaciones, líneas de crédito, gestiones y disputas con modo mock; endpoints protegidos por `requireCxCPermissions`; integración Facturación↔CxC con generación de documentos espejo; migración `20251128101500_cxc_core_tables` aplicada y sincronizada con `schema_master.sql`; dashboard CxC básico con aging y alertas de límite de crédito.
-- **Pruebas automatizadas**: `tests/api/invoices.retail.cxc.test.ts`, `tests/api/cxc.credit-lines.test.ts` y `tests/api/cxc.document-applications.test.ts` cubren emisión, crédito disponible y aplicaciones parciales; los escenarios de gestiones/disputas se documentan para QA manual hasta contar con su suite dedicada.
+- **Completado**: repositorios y servicios de condiciones de pago, clientes, documentos, aplicaciones, líneas de crédito, gestiones y disputas con modo mock; endpoints protegidos por `requireCxCPermissions`; integración Facturación↔CxC con generación de documentos espejo; migración `20251128101500_cxc_core_tables` aplicada y sincronizada con `schema_master.sql`; dashboard CxC básico con aging y alertas de límite de crédito; reportes CxC con impresión HTML y filtros por múltiples clientes en ejecución inmediata.
+- **Pruebas automatizadas**: `tests/api/invoices.retail.cxc.test.ts`, `tests/api/cxc.credit-lines.test.ts` y `tests/api/cxc.document-applications.test.ts` cubren emisión, crédito disponible y aplicaciones parciales; `tests/api/cxc.payment-terms.test.ts` ahora incluye eliminación bloqueada cuando existen clientes asociados y `tests/api/cxc.customers.test.ts` valida resumen de crédito, reasignación/limpieza de términos y rechazo de condiciones inconsistentes. Los escenarios de gestiones/disputas se documentan para QA manual hasta contar con su suite dedicada. Última corrida integral de `npm run lint`, `npm run typecheck` y `npm test` realizada el 2025-11-30 sin fallas.
 - **Próximas iniciativas (roadmap)**: automatizar reportes avanzados (provisiones, aging gráfico interactivo), enriquecer métricas de licencias y evaluar scoring predictivo basado en historial de cobro.
+- **Plan de revisión activa**: mantenemos `docs/cxc-facturacion-revision.md` y el checklist `docs/checklists/cxc-flujos.md` como fuente canónica de pendientes y resultados de auditoría.
 
 ## 1. VISIÓN GENERAL DEL MÓDULO
 

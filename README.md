@@ -96,6 +96,13 @@ La migración `20251128101500_cxc_core_tables` introduce el bloque de datos para
 Todas las rutas respetan la bandera `MOCK_DATA` y delegan en los servicios del dominio para mantener compatibilidad con el modo demo.
 Antes de ejecutar cualquier handler se valida que la sesión posea los permisos CxC necesarios mediante `requireCxCPermissions` (`src/lib/auth/cxc-access.ts`), garantizando que solo roles autorizados puedan administrar cartera.
 
+- La vista **Cuentas por Cobrar → Documentos** permite registrar documentos manuales (facturas espejo, notas, recibos) desde la UI. El formulario calcula automáticamente el vencimiento con base en la condición de pago, valida importes y sincroniza el saldo restante.
+
+#### Reportes CxC
+
+- `/api/reportes/cxc/resumen`, `/api/reportes/cxc/vencimientos` y `/api/reportes/cxc/antiguedad` aceptan el parámetro `customer_codes` (CSV de códigos) para filtrar uno o varios clientes, conservando el filtro textual `customer` existente como búsqueda libre.
+- Todos los reportes soportan `format=html` y se imprimen mediante la UI `src/app/reportes/page.tsx`, que ahora incluye selector multi-cliente con chips removibles y respeta la recarga inmediata tras ajustar filtros.
+
 #### Pruebas planificadas
 
 Se agregarán suites en `tests/api/cxc.*` cubriendo:
@@ -109,7 +116,7 @@ Sugerencias específicas:
 - `tests/api/cxc.payment-terms.test.ts`: mock + base real, validar `requireCxCPermissions`, deduplicación por `code`, edge cases de vigencia y bandera `is_active`.
 - `tests/api/cxc.customers.test.ts`: escenarios con `credit_limit`, actualización parcial, rechazo cuando falta `payment_term_id` y filtro `status`.
 - `tests/api/cxc.documents.test.ts`: creación de documentos `INVOICE`, `CREDIT_NOTE`, `RECEIPT`, verificación de `due_date` normalizado, folios generados por `SequenceService` y bloqueos por saldo negativo.
-- `tests/api/cxc.document-applications.test.ts`: aplicación de recibos parciales, reversión (DELETE) con recuperación de saldo y doble ejecución protegida.
+- `tests/api/cxc.document-applications.test.ts`: prioridad de retenciones sobre recibos, sincronización de crédito tras aplicar/revertir y validación de saldos en mock mode.
 - Pruebas unitarias en `tests/services/paymentTerm.service.test.ts`, `tests/services/customer.service.test.ts` y `tests/services/customerDocument.service.test.ts` para validar reglas de negocio sin HTTP.
 
 Cada suite deberá ejecutarse con `MOCK_DATA=true` y contra la base real para garantizar paridad.

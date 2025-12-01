@@ -160,4 +160,15 @@ describe('API CxC – Condiciones de pago (mock mode)', () => {
 
     expect(duplicated.status).toBe(409);
   });
+
+  it('impide eliminar una condición con clientes asociados', async () => {
+    const response = await PaymentTermDELETE(
+      buildRequest('http://localhost/api/preferencias/terminos-pago/NETO15', { method: 'DELETE' }),
+      { params: { code: 'NETO15' } },
+    );
+
+    expect(response.status).toBe(409);
+    const payload: any = await response.json();
+    expect(payload.message).toMatch(/clientes asociados/i);
+  });
 });

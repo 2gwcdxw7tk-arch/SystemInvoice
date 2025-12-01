@@ -1,5 +1,5 @@
 import { PrismaClient, prisma } from "@/lib/db/prisma";
-import type { Prisma } from "@prisma/client"; // Type-only Prisma for TransactionClient
+import { Prisma } from "@prisma/client"; // Prisma namespace for runtime error detection
 import type { Decimal, InputJsonValue } from "@prisma/client/runtime/library";
 import { buildClosureSummary } from "@/lib/services/cash-registers/summary";
 import {
@@ -37,7 +37,60 @@ type CashRegisterWithWarehouse = {
   warehouses: { id: number; code: string; name: string };
   invoice_sequence_definition_id: number | null;
   sequence_definitions: SequenceDefinitionSummary | null;
+  default_customer_id: number | bigint | null;
+  default_customer?: DefaultCustomerRow | null;
 };
+
+type DefaultCustomerRow = {
+  id: number | bigint;
+  code: string;
+  name: string;
+  payment_terms: { code: string } | null;
+};
+
+type DefaultCustomerInclude = {
+  default_customer: {
+    select: {
+      id: true;
+      code: true;
+      name: true;
+      payment_terms: {
+        select: {
+          code: true;
+        };
+      };
+    };
+  };
+};
+
+type CashRegisterIncludeWithDefault = Prisma.cash_registersInclude & Partial<DefaultCustomerInclude>;
+
+const defaultCustomerSelect = {
+  id: true,
+  code: true,
+  name: true,
+  payment_terms: {
+    select: {
+      code: true,
+    },
+  },
+} as const;
+
+function buildIncludeWithDefault(
+  base: CashRegisterIncludeWithDefault,
+  includeDefault: boolean
+): CashRegisterIncludeWithDefault {
+  if (!includeDefault) {
+    return base;
+  }
+
+  return {
+    ...base,
+    default_customer: {
+      select: defaultCustomerSelect,
+    },
+  };
+}
 
 type CashRegisterUserWithRelations = {
   admin_user_id: number;
@@ -49,8 +102,16 @@ type CashRegisterUserWithRelations = {
     name: string;
     allow_manual_warehouse_override: boolean;
     warehouses: { id: number; code: string; name: string } | null;
+    default_customer?: DefaultCustomerRow | null;
   };
 };
+
+function isMissingDefaultCustomerRelationError(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientValidationError)) {
+    return false;
+  }
+  return typeof error.message === "string" && error.message.includes("default_customer");
+}
 
 type CashRegisterSessionWithRelations = {
   id: number | bigint;
@@ -77,6 +138,7 @@ type CashRegisterSessionWithRelations = {
     name: string;
     allow_manual_warehouse_override: boolean;
     warehouses: { id: number; code: string; name: string } | null;
+    default_customer?: DefaultCustomerRow | null;
   } | null;
 };
 
@@ -102,6 +164,20 @@ function normalizeSessionId(value: number | string): bigint {
   return BigInt(integer);
 }
 
+async function findCustomerIdByCode(tx: Prisma.TransactionClient, code: string): Promise<bigint> {
+  const normalizedCode = normalizeCode(code);
+  const customer = await tx.customers.findUnique({
+    where: { code: normalizedCode },
+    select: { id: true },
+  });
+
+  if (!customer) {
+    throw new Error(`El cliente ${normalizedCode} no existe`);
+  }
+
+  return BigInt(customer.id);
+}
+
 function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterRecord {
   return {
     id: Number(register.id),
@@ -118,6 +194,14 @@ function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterR
     invoiceSequenceDefinitionId: register.invoice_sequence_definition_id ? Number(register.invoice_sequence_definition_id) : null,
     invoiceSequenceCode: register.sequence_definitions?.code ?? null,
     invoiceSequenceName: register.sequence_definitions?.name ?? null,
+    defaultCustomer: register.default_customer
+      ? {
+          id: Number(register.default_customer.id),
+          code: register.default_customer.code,
+          name: register.default_customer.name,
+          paymentTermCode: register.default_customer.payment_terms?.code ?? null,
+        }
+      : null,
   } satisfies CashRegisterRecord;
 }
 
@@ -165,6 +249,14 @@ function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_def
       warehouseCode: session.cash_registers!.warehouses!.code,
       warehouseName: session.cash_registers!.warehouses!.name,
       isDefault: !!session.is_default,
+      defaultCustomer: session.cash_registers?.default_customer
+        ? {
+            id: Number(session.cash_registers.default_customer.id),
+            code: session.cash_registers.default_customer.code,
+            name: session.cash_registers.default_customer.name,
+            paymentTermCode: session.cash_registers.default_customer.payment_terms?.code ?? null,
+          }
+        : null,
     },
     invoiceSequenceStart: session.invoice_sequence_start ?? null,
     invoiceSequenceEnd: session.invoice_sequence_end ?? null,
@@ -173,6 +265,7 @@ function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_def
 
 export class CashRegisterRepository implements ICashRegisterRepository {
   private readonly prisma: PrismaClient;
+  private defaultCustomerRelationSupported: boolean | null = null;
 
   constructor(prismaClient?: PrismaClient) {
     this.prisma = prismaClient ?? prisma;
@@ -180,33 +273,55 @@ export class CashRegisterRepository implements ICashRegisterRepository {
 
   async listCashRegisters(options: { includeInactive?: boolean } = {}): Promise<CashRegisterRecord[]> {
     const { includeInactive = false } = options;
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
 
-    const registers = await this.prisma.cash_registers.findMany({
-      where: {
-        is_active: includeInactive ? undefined : true,
-      },
-      include: {
-        warehouses: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
-        sequence_definitions: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
+    const baseInclude: CashRegisterIncludeWithDefault = {
+      warehouses: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
         },
       },
-      orderBy: {
-        code: "asc",
+      sequence_definitions: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
+        },
       },
-    });
+    };
 
-    return registers.map((register: CashRegisterWithWarehouse) => mapRegisterToRecord(register));
+    const include = buildIncludeWithDefault(baseInclude, shouldIncludeDefault);
+
+    try {
+      const registers = await this.prisma.cash_registers.findMany({
+        where: {
+          is_active: includeInactive ? undefined : true,
+        },
+        include,
+        orderBy: {
+          code: "asc",
+        },
+      });
+
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
+      }
+
+      return registers.map((register) =>
+        mapRegisterToRecord({
+          ...(register as unknown as CashRegisterWithWarehouse),
+          default_customer: (register as unknown as CashRegisterWithWarehouse).default_customer ?? null,
+        })
+      );
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.listCashRegisters(options);
+      }
+      throw error;
+    }
   }
 
   async createCashRegister(input: CreateCashRegisterInput): Promise<CashRegisterRecord> {
@@ -215,6 +330,11 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
       const allowManualWarehouseOverride = Boolean(input.allowManualWarehouseOverride);
       const notes = input.notes?.trim() ? input.notes.trim().slice(0, 250) : null;
+      let defaultCustomerId: bigint | null = null;
+
+      if (typeof input.defaultCustomerCode === "string" && input.defaultCustomerCode.trim().length > 0) {
+        defaultCustomerId = await findCustomerIdByCode(tx, input.defaultCustomerCode);
+      }
 
       const warehouse = await tx.warehouses.findFirst({
         where: { code: normalizedWarehouseCode, is_active: true },
@@ -225,15 +345,8 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         throw new Error(`El almacén ${normalizedWarehouseCode} no existe o está inactivo`);
       }
 
-      const newRegister = await tx.cash_registers.create({
-        data: {
-          code: normalizedCode,
-          name: input.name.trim(),
-          warehouse_id: warehouse.id,
-          allow_manual_warehouse_override: allowManualWarehouseOverride,
-          notes: notes,
-        },
-        include: {
+      const include = buildIncludeWithDefault(
+        {
           warehouses: {
             select: {
               id: true,
@@ -249,9 +362,22 @@ export class CashRegisterRepository implements ICashRegisterRepository {
             },
           },
         },
+        true
+      );
+
+      const newRegister = await tx.cash_registers.create({
+        data: {
+          code: normalizedCode,
+          name: input.name.trim(),
+          warehouse_id: Number(warehouse.id),
+          allow_manual_warehouse_override: allowManualWarehouseOverride,
+          notes: notes,
+          default_customer_id: typeof defaultCustomerId === "bigint" ? defaultCustomerId : undefined,
+        } as unknown as Prisma.cash_registersUncheckedCreateInput,
+        include,
       });
 
-      return mapRegisterToRecord(newRegister);
+      return mapRegisterToRecord(newRegister as unknown as CashRegisterWithWarehouse);
     });
   }
 
@@ -259,9 +385,8 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const normalizedCode = normalizeCode(cashRegisterCode);
 
-      const currentRegister = await tx.cash_registers.findUnique({
-        where: { code: normalizedCode },
-        include: {
+      const includeWithDefault = buildIncludeWithDefault(
+        {
           warehouses: {
             select: {
               id: true,
@@ -277,6 +402,12 @@ export class CashRegisterRepository implements ICashRegisterRepository {
             },
           },
         },
+        true
+      );
+
+      const currentRegister = await tx.cash_registers.findUnique({
+        where: { code: normalizedCode },
+        include: includeWithDefault,
       });
 
       if (!currentRegister) {
@@ -285,6 +416,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
 
       let targetWarehouseId = currentRegister.warehouse_id;
       let targetSequenceDefinitionId = currentRegister.invoice_sequence_definition_id;
+      let defaultCustomerUpdate: bigint | null | undefined = undefined;
 
       if (typeof input.warehouseCode === "string" && input.warehouseCode.trim().length > 0) {
         const normalizedInputWarehouseCode = normalizeCode(input.warehouseCode);
@@ -314,6 +446,19 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         }
       }
 
+      if (typeof input.defaultCustomerCode !== "undefined") {
+        if (input.defaultCustomerCode === null) {
+          defaultCustomerUpdate = null;
+        } else {
+          const trimmed = input.defaultCustomerCode.trim();
+          if (trimmed.length === 0) {
+            defaultCustomerUpdate = null;
+          } else {
+            defaultCustomerUpdate = await findCustomerIdByCode(tx, trimmed);
+          }
+        }
+      }
+
       const updatedRegister = await tx.cash_registers.update({
         where: { code: normalizedCode },
         data: {
@@ -323,33 +468,21 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           notes: input.notes?.trim() ? input.notes.trim().slice(0, 250) : null,
           warehouse_id: targetWarehouseId,
           invoice_sequence_definition_id: targetSequenceDefinitionId,
-        },
-        include: {
-          warehouses: {
-            select: {
-              id: true,
-              code: true,
-              name: true,
-            },
-          },
-          sequence_definitions: {
-            select: {
-              id: true,
-              code: true,
-              name: true,
-            },
-          },
-        },
+          default_customer_id:
+            typeof defaultCustomerUpdate === "undefined"
+              ? undefined
+              : defaultCustomerUpdate,
+        } as unknown as Prisma.cash_registersUncheckedUpdateInput,
+        include: includeWithDefault,
       });
 
-      return mapRegisterToRecord(updatedRegister);
+      return mapRegisterToRecord(updatedRegister as unknown as CashRegisterWithWarehouse);
     });
   }
 
   async getCashRegisterById(cashRegisterId: number): Promise<CashRegisterRecord | null> {
-    const register = await this.prisma.cash_registers.findUnique({
-      where: { id: Number(cashRegisterId) },
-      include: {
+    const include = buildIncludeWithDefault(
+      {
         warehouses: {
           select: {
             id: true,
@@ -365,33 +498,25 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           },
         },
       },
+      true
+    );
+
+    const register = await this.prisma.cash_registers.findUnique({
+      where: { id: Number(cashRegisterId) },
+      include,
     });
 
     if (!register || !register.warehouses) {
       return null;
     }
 
-    return mapRegisterToRecord({
-      id: register.id,
-      code: register.code,
-      name: register.name,
-      warehouse_id: register.warehouse_id,
-      allow_manual_warehouse_override: register.allow_manual_warehouse_override,
-      is_active: register.is_active,
-      notes: register.notes,
-      created_at: register.created_at,
-      updated_at: register.updated_at,
-      warehouses: register.warehouses,
-      invoice_sequence_definition_id: register.invoice_sequence_definition_id ?? null,
-      sequence_definitions: register.sequence_definitions ?? null,
-    });
+    return mapRegisterToRecord(register as unknown as CashRegisterWithWarehouse);
   }
 
   async getCashRegisterByCode(cashRegisterCode: string): Promise<CashRegisterRecord | null> {
     const normalizedCode = normalizeCode(cashRegisterCode);
-    const register = await this.prisma.cash_registers.findUnique({
-      where: { code: normalizedCode },
-      include: {
+    const include = buildIncludeWithDefault(
+      {
         warehouses: {
           select: {
             id: true,
@@ -407,26 +532,19 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           },
         },
       },
+      true
+    );
+
+    const register = await this.prisma.cash_registers.findUnique({
+      where: { code: normalizedCode },
+      include,
     });
 
     if (!register || !register.warehouses) {
       return null;
     }
 
-    return mapRegisterToRecord({
-      id: register.id,
-      code: register.code,
-      name: register.name,
-      warehouse_id: register.warehouse_id,
-      allow_manual_warehouse_override: register.allow_manual_warehouse_override,
-      is_active: register.is_active,
-      notes: register.notes,
-      created_at: register.created_at,
-      updated_at: register.updated_at,
-      warehouses: register.warehouses,
-      invoice_sequence_definition_id: register.invoice_sequence_definition_id ?? null,
-      sequence_definitions: register.sequence_definitions ?? null,
-    });
+    return mapRegisterToRecord(register as unknown as CashRegisterWithWarehouse);
   }
 
   async countActiveCashRegisters(): Promise<number> {
@@ -438,32 +556,58 @@ export class CashRegisterRepository implements ICashRegisterRepository {
   }
 
   async listCashRegistersForAdmin(adminUserId: number): Promise<CashRegisterAssignment[]> {
-    const assignments = await this.prisma.cash_register_users.findMany({
-      where: { admin_user_id: adminUserId, cash_registers: { is_active: true } }, // Filter active cash registers here
-      include: {
-        cash_registers: {
-          include: {
-            warehouses: {
-              select: { id: true, code: true, name: true },
-            },
-          },
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
+    const cashRegisterInclude = buildIncludeWithDefault(
+      {
+        warehouses: {
+          select: { id: true, code: true, name: true },
         },
       },
-      orderBy: [{ is_default: "desc" }, { cash_registers: { code: "asc" } }],
-    });
+      shouldIncludeDefault
+    );
 
-    return assignments
-      .filter((a: CashRegisterUserWithRelations) => a.cash_registers !== null && a.cash_registers.warehouses !== null)
-      .map((assignment: CashRegisterUserWithRelations) => ({
-        cashRegisterId: Number(assignment.cash_registers!.id),
-        cashRegisterCode: assignment.cash_registers!.code,
-        cashRegisterName: assignment.cash_registers!.name,
-        allowManualWarehouseOverride: assignment.cash_registers!.allow_manual_warehouse_override,
-        warehouseId: Number(assignment.cash_registers!.warehouses!.id),
-        warehouseCode: assignment.cash_registers!.warehouses!.code,
-        warehouseName: assignment.cash_registers!.warehouses!.name,
-        isDefault: assignment.is_default,
-      }));
+    try {
+      const assignments = await this.prisma.cash_register_users.findMany({
+        where: { admin_user_id: adminUserId, cash_registers: { is_active: true } },
+        include: {
+          cash_registers: {
+            include: cashRegisterInclude,
+          },
+        },
+        orderBy: [{ is_default: "desc" }, { cash_registers: { code: "asc" } }],
+      });
+
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
+      }
+
+      return assignments
+        .filter((a: CashRegisterUserWithRelations) => a.cash_registers !== null && a.cash_registers.warehouses !== null)
+        .map((assignment: CashRegisterUserWithRelations) => ({
+          cashRegisterId: Number(assignment.cash_registers!.id),
+          cashRegisterCode: assignment.cash_registers!.code,
+          cashRegisterName: assignment.cash_registers!.name,
+          allowManualWarehouseOverride: assignment.cash_registers!.allow_manual_warehouse_override,
+          warehouseId: Number(assignment.cash_registers!.warehouses!.id),
+          warehouseCode: assignment.cash_registers!.warehouses!.code,
+          warehouseName: assignment.cash_registers!.warehouses!.name,
+          isDefault: assignment.is_default,
+          defaultCustomer: assignment.cash_registers!.default_customer
+            ? {
+                id: Number(assignment.cash_registers!.default_customer!.id),
+                code: assignment.cash_registers!.default_customer!.code,
+                name: assignment.cash_registers!.default_customer!.name,
+                paymentTermCode: assignment.cash_registers!.default_customer!.payment_terms?.code ?? null,
+              }
+            : null,
+        }));
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.listCashRegistersForAdmin(adminUserId);
+      }
+      throw error;
+    }
   }
 
   async listCashRegisterAssignments(options: { adminUserIds?: number[] } = {}): Promise<CashRegisterAssignmentGroup[]> {
@@ -474,19 +618,39 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       whereClause.admin_user_id = { in: adminUserIds.map((id) => Number(id)) };
     }
 
-    const assignments = await this.prisma.cash_register_users.findMany({
-      where: { ...whereClause, cash_registers: { is_active: true } }, // Filter active cash registers here
-      include: {
-        cash_registers: {
-          include: {
-            warehouses: {
-              select: { id: true, code: true, name: true },
-            },
-          },
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
+    const cashRegisterInclude = buildIncludeWithDefault(
+      {
+        warehouses: {
+          select: { id: true, code: true, name: true },
         },
       },
-      orderBy: [{ admin_user_id: "asc" }, { is_default: "desc" }, { cash_registers: { code: "asc" } }],
-    });
+      shouldIncludeDefault
+    );
+
+    let assignments: CashRegisterUserWithRelations[];
+
+    try {
+      assignments = await this.prisma.cash_register_users.findMany({
+        where: { ...whereClause, cash_registers: { is_active: true } },
+        include: {
+          cash_registers: {
+            include: cashRegisterInclude,
+          },
+        },
+        orderBy: [{ admin_user_id: "asc" }, { is_default: "desc" }, { cash_registers: { code: "asc" } }],
+      });
+
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
+      }
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.listCashRegisterAssignments(options);
+      }
+      throw error;
+    }
 
     const grouped = new Map<number, CashRegisterAssignmentGroup>();
     for (const assignment of assignments) {
@@ -501,6 +665,14 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         warehouseCode: assignment.cash_registers.warehouses.code,
         warehouseName: assignment.cash_registers.warehouses.name,
         isDefault: assignment.is_default,
+        defaultCustomer: assignment.cash_registers.default_customer
+          ? {
+              id: Number(assignment.cash_registers.default_customer.id),
+              code: assignment.cash_registers.default_customer.code,
+              name: assignment.cash_registers.default_customer.name,
+              paymentTermCode: assignment.cash_registers.default_customer.payment_terms?.code ?? null,
+            }
+          : null,
       };
 
       const existing = grouped.get(Number(assignment.admin_user_id));
@@ -774,11 +946,11 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       const normalizedCode = normalizeCode(cashRegisterCode);
       let targetCashRegister: CashRegisterWithWarehouse | null = null;
       let isDefaultAssignment = false;
+      const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
 
       if (allowUnassigned) {
-        targetCashRegister = await tx.cash_registers.findFirst({
-          where: { code: normalizedCode, is_active: true },
-          include: {
+        const include = buildIncludeWithDefault(
+          {
             warehouses: {
               select: { id: true, code: true, name: true },
             },
@@ -786,25 +958,35 @@ export class CashRegisterRepository implements ICashRegisterRepository {
               select: { id: true, code: true, name: true },
             },
           },
+          shouldIncludeDefault
+        );
+
+        const register = await tx.cash_registers.findFirst({
+          where: { code: normalizedCode, is_active: true },
+          include,
         });
+        targetCashRegister = register ? (register as unknown as CashRegisterWithWarehouse) : null;
       } else {
         const assignment = await tx.cash_register_users.findFirst({
           where: { admin_user_id: adminUserId, cash_registers: { code: normalizedCode, is_active: true } },
           include: {
             cash_registers: {
-              include: {
-                warehouses: {
-                  select: { id: true, code: true, name: true },
+              include: buildIncludeWithDefault(
+                {
+                  warehouses: {
+                    select: { id: true, code: true, name: true },
+                  },
+                  sequence_definitions: {
+                    select: { id: true, code: true, name: true },
+                  },
                 },
-                sequence_definitions: {
-                  select: { id: true, code: true, name: true },
-                },
-              },
+                shouldIncludeDefault
+              ),
             },
           },
         });
         if (assignment) {
-          targetCashRegister = assignment.cash_registers;
+          targetCashRegister = assignment.cash_registers as unknown as CashRegisterWithWarehouse;
           isDefaultAssignment = assignment.is_default;
         }
       }
@@ -837,11 +1019,14 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         },
         include: {
           cash_registers: {
-            include: {
-              warehouses: {
-                select: { id: true, code: true, name: true },
+            include: buildIncludeWithDefault(
+              {
+                warehouses: {
+                  select: { id: true, code: true, name: true },
+                },
               },
-            },
+              shouldIncludeDefault
+            ),
           },
         },
       });
@@ -863,17 +1048,21 @@ export class CashRegisterRepository implements ICashRegisterRepository {
 
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       let sessionToClose: CashRegisterSessionWithRelations | null = null;
+      const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
 
       if (sessionId) {
         sessionToClose = await tx.cash_register_sessions.findUnique({
           where: { id: BigInt(sessionId) },
           include: {
             cash_registers: {
-              include: {
-                warehouses: {
-                  select: { id: true, code: true, name: true },
+              include: buildIncludeWithDefault(
+                {
+                  warehouses: {
+                    select: { id: true, code: true, name: true },
+                  },
                 },
-              },
+                shouldIncludeDefault
+              ),
             },
           },
         });
@@ -882,11 +1071,14 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           where: { admin_user_id: adminUserId, status: "OPEN" },
           include: {
             cash_registers: {
-              include: {
-                warehouses: {
-                  select: { id: true, code: true, name: true },
+              include: buildIncludeWithDefault(
+                {
+                  warehouses: {
+                    select: { id: true, code: true, name: true },
+                  },
                 },
-              },
+                shouldIncludeDefault
+              ),
             },
           },
           orderBy: { opening_at: "desc" },

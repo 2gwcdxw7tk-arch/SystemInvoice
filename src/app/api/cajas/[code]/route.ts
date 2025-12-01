@@ -26,6 +26,12 @@ const updateCashRegisterSchema = z
       .optional()
       .or(z.literal(""))
       .nullable(),
+    default_customer_code: z
+      .union([
+        z.string().trim().min(0).max(50),
+        z.null(),
+      ])
+      .optional(),
   })
   .refine(
     (data) =>
@@ -33,7 +39,8 @@ const updateCashRegisterSchema = z
       typeof data.warehouse_code !== "undefined" ||
       typeof data.allow_manual_warehouse_override !== "undefined" ||
       typeof data.is_active !== "undefined" ||
-      typeof data.notes !== "undefined",
+      typeof data.notes !== "undefined" ||
+      typeof data.default_customer_code !== "undefined",
     {
       message: "No hay cambios para aplicar",
       path: [],
@@ -69,6 +76,10 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       allowManualWarehouseOverride: data.allow_manual_warehouse_override,
       isActive: data.is_active,
       notes: data.notes != null && data.notes.trim().length > 0 ? data.notes.trim() : data.notes === null ? null : undefined,
+      defaultCustomerCode:
+        typeof data.default_customer_code === "string"
+          ? (data.default_customer_code.trim().length > 0 ? data.default_customer_code.trim().toUpperCase() : null)
+          : data.default_customer_code,
     });
     return NextResponse.json({ success: true, item });
   } catch (error) {

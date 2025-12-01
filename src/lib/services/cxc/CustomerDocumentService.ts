@@ -256,10 +256,15 @@ export class CustomerDocumentService {
         updatedAt: new Date().toISOString(),
       };
       mockCxcStore.documents[index] = updated;
+
+      if (env.features.retailModeEnabled && isDebitDocumentType(updated.documentType)) {
+        await customerCreditLineService.syncCustomerCreditUsageByCustomerId(updated.customerId);
+      }
+
       return cloneDocument(updated);
     }
 
-    return this.repo.update(id, {
+    const updated = await this.repo.update(id, {
       documentDate: typeof input.documentDate !== "undefined" ? input.documentDate : undefined,
       dueDate: typeof input.dueDate !== "undefined" ? input.dueDate : undefined,
       currencyCode: typeof input.currencyCode === "string" ? input.currencyCode : undefined,
@@ -275,6 +280,12 @@ export class CustomerDocumentService {
             ? null
             : undefined,
     });
+
+    if (env.features.retailModeEnabled && isDebitDocumentType(updated.documentType)) {
+      await customerCreditLineService.syncCustomerCreditUsageByCustomerId(updated.customerId);
+    }
+
+    return updated;
   }
 
   async adjustBalance(id: number, delta: number): Promise<CustomerDocumentDTO> {
@@ -290,10 +301,23 @@ export class CustomerDocumentService {
       mockCxcStore.documents[index].balanceAmount = Math.max(0, Number(updatedBalance.toFixed(2)));
       mockCxcStore.documents[index].status = mockCxcStore.documents[index].balanceAmount <= 0 ? "PAGADO" : mockCxcStore.documents[index].status;
       mockCxcStore.documents[index].updatedAt = new Date().toISOString();
-      return cloneDocument(mockCxcStore.documents[index]);
+
+      const updated = mockCxcStore.documents[index];
+
+      if (env.features.retailModeEnabled && isDebitDocumentType(updated.documentType)) {
+        await customerCreditLineService.syncCustomerCreditUsageByCustomerId(updated.customerId);
+      }
+
+      return cloneDocument(updated);
     }
 
-    return this.repo.adjustBalance(id, delta);
+    const updated = await this.repo.adjustBalance(id, delta);
+
+    if (env.features.retailModeEnabled && isDebitDocumentType(updated.documentType)) {
+      await customerCreditLineService.syncCustomerCreditUsageByCustomerId(updated.customerId);
+    }
+
+    return updated;
   }
 
   async setStatus(id: number, status: CustomerDocumentStatus): Promise<void> {
@@ -302,11 +326,25 @@ export class CustomerDocumentService {
       if (doc) {
         doc.status = status;
         doc.updatedAt = new Date().toISOString();
+
+        if (env.features.retailModeEnabled && isDebitDocumentType(doc.documentType)) {
+          await customerCreditLineService.syncCustomerCreditUsageByCustomerId(doc.customerId);
+        }
       }
       return;
     }
 
+    const target = await this.repo.findById(id);
+
+    if (!target) {
+      return;
+    }
+
     await this.repo.setStatus(id, status);
+
+    if (env.features.retailModeEnabled && isDebitDocumentType(target.documentType)) {
+      await customerCreditLineService.syncCustomerCreditUsageByCustomerId(target.customerId);
+    }
   }
 }
 

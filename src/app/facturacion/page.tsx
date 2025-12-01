@@ -147,6 +147,14 @@ type RetailPaymentTerm = {
   isActive: boolean;
 };
 
+type CashRegisterDefaultCustomer = {
+  id: number | string | null;
+  code: string;
+  name: string;
+  taxId: string | null;
+  paymentTermCode: string | null;
+};
+
 const addDaysToDate = (isoDate: string, days: number): string => {
   if (!isoDate) {
     const fallback = new Date();
@@ -218,14 +226,19 @@ function FacturacionHomeMenu({ allowPriceLists }: { allowPriceLists: boolean }) 
       icon: Receipt,
       highlight: "Manual",
     },
-    // Oculta 'con-pedido' si está en modo retail
-    ...(!isRetailMode ? [{
+  ];
+
+  if (!isRetailMode) {
+    cards.push({
       key: "con-pedido",
       title: "Facturación con pedido",
       description: "Convierte órdenes de mesas ocupadas en facturas listas para cobro y cierre.",
       icon: UtensilsCrossed,
       highlight: "Pedidos",
-    }] : []),
+    });
+  }
+
+  cards.push(
     {
       key: "historial",
       title: "Historial de facturas",
@@ -237,8 +250,8 @@ function FacturacionHomeMenu({ allowPriceLists }: { allowPriceLists: boolean }) 
       title: "Listas de precio",
       description: "Administra listas base, happy hour o convenios con clientes corporativos.",
       icon: Tags,
-    },
-  ];
+    }
+  );
 
   const visibleCards = allowPriceLists ? cards : cards.filter((card) => card.key !== "listas-precio");
 
@@ -1955,9 +1968,9 @@ function InvoicesHistory() {
                  value={p.reference || ""}
                  onChange={(e) => updatePayment(idx, { reference: e.target.value })}
                />
-             ) : (
-               <div className="hidden sm:block" aria-hidden="true" />
-             }
+            ) : (
+              <div className="hidden sm:block" aria-hidden="true" />
+            )}
             <div className="flex items-center justify-end gap-2">
               <Button
                 type="button"
@@ -2045,12 +2058,14 @@ function FacturacionWorkspace({
     cashRegisters: CashRegisterAssignmentOption[];
     defaultCashRegisterId: number | null;
     recentSessions: CashRegisterSessionSnapshot[];
+    defaultCustomer: CashRegisterDefaultCustomer | null;
   }>({
     loading: false,
     activeSession: null,
     cashRegisters: [],
     defaultCashRegisterId: null,
     recentSessions: [],
+    defaultCustomer: null,
   });
   const [cashSessionError, setCashSessionError] = useState<string | null>(null);
   const isRetailMode = publicFeatures.retailModeEnabled;
@@ -2066,15 +2081,25 @@ function FacturacionWorkspace({
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [paymentMode, setPaymentMode] = useState<"CONTADO" | "CREDITO">("CONTADO");
   const [selectedPaymentTermCode, setSelectedPaymentTermCode] = useState<string>("");
-  const customerOptions = useMemo<ComboboxOption<number>[]>(
-    () =>
-      retailCustomers.map((customer) => ({
-        value: customer.id,
-        label: `${customer.code} • ${customer.name}`,
-        description: `${customer.creditStatus === "ACTIVE" ? "Crédito activo" : customer.creditStatus === "ON_HOLD" ? "En revisión" : "Crédito bloqueado"} · Disponible: ${formatCurrency(customer.availableCredit, { currency: "local" })}`,
-      })),
-    [retailCustomers]
-  );
+  const [customerCodeInput, setCustomerCodeInput] = useState("");
+  const [customerNameInput, setCustomerNameInput] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [showCustomerModal, setShowCustomerModal] = useState(false);
+  const [customerNameEdited, setCustomerNameEdited] = useState(false);
+  const [customerTaxIdEdited, setCustomerTaxIdEdited] = useState(false);
+  const lastSelectedCustomerIdRef = useRef<number | null>(null);
+  const filteredCustomers = useMemo(() => {
+    const term = customerSearch.trim().toLowerCase();
+    if (term.length === 0) {
+      return retailCustomers;
+    }
+    return retailCustomers.filter((customer) => {
+      const codeMatch = customer.code.toLowerCase().includes(term);
+      const nameMatch = customer.name.toLowerCase().includes(term);
+      const taxMatch = (customer.taxId ?? "").toLowerCase().includes(term);
+      return codeMatch || nameMatch || taxMatch;
+    });
+  }, [customerSearch, retailCustomers]);
   const paymentTermOptions = useMemo<ComboboxOption<string>[]>(
     () =>
       paymentTerms.map((term) => {
@@ -2099,6 +2124,16 @@ function FacturacionWorkspace({
     () => paymentTerms.find((term) => term.code === selectedPaymentTermCode) ?? null,
     [paymentTerms, selectedPaymentTermCode]
   );
+  const selectedCustomerPaymentTermCode = selectedRetailCustomer?.paymentTermCode ?? null;
+  const selectedCustomerPaymentTerm = useMemo(() => {
+    if (!selectedCustomerPaymentTermCode) {
+      return null;
+    }
+    return paymentTerms.find((term) => term.code === selectedCustomerPaymentTermCode) ?? null;
+  }, [paymentTerms, selectedCustomerPaymentTermCode]);
+  const selectedCustomerAllowsCreditByTerm = selectedCustomerPaymentTerm
+    ? selectedCustomerPaymentTerm.days + selectedCustomerPaymentTerm.graceDays > 0
+    : false;
   const selectedPaymentTermTotalDays = (selectedPaymentTerm?.days ?? 0) + (selectedPaymentTerm?.graceDays ?? 0);
   const defaultCashTermCode = useMemo(() => {
     if (paymentTerms.length === 0) {
@@ -2139,13 +2174,42 @@ function FacturacionWorkspace({
       : retailCreditStatus === "ON_HOLD"
         ? "En revisión"
         : "Crédito bloqueado";
-  const allowCreditForCustomer = retailCreditLimit > 0 && retailCreditAvailable > 0 && retailCreditStatus === "ACTIVE";
+  const allowCreditForCustomer =
+    selectedCustomerAllowsCreditByTerm &&
+    retailCreditLimit > 0 &&
+    retailCreditAvailable > 0 &&
+    retailCreditStatus === "ACTIVE";
+  const sessionDefaultCustomer = useMemo(() => {
+    if (!retailManualFlow) {
+      return null;
+    }
+    return cashSessionState.defaultCustomer ?? null;
+  }, [cashSessionState.defaultCustomer, retailManualFlow]);
+  const isSessionDefaultCustomerSelected = useMemo(() => {
+    if (!sessionDefaultCustomer || !selectedRetailCustomer) {
+      return false;
+    }
+    if (typeof sessionDefaultCustomer.id === "number" && sessionDefaultCustomer.id === selectedRetailCustomer.id) {
+      return true;
+    }
+    const defaultCode = sessionDefaultCustomer.code.trim().toUpperCase();
+    return defaultCode.length > 0 && defaultCode === selectedRetailCustomer.code.toUpperCase();
+  }, [sessionDefaultCustomer, selectedRetailCustomer]);
+  const allowManualCustomerOverrides = isSessionDefaultCustomerSelected || !selectedRetailCustomer;
 
   useEffect(() => {
     if (vatRate === 0) {
       setApplyVAT(false);
     }
   }, [vatRate]);
+  useEffect(() => {
+    const currentId = selectedCustomerId ?? null;
+    if (lastSelectedCustomerIdRef.current !== currentId) {
+      lastSelectedCustomerIdRef.current = currentId;
+      setCustomerNameEdited(false);
+      setCustomerTaxIdEdited(false);
+    }
+  }, [selectedCustomerId]);
 
   useEffect(() => {
     if (serviceRate === 0) {
@@ -2178,36 +2242,78 @@ function FacturacionWorkspace({
       }
       return;
     }
+
     const exists = selectedCustomerId != null && retailCustomers.some((customer) => customer.id === selectedCustomerId);
-    if (!exists) {
-      setSelectedCustomerId(retailCustomers[0].id);
+    if (exists) {
+      return;
     }
-  }, [defaultCashTermCode, paymentMode, retailCustomers, retailManualFlow, selectedCustomerId, selectedPaymentTermCode]);
+
+    let preferredCustomerId: number | null = null;
+    if (sessionDefaultCustomer) {
+      if (typeof sessionDefaultCustomer.id === "number") {
+        const matchById = retailCustomers.find((customer) => customer.id === sessionDefaultCustomer.id) ?? null;
+        if (matchById) {
+          preferredCustomerId = matchById.id;
+        }
+      }
+      if (preferredCustomerId === null && sessionDefaultCustomer.code.length > 0) {
+        const matchByCode = retailCustomers.find(
+          (customer) => customer.code.toUpperCase() === sessionDefaultCustomer.code.toUpperCase()
+        );
+        if (matchByCode) {
+          preferredCustomerId = matchByCode.id;
+        }
+      }
+    }
+
+    if (preferredCustomerId != null) {
+      setSelectedCustomerId(preferredCustomerId);
+      return;
+    }
+
+    setSelectedCustomerId(retailCustomers[0].id);
+  }, [defaultCashTermCode, paymentMode, retailCustomers, retailManualFlow, selectedCustomerId, selectedPaymentTermCode, sessionDefaultCustomer]);
 
   useEffect(() => {
     if (!retailManualActive) {
       return;
     }
     if (selectedRetailCustomer) {
-      setCustomerName(selectedRetailCustomer.name);
-      setCustomerTaxId(selectedRetailCustomer.taxId ?? "");
+      if (!customerNameEdited) {
+        setCustomerName(selectedRetailCustomer.name);
+      }
+      if (!customerTaxIdEdited) {
+        setCustomerTaxId(selectedRetailCustomer.taxId ?? "");
+      }
     } else {
-      setCustomerName(DEFAULT_MANUAL_CUSTOMER_NAME);
-      setCustomerTaxId("");
+      if (!customerNameEdited) {
+        setCustomerName(DEFAULT_MANUAL_CUSTOMER_NAME);
+      }
+      if (!customerTaxIdEdited) {
+        setCustomerTaxId("");
+      }
     }
-  }, [retailManualActive, selectedRetailCustomer, setCustomerTaxId]);
+  }, [
+    customerNameEdited,
+    customerTaxIdEdited,
+    retailManualActive,
+    selectedRetailCustomer,
+  ]);
 
   // Sincronizar campos cuando cambia el cliente seleccionado (por id)
   useEffect(() => {
     if (!selectedCustomerId) return;
-    const found = retailCustomers.find(c => c.id === selectedCustomerId);
+    const found = retailCustomers.find((customer) => customer.id === selectedCustomerId);
     if (found) {
       setCustomerCodeInput(found.code);
       setCustomerNameInput(found.name);
-      setCustomerTaxId(found.taxId || "");
-      setSelectedPaymentTermCode(found.paymentTermCode || defaultCashTermCode);
+      if (found.paymentTermCode) {
+        setSelectedPaymentTermCode(found.paymentTermCode);
+      } else if (defaultCashTermCode) {
+        setSelectedPaymentTermCode(defaultCashTermCode);
+      }
     }
-  }, [selectedCustomerId, retailCustomers, defaultCashTermCode]);
+  }, [defaultCashTermCode, retailCustomers, selectedCustomerId]);
 
   useEffect(() => {
     if (!retailManualActive) {
@@ -2360,6 +2466,52 @@ function FacturacionWorkspace({
     void loadRetailPaymentTerms();
   }, [loadRetailPaymentTerms, paymentTermsLoading]);
 
+  const handleSelectCustomerModal = useCallback(
+    (customer: RetailCustomerRecord, closeModal = false) => {
+      setSelectedCustomerId(customer.id);
+      setCustomerCodeInput(customer.code);
+      setCustomerNameInput(customer.name);
+      setCustomerNameEdited(false);
+      setCustomerTaxIdEdited(false);
+      setCustomerName(customer.name);
+      setCustomerTaxId(customer.taxId ?? "");
+      if (customer.paymentTermCode) {
+        setSelectedPaymentTermCode(customer.paymentTermCode);
+      } else if (defaultCashTermCode) {
+        setSelectedPaymentTermCode(defaultCashTermCode);
+      }
+      if (closeModal) {
+        setShowCustomerModal(false);
+      }
+    },
+    [
+      defaultCashTermCode,
+      setSelectedCustomerId,
+      setCustomerCodeInput,
+      setCustomerNameInput,
+      setCustomerName,
+      setCustomerTaxId,
+      setSelectedPaymentTermCode,
+      setShowCustomerModal,
+      setCustomerNameEdited,
+      setCustomerTaxIdEdited,
+    ]
+  );
+  const handleManualCustomerNameChange = useCallback(
+    (value: string) => {
+      setCustomerName(value);
+      setCustomerNameEdited(true);
+    },
+    [setCustomerName, setCustomerNameEdited]
+  );
+  const handleManualCustomerTaxIdChange = useCallback(
+    (value: string) => {
+      setCustomerTaxId(value.toUpperCase());
+      setCustomerTaxIdEdited(true);
+    },
+    [setCustomerTaxId, setCustomerTaxIdEdited]
+  );
+
   useEffect(() => {
     if (!retailManualFlow) {
       return;
@@ -2392,20 +2544,135 @@ function FacturacionWorkspace({
         throw new Error(message);
       }
 
-      const assignments: CashRegisterAssignmentOption[] = Array.isArray(data?.cashRegisters) ? data.cashRegisters : [];
-      const recentSessions: CashRegisterSessionSnapshot[] = Array.isArray(data?.recentSessions) ? data.recentSessions : [];
+      const normalizeDefaultCustomer = (value: unknown): CashRegisterDefaultCustomer | null => {
+        if (!value || typeof value !== "object") {
+          return null;
+        }
+        const record = value as Record<string, unknown>;
+        const idSource = record.id ?? record.customerId ?? record.customer_id ?? null;
+        const id =
+          typeof idSource === "number" || typeof idSource === "string"
+            ? (idSource as number | string)
+            : null;
+        const resolveString = (keys: string[]): string => {
+          for (const key of keys) {
+            const candidate = record[key];
+            if (typeof candidate === "string" && candidate.trim().length > 0) {
+              return candidate.trim();
+            }
+          }
+          return "";
+        };
+
+        const code = resolveString(["code", "customerCode", "customer_code"]);
+        const name = resolveString(["name", "customerName", "customer_name"]);
+        const taxValue = resolveString(["taxId", "tax_id", "ruc", "nit"]);
+        const paymentTermValue = resolveString([
+          "paymentTermCode",
+          "payment_term_code",
+          "paymentTerm",
+          "payment_term",
+        ]);
+
+        if (!code && !name && id == null) {
+          return null;
+        }
+
+        const resolvedCode = code || (id != null ? String(id) : "");
+        const resolvedName = name || resolvedCode || DEFAULT_MANUAL_CUSTOMER_NAME;
+
+        return {
+          id,
+          code: resolvedCode,
+          name: resolvedName,
+          taxId: taxValue.length > 0 ? taxValue : null,
+          paymentTermCode: paymentTermValue.length > 0 ? paymentTermValue : null,
+        } satisfies CashRegisterDefaultCustomer;
+      };
+
+      const extractDefaultCustomer = (source: unknown): CashRegisterDefaultCustomer | null => {
+        if (!source || typeof source !== "object") {
+          return null;
+        }
+        const record = source as Record<string, unknown>;
+        const rawDefault =
+          record.defaultCustomer ??
+          record.default_customer ??
+          record.defaultClient ??
+          record.default_client ??
+          null;
+        return normalizeDefaultCustomer(rawDefault);
+      };
+
+      const rawAssignments = Array.isArray(data?.cashRegisters) ? data.cashRegisters : [];
+      const assignments: CashRegisterAssignmentOption[] = rawAssignments
+        .filter((entry: unknown): entry is CashRegisterAssignmentOption => !!entry && typeof entry === "object")
+        .map((entry: CashRegisterAssignmentOption) => entry);
+
+      const rawActiveSession = data?.activeSession;
+      const activeSession =
+        rawActiveSession && typeof rawActiveSession === "object"
+          ? (rawActiveSession as CashRegisterActiveSession)
+          : null;
+
+      const recentSessions: CashRegisterSessionSnapshot[] = Array.isArray(data?.recentSessions)
+        ? data.recentSessions
+        : [];
+
+      let defaultCustomer: CashRegisterDefaultCustomer | null = extractDefaultCustomer(
+        rawActiveSession && typeof rawActiveSession === "object"
+          ? (rawActiveSession as Record<string, unknown>).cashRegister ?? null
+          : null
+      );
+
+      if (!defaultCustomer) {
+        const defaultRegisterId =
+          typeof data?.defaultCashRegisterId === "number" ? data.defaultCashRegisterId : null;
+
+        const preferredAssignment =
+          (defaultRegisterId != null
+            ? rawAssignments.find((assignment: unknown) => {
+                if (!assignment || typeof assignment !== "object") {
+                  return false;
+                }
+                const record = assignment as Record<string, unknown>;
+                const idCandidate =
+                  typeof record.cashRegisterId === "number"
+                    ? record.cashRegisterId
+                    : typeof record.cash_register_id === "number"
+                      ? record.cash_register_id
+                      : null;
+                return idCandidate === defaultRegisterId;
+              })
+            : undefined) ??
+          rawAssignments.find((assignment: unknown) => {
+            if (!assignment || typeof assignment !== "object") {
+              return false;
+            }
+            const record = assignment as Record<string, unknown>;
+            return record.isDefault === true || record.is_default === true;
+          }) ??
+          null;
+
+        defaultCustomer = extractDefaultCustomer(preferredAssignment ?? rawAssignments[0]);
+      }
+
+      if (!defaultCustomer) {
+        defaultCustomer = normalizeDefaultCustomer(data?.defaultCustomer ?? data?.default_customer ?? null);
+      }
 
       setCashSessionState({
         loading: false,
-        activeSession: (data?.activeSession ?? null) as CashRegisterActiveSession | null,
+        activeSession,
         cashRegisters: assignments,
         defaultCashRegisterId: typeof data?.defaultCashRegisterId === "number" ? data.defaultCashRegisterId : null,
         recentSessions,
+        defaultCustomer,
       });
       setCashSessionError(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo obtener la información de la caja";
-      setCashSessionState((prev) => ({ ...prev, loading: false, activeSession: null }));
+      setCashSessionState((prev) => ({ ...prev, loading: false, activeSession: null, defaultCustomer: null }));
       setCashSessionError(message);
       toast({
         variant: mustHaveOpenCashSession ? "error" : "warning",
@@ -2426,6 +2693,8 @@ function FacturacionWorkspace({
   const hasCashAssignments = cashSessionState.cashRegisters.length > 0;
 
   const [cashWarningModalOpen, setCashWarningModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const settingDefaultBusyRef = useRef(false);
 
   useEffect(() => {
     if (!canManageCashRegisters) {
@@ -3217,7 +3486,7 @@ function FacturacionWorkspace({
       });
       return false;
     }
-  }, [mode, refreshOrders, selectedOrder, serviceRate, toast]);
+  }, [mode, refreshOrders, selectedOrder, serviceRate, toast, vatRate]);
 
    useEffect(() => {
      // sincroniza monto recibido con suma de pagos
@@ -3253,14 +3522,16 @@ function FacturacionWorkspace({
     setServiceEnabled(serviceRate > 0);
     setApplyVAT(vatRate > 0);
     setCustomerName(mode === "sin-pedido" ? DEFAULT_MANUAL_CUSTOMER_NAME : "");
+    setCustomerNameEdited(false);
     setCustomerTaxId("");
+    setCustomerTaxIdEdited(false);
     setAddItemModalOpen(false);
     if (retailManualFlow) {
       setSelectedCustomerId(retailCustomers.length > 0 ? retailCustomers[0].id : null);
       setPaymentMode("CONTADO");
       setSelectedPaymentTermCode(defaultCashTermCode);
     }
-  }, [defaultCashTermCode, draftInvoice.items, mode, priceLists, retailManualFlow, retailCustomers, serviceRate, vatRate]);
+  }, [defaultCashTermCode, defaultPriceListCode, mode, priceLists, retailManualFlow, retailCustomers, serviceRate, vatRate]);
 
   type SaveInvoiceResult = { id: number | null; invoiceNumber: string | null };
 
@@ -3341,9 +3612,17 @@ function FacturacionWorkspace({
     };
 
     if (retailManualActive && selectedRetailCustomer) {
+      const overrideName = customerName.trim();
+      const overrideTaxId = customerTaxId.trim();
+      const resolvedInvoiceName = allowManualCustomerOverrides && overrideName.length > 0
+        ? overrideName
+        : selectedRetailCustomer.name;
+      const resolvedInvoiceTaxId = allowManualCustomerOverrides
+        ? (overrideTaxId.length > 0 ? overrideTaxId : selectedRetailCustomer.taxId ?? null)
+        : selectedRetailCustomer.taxId ?? null;
       Object.assign(payload, {
-        customer_name: selectedRetailCustomer.name,
-        customer_tax_id: selectedRetailCustomer.taxId ?? null,
+        customer_name: resolvedInvoiceName,
+        customer_tax_id: resolvedInvoiceTaxId,
         customer_code: selectedRetailCustomer.code,
         customer_id: selectedRetailCustomer.id,
         sale_type: paymentMode,
@@ -3517,7 +3796,9 @@ function FacturacionWorkspace({
       setServiceEnabled(serviceRate > 0);
       setApplyVAT(vatRate > 0);
       setCustomerName("");
+      setCustomerNameEdited(false);
       setCustomerTaxId("");
+      setCustomerTaxIdEdited(false);
       setAddItemModalOpen(false);
     }
   };
@@ -3584,278 +3865,31 @@ function FacturacionWorkspace({
              </div>
            ) : null}
          </div>
-          {isRetailMode ? (
-            <div className="rounded-3xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-50">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <span>Modo Retail activo: el cliente es obligatorio y puedes planear ventas a crédito desde esta pantalla.</span>
-                <span className="text-xs font-semibold uppercase tracking-wide">NEXT_PUBLIC_ES_RESTAURANTE = false</span>
-              </div>
-            </div>
-          ) : null}
-
-
           {retailManualActive ? (
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr),minmax(0,0.9fr)]">
-              <div className="space-y-3 rounded-3xl border border-primary/30 bg-primary/5 p-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-end">
-                  <div className="flex-1">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <Label className="text-xs uppercase text-muted-foreground">Código cliente</Label>
-                        <Input
-                          value={customerCodeInput || ""}
-                          onChange={e => setCustomerCodeInput(e.target.value.toUpperCase())}
-                          onKeyDown={async (e) => {
-                            if (e.key === "Enter" && customerCodeInput.trim()) {
-                              const found = retailCustomers.find(c => c.code.toUpperCase() === customerCodeInput.trim().toUpperCase());
-                              if (found) {
-                                setSelectedCustomerId(found.id);
-                                setCustomerName(found.name);
-                                setCustomerTaxId(found.taxId || "");
-                                // Asignar condición de pago asociada
-                                if (found.paymentTermCode) setSelectedPaymentTermCode(found.paymentTermCode);
-                                else setSelectedPaymentTermCode(defaultCashTermCode);
-                              } else {
-                                setShowCustomerModal(true);
-                              }
-                            }
-                          }}
-                          onDoubleClick={() => setShowCustomerModal(true)}
-                          placeholder="Ej: CLI-001"
-                          className="rounded-2xl"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs uppercase text-muted-foreground">Nombre cliente</Label>
-                        <Input
-                          value={customerNameInput || ""}
-                          onChange={e => setCustomerNameInput(e.target.value)}
-                          onKeyDown={async (e) => {
-                            if (e.key === "Enter" && customerNameInput.trim()) {
-                              const found = retailCustomers.find(c => c.name.toLowerCase() === customerNameInput.trim().toLowerCase());
-                              if (found) {
-                                setSelectedCustomerId(found.id);
-                                setCustomerCodeInput(found.code);
-                                setCustomerTaxId(found.taxId || "");
-                                if (found.paymentTermCode) setSelectedPaymentTermCode(found.paymentTermCode);
-                                else setSelectedPaymentTermCode(defaultCashTermCode);
-                              } else {
-                                setShowCustomerModal(true);
-                              }
-                            }
-                          }}
-                          onDoubleClick={() => setShowCustomerModal(true)}
-                          placeholder="Nombre o razón social"
-                          className="rounded-2xl"
-                        />
-                      </div>
-                    </div>
-                    {retailCustomersLoading ? (
-                      <p className="mt-1 text-[11px] text-muted-foreground">Cargando clientes…</p>
-                    ) : null}
-                    {retailCustomersError ? (
-                      <div className="mt-1 flex items-center gap-2 text-[11px] text-destructive">
-                        <span>{retailCustomersError}</span>
-                        <button
-                          type="button"
-                          onClick={handleRetryRetailCustomers}
-                          className="font-semibold underline"
-                        >
-                          Reintentar
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                  <Button type="button" variant="outline" className="rounded-2xl md:w-fit" asChild>
-                    <Link href={"/cuentas-por-cobrar" as Route}>Gestionar clientes</Link>
-                  </Button>
-                </div>
-                {selectedRetailCustomer ? (
-                  <div className="rounded-2xl border border-primary/20 bg-background/90 p-3 text-xs text-muted-foreground">
-                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <span className="font-semibold text-foreground">
-                        {selectedRetailCustomer.code} • {selectedRetailCustomer.name}
-                      </span>
-                      <span className={cn("text-[11px] font-semibold uppercase", retailCreditStatusTone)}>
-                        {retailCreditStatusLabel}
-                      </span>
-                    </div>
-                    <div className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
-                      <span>RUC/NIT: <strong>{selectedRetailCustomer.taxId ?? "—"}</strong></span>
-                      <span>Límite: <strong>{formatCurrency(retailCreditLimit, { currency: "local" })}</strong></span>
-                      <span>En uso: <strong>{formatCurrency(retailCreditUsed, { currency: "local" })}</strong></span>
-                      <span>Retenido: <strong>{formatCurrency(retailCreditHold, { currency: "local" })}</strong></span>
-                      <span>
-                        Disponible:
-                        <strong className={cn("ml-1", retailCreditAlert ? "text-amber-600" : "text-emerald-600")}> 
-                          {formatCurrency(retailCreditAvailable, { currency: "local" })}
-                        </strong>
-                      </span>
-                      <span>Uso actual: {(retailCreditUsage * 100).toFixed(0)}%</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-muted bg-muted/10 p-4 text-xs text-muted-foreground">
-                    Selecciona un cliente para continuar. Estos datos se sincronizarán con el módulo de Cuentas por Cobrar.
-                  </div>
-                )}
-                <Modal
-                  open={showCustomerModal}
-                  onClose={() => setShowCustomerModal(false)}
-                  title="Buscar cliente"
-                  description="Busca y selecciona un cliente para la factura."
-                  contentClassName="max-w-4xl"
-                >
-                  <div className="space-y-4">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-                      <div className="flex-1 space-y-1">
-                        <Label htmlFor="customer-search" className="text-xs uppercase text-muted-foreground">Buscar cliente</Label>
-                        <Input
-                          id="customer-search"
-                          autoFocus
-                          placeholder="Filtrar por código, nombre o RUC/NIT"
-                          value={customerSearch}
-                          onChange={e => setCustomerSearch(e.target.value)}
-                          className="rounded-2xl"
-                        />
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-muted bg-background/90">
-                      <div className="max-h-72 overflow-y-auto">
-                        <table className="min-w-full table-auto text-left text-sm text-foreground">
-                          <thead className="border-b text-xs uppercase text-muted-foreground">
-                            <tr>
-                              <th className="px-4 py-2 font-medium">Código</th>
-                              <th className="px-4 py-2 font-medium">Nombre</th>
-                              <th className="px-4 py-2 font-medium">RUC/NIT</th>
-                              <th className="px-4 py-2 font-medium">Cond. pago</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y">
-                            {filteredCustomers.length > 0 ? (
-                              filteredCustomers.map((c) => (
-                                <tr
-                                  key={c.id}
-                                  tabIndex={0}
-                                  role="button"
-                                  aria-pressed={selectedCustomerId === c.id}
-                                  className={cn(
-                                    "cursor-pointer align-top border-l-2 border-transparent transition hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-                                    selectedCustomerId === c.id ? "border-primary bg-primary/10" : ""
-                                  )}
-                                  onClick={() => handleSelectCustomerModal(c)}
-                                  onFocus={() => handleSelectCustomerModal(c)}
-                                  onDoubleClick={() => handleSelectCustomerModal(c, true)}
-                                  onKeyDown={event => {
-                                    if (event.key === "Enter" || event.key === " ") {
-                                      event.preventDefault();
-                                      handleSelectCustomerModal(c, true);
-                                    }
-                                  }}
-                                >
-                                  <td className="px-4 py-2 font-mono text-xs text-muted-foreground">{c.code}</td>
-                                  <td className="px-4 py-2">{c.name}</td>
-                                  <td className="px-4 py-2">{c.taxId ?? "—"}</td>
-                                  <td className="px-4 py-2">{c.paymentTermCode ?? "CONTADO"}</td>
-                                </tr>
-                              ))
-                            ) : (
-                              <tr>
-                                <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
-                                  No se encontraron clientes con los filtros aplicados.
-                                </td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                    <div className="flex flex-col gap-3 border-t border-muted pt-4 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="text-xs text-muted-foreground">
-                        {selectedCustomerId ? (
-                          <span>
-                            Seleccionado: <strong>{customerCodeInput}</strong> • {customerNameInput}. Doble clic o Enter para confirmar.
-                          </span>
-                        ) : (
-                          <span>Selecciona un cliente de la tabla y presiona Enter o doble clic para agregarlo.</span>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setShowCustomerModal(false)}>Cancelar</Button>
-                      </div>
-                    </div>
-                  </div>
-                </Modal>
-              </div>
-
-              <div className="space-y-3 rounded-3xl border border-muted bg-background/90 p-4">
-                <div className="space-y-1">
-                  <Label className="text-xs uppercase text-muted-foreground">Fecha de emisión</Label>
-                  <DatePicker value={invoiceDate} onChange={setInvoiceDate} className="w-full" />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs uppercase text-muted-foreground">Condición de pago</Label>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant={paymentMode === "CONTADO" ? "default" : "outline"}
-                      className="rounded-2xl"
-                      onClick={() => setPaymentMode("CONTADO")}
-                    >
-                      Contado
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={paymentMode === "CREDITO" ? "default" : "outline"}
-                      className="rounded-2xl"
-                      disabled={!allowCreditForCustomer || paymentTerms.length === 0}
-                      onClick={() => setPaymentMode("CREDITO")}
-                    >
-                      Crédito
-                    </Button>
-                  </div>
+            <div className="flex flex-col gap-3 rounded-3xl border border-primary/30 bg-primary/5 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-col">
+                  <span className="text-xs uppercase text-muted-foreground">Cliente</span>
+                  <span className="text-sm font-medium">
+                    {selectedRetailCustomer ? `${selectedRetailCustomer.code} • ${selectedRetailCustomer.name}` : "Sin cliente"}
+                  </span>
                   {paymentMode === "CREDITO" ? (
-                    <>
-                      <Combobox<string>
-                        value={selectedPaymentTermCode}
-                        onChange={(value) => setSelectedPaymentTermCode(value)}
-                        options={paymentTermOptions}
-                        placeholder="Selecciona plazo"
-                        label="Plazo"
-                        ariaLabel="Seleccionar condición de pago"
-                        disabled={paymentTermsLoading || paymentTerms.length === 0}
-                      />
-                      {paymentTermsLoading ? (
-                        <p className="mt-1 text-[11px] text-muted-foreground">Cargando condiciones de pago…</p>
-                      ) : null}
-                      {paymentTermsError ? (
-                        <div className="mt-1 flex items-center gap-2 text-[11px] text-destructive">
-                          <span>{paymentTermsError}</span>
-                          <button
-                            type="button"
-                            onClick={handleRetryPaymentTerms}
-                            className="font-semibold underline"
-                          >
-                            Reintentar
-                          </button>
-                        </div>
-                      ) : null}
-                      {!paymentTermsLoading && !paymentTermsError && paymentTerms.length === 0 ? (
-                        <p className="mt-1 text-[11px] text-muted-foreground">Sin condiciones de pago disponibles.</p>
-                      ) : null}
-                      <div className="rounded-2xl bg-muted/30 p-3 text-xs text-muted-foreground">
-                        <div className="flex items-center justify-between text-sm text-foreground">
-                          <span>Fecha de vencimiento</span>
-                          <span className="font-semibold">{retailDueDateLabel}</span>
-                        </div>
-                        <p className="mt-1">{selectedPaymentTerm?.description}</p>
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">El saldo se liquida al momento.</p>
-                  )}
+                    <span className="text-[11px] text-muted-foreground">Vence: {retailDueDateLabel}</span>
+                  ) : null}
                 </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-2xl"
+                  onClick={() => setSettingsModalOpen(true)}
+                >
+                  Ajustes
+                </Button>
               </div>
+              {!selectedRetailCustomer ? (
+                <p className="text-[11px] text-muted-foreground">Usa Ajustes para elegir cliente y condición de pago.</p>
+              ) : null}
             </div>
           ) : (
             <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
@@ -3886,6 +3920,385 @@ function FacturacionWorkspace({
             </div>
           )}
        </header>
+
+      {/* Modal de ajustes para flujo retail sin-pedido */}
+      {retailManualActive ? (
+        <Modal
+          open={settingsModalOpen}
+          onClose={() => setSettingsModalOpen(false)}
+          title="Ajustes de factura retail"
+          description="Cliente, condición de pago y datos para la factura"
+          contentClassName="max-w-5xl"
+        >
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr),minmax(0,0.9fr)]">
+            <div className="space-y-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                <div className="flex-1">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs uppercase text-muted-foreground">Código cliente</Label>
+                      <Input
+                        value={customerCodeInput || ""}
+                        onChange={e => setCustomerCodeInput(e.target.value.toUpperCase())}
+                        onKeyDown={async (e) => {
+                          if (e.key === "Enter" && customerCodeInput.trim()) {
+                            const found = retailCustomers.find(c => c.code.toUpperCase() === customerCodeInput.trim().toUpperCase());
+                            if (found) {
+                              handleSelectCustomerModal(found);
+                            } else {
+                              setShowCustomerModal(true);
+                            }
+                          }
+                        }}
+                        onDoubleClick={() => setShowCustomerModal(true)}
+                        placeholder="Ej: CLI-001"
+                        className="rounded-2xl"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs uppercase text-muted-foreground">Nombre cliente</Label>
+                      <Input
+                        value={customerNameInput || ""}
+                        onChange={e => setCustomerNameInput(e.target.value)}
+                        onKeyDown={async (e) => {
+                          if (e.key === "Enter" && customerNameInput.trim()) {
+                            const found = retailCustomers.find(c => c.name.toLowerCase() === customerNameInput.trim().toLowerCase());
+                            if (found) {
+                              handleSelectCustomerModal(found);
+                            } else {
+                              setShowCustomerModal(true);
+                            }
+                          }
+                        }}
+                        onDoubleClick={() => setShowCustomerModal(true)}
+                        placeholder="Nombre o razón social"
+                        className="rounded-2xl"
+                      />
+                    </div>
+                  </div>
+                  {retailCustomersLoading ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">Cargando clientes…</p>
+                  ) : null}
+                  {retailCustomersError ? (
+                    <div className="mt-1 flex items-center gap-2 text-[11px] text-destructive">
+                      <span>{retailCustomersError}</span>
+                      <button
+                        type="button"
+                        onClick={handleRetryRetailCustomers}
+                        className="font-semibold underline"
+                      >
+                        Reintentar
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <Button type="button" variant="outline" className="rounded-2xl md:w-fit" asChild>
+                  <Link href={"/cuentas-por-cobrar" as Route}>Gestionar clientes</Link>
+                </Button>
+              </div>
+              {selectedRetailCustomer ? (
+                <div className="rounded-2xl border border-primary/20 bg-background/90 p-3 text-xs text-muted-foreground">
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="font-semibold text-foreground">
+                      {selectedRetailCustomer.code} • {selectedRetailCustomer.name}
+                    </span>
+                    <span className={cn("text-[11px] font-semibold uppercase", retailCreditStatusTone)}>
+                      {retailCreditStatusLabel}
+                    </span>
+                  </div>
+                  <div className="mt-2 grid gap-1 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
+                    <span>RUC/NIT: <strong>{selectedRetailCustomer.taxId ?? "—"}</strong></span>
+                    <span>Límite: <strong>{formatCurrency(retailCreditLimit, { currency: "local" })}</strong></span>
+                    <span>En uso: <strong>{formatCurrency(retailCreditUsed, { currency: "local" })}</strong></span>
+                    <span>Retenido: <strong>{formatCurrency(retailCreditHold, { currency: "local" })}</strong></span>
+                    <span>
+                      Disponible:
+                      <strong className={cn("ml-1", retailCreditAlert ? "text-amber-600" : "text-emerald-600")}> 
+                        {formatCurrency(retailCreditAvailable, { currency: "local" })}
+                      </strong>
+                    </span>
+                    <span>Uso actual: {(retailCreditUsage * 100).toFixed(0)}%</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-muted bg-muted/10 p-4 text-xs text-muted-foreground">
+                  Selecciona un cliente para continuar. Estos datos se sincronizarán con el módulo de Cuentas por Cobrar.
+                </div>
+              )}
+              <div className="rounded-2xl border border-muted bg-background/90 p-3">
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-semibold uppercase text-muted-foreground">Datos para la factura</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {allowManualCustomerOverrides
+                      ? "Modifica estos campos para ventas de mostrador sin registrar un nuevo cliente."
+                      : "Solo se pueden editar cuando utilizas el cliente mostrador asignado a la caja."}
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="retail-manual-invoice-name" className="text-xs uppercase text-muted-foreground">Nombre en factura</Label>
+                    <Input
+                      id="retail-manual-invoice-name"
+                      value={customerName}
+                      onChange={(event) => handleManualCustomerNameChange(event.target.value)}
+                      placeholder={DEFAULT_MANUAL_CUSTOMER_NAME}
+                      disabled={!allowManualCustomerOverrides}
+                      className="rounded-2xl"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="retail-manual-invoice-tax" className="text-xs uppercase text-muted-foreground">RUC / NIT en factura</Label>
+                    <Input
+                      id="retail-manual-invoice-tax"
+                      value={customerTaxId}
+                      onChange={(event) => handleManualCustomerTaxIdChange(event.target.value)}
+                      placeholder="Identificador fiscal (opcional)"
+                      disabled={!allowManualCustomerOverrides}
+                      className="rounded-2xl"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {canManageCashRegisters && cashSessionState.activeSession ? (
+                <div className="rounded-2xl border border-dashed border-muted bg-muted/10 p-3">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs uppercase text-muted-foreground">Cliente predeterminado de la caja</span>
+                    <span className="text-[11px] text-muted-foreground">Caja activa: {cashSessionState.activeSession.cashRegister.cashRegisterName} ({cashSessionState.activeSession.cashRegister.cashRegisterCode})</span>
+                  </div>
+                  <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-sm">
+                      <span className="text-muted-foreground">Actual: </span>
+                      <span className="font-semibold text-foreground">
+                        {sessionDefaultCustomer ? `${sessionDefaultCustomer.code} • ${sessionDefaultCustomer.name}` : "Sin cliente"}
+                      </span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="rounded-2xl"
+                        disabled={!selectedRetailCustomer || cashSessionState.loading}
+                        onClick={async () => {
+                          if (!selectedRetailCustomer || !cashSessionState.activeSession) return;
+                          if (settingDefaultBusyRef.current) return;
+                          try {
+                            settingDefaultBusyRef.current = true;
+                            const code = cashSessionState.activeSession.cashRegister.cashRegisterCode;
+                            const res = await fetch(`/api/cajas/${encodeURIComponent(code)}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ default_customer_code: selectedRetailCustomer.code }),
+                            });
+                            if (!res.ok) throw new Error(await res.text());
+                            toast({ variant: "success", title: "Caja", description: "Cliente predeterminado actualizado." });
+                            await loadCashSession();
+                          } catch (error) {
+                            console.error("No se pudo actualizar cliente predeterminado", error);
+                            toast({ variant: "error", title: "Caja", description: "No se pudo actualizar el cliente predeterminado." });
+                          } finally {
+                            settingDefaultBusyRef.current = false;
+                          }
+                        }}
+                      >
+                        Usar seleccionado
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="rounded-2xl"
+                        disabled={!sessionDefaultCustomer || cashSessionState.loading}
+                        onClick={async () => {
+                          if (!cashSessionState.activeSession) return;
+                          if (settingDefaultBusyRef.current) return;
+                          try {
+                            settingDefaultBusyRef.current = true;
+                            const code = cashSessionState.activeSession.cashRegister.cashRegisterCode;
+                            const res = await fetch(`/api/cajas/${encodeURIComponent(code)}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ default_customer_code: null }),
+                            });
+                            if (!res.ok) throw new Error(await res.text());
+                            toast({ variant: "success", title: "Caja", description: "Cliente predeterminado removido." });
+                            await loadCashSession();
+                          } catch (error) {
+                            console.error("No se pudo remover cliente predeterminado", error);
+                            toast({ variant: "error", title: "Caja", description: "No se pudo remover el cliente predeterminado." });
+                          } finally {
+                            settingDefaultBusyRef.current = false;
+                          }
+                        }}
+                      >
+                        Quitar predeterminado
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              <Modal
+                open={showCustomerModal}
+                onClose={() => setShowCustomerModal(false)}
+                title="Buscar cliente"
+                description="Busca y selecciona un cliente para la factura."
+                contentClassName="max-w-4xl"
+              >
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                    <div className="flex-1 space-y-1">
+                      <Label htmlFor="customer-search" className="text-xs uppercase text-muted-foreground">Buscar cliente</Label>
+                      <Input
+                        id="customer-search"
+                        autoFocus
+                        placeholder="Filtrar por código, nombre o RUC/NIT"
+                        value={customerSearch}
+                        onChange={e => setCustomerSearch(e.target.value)}
+                        className="rounded-2xl"
+                      />
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-muted bg-background/90">
+                    <div className="max-h-72 overflow-y-auto">
+                      <table className="min-w-full table-auto text-left text-sm text-foreground">
+                        <thead className="border-b text-xs uppercase text-muted-foreground">
+                          <tr>
+                            <th className="px-4 py-2 font-medium">Código</th>
+                            <th className="px-4 py-2 font-medium">Nombre</th>
+                            <th className="px-4 py-2 font-medium">RUC/NIT</th>
+                            <th className="px-4 py-2 font-medium">Cond. pago</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {filteredCustomers.length > 0 ? (
+                            filteredCustomers.map((c) => (
+                              <tr
+                                key={c.id}
+                                tabIndex={0}
+                                role="button"
+                                aria-pressed={selectedCustomerId === c.id}
+                                className={cn(
+                                  "cursor-pointer align-top border-l-2 border-transparent transition hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+                                  selectedCustomerId === c.id ? "border-primary bg-primary/10" : ""
+                                )}
+                                onClick={() => handleSelectCustomerModal(c)}
+                                onFocus={() => handleSelectCustomerModal(c)}
+                                onDoubleClick={() => handleSelectCustomerModal(c, true)}
+                                onKeyDown={event => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    handleSelectCustomerModal(c, true);
+                                  }
+                                }}
+                              >
+                                <td className="px-4 py-2 font-mono text-xs text-muted-foreground">{c.code}</td>
+                                <td className="px-4 py-2">{c.name}</td>
+                                <td className="px-4 py-2">{c.taxId ?? "—"}</td>
+                                <td className="px-4 py-2">{c.paymentTermCode ?? "CONTADO"}</td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                                No se encontraron clientes con los filtros aplicados.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-3 border-t border-muted pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-xs text-muted-foreground">
+                      {selectedCustomerId ? (
+                        <span>
+                          Seleccionado: <strong>{customerCodeInput}</strong> • {customerNameInput}. Doble clic o Enter para confirmar.
+                        </span>
+                      ) : (
+                        <span>Selecciona un cliente de la tabla y presiona Enter o doble clic para agregarlo.</span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setShowCustomerModal(false)}>Cancelar</Button>
+                    </div>
+                  </div>
+                </div>
+              </Modal>
+            </div>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Fecha de emisión</Label>
+                <DatePicker value={invoiceDate} onChange={setInvoiceDate} className="w-full" />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs uppercase text-muted-foreground">Condición de pago</Label>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant={paymentMode === "CONTADO" ? "default" : "outline"}
+                    className="rounded-2xl"
+                    onClick={() => setPaymentMode("CONTADO")}
+                  >
+                    Contado
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={paymentMode === "CREDITO" ? "default" : "outline"}
+                    className="rounded-2xl"
+                    disabled={!allowCreditForCustomer || paymentTerms.length === 0}
+                    onClick={() => setPaymentMode("CREDITO")}
+                  >
+                    Crédito
+                  </Button>
+                </div>
+                {paymentMode === "CREDITO" ? (
+                  <>
+                    <Combobox<string>
+                      value={selectedPaymentTermCode}
+                      onChange={(value) => setSelectedPaymentTermCode(value)}
+                      options={paymentTermOptions}
+                      placeholder="Selecciona plazo"
+                      label="Plazo"
+                      ariaLabel="Seleccionar condición de pago"
+                      disabled={paymentTermsLoading || paymentTerms.length === 0}
+                    />
+                    {paymentTermsLoading ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground">Cargando condiciones de pago…</p>
+                    ) : null}
+                    {paymentTermsError ? (
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-destructive">
+                        <span>{paymentTermsError}</span>
+                        <button
+                          type="button"
+                          onClick={handleRetryPaymentTerms}
+                          className="font-semibold underline"
+                        >
+                          Reintentar
+                        </button>
+                      </div>
+                    ) : null}
+                    {!paymentTermsLoading && !paymentTermsError && paymentTerms.length === 0 ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground">Sin condiciones de pago disponibles.</p>
+                    ) : null}
+                    <div className="rounded-2xl bg-muted/30 p-3 text-xs text-muted-foreground">
+                      <div className="flex items-center justify-between text-sm text-foreground">
+                        <span>Fecha de vencimiento</span>
+                        <span className="font-semibold">{retailDueDateLabel}</span>
+                      </div>
+                      <p className="mt-1">{selectedPaymentTerm?.description}</p>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">El saldo se liquida al momento.</p>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="mt-6 flex justify-end">
+            <Button type="button" variant="outline" className="rounded-2xl mr-2" onClick={() => setSettingsModalOpen(false)}>Cerrar</Button>
+            <Button type="button" className="rounded-2xl" onClick={() => setSettingsModalOpen(false)}>Aplicar</Button>
+          </div>
+        </Modal>
+      ) : null}
 
         <div className="grid gap-6 xl:grid-cols-[1.7fr,1fr] xl:items-stretch xl:min-h-[calc(100vh-310px)]">
           <Card className="min-w-0 flex h-full flex-col overflow-hidden rounded-3xl border bg-background/95 shadow-sm xl:h-full">
