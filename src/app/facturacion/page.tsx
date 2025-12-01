@@ -138,6 +138,20 @@ type RetailCustomerRecord = {
   creditStatus: "ACTIVE" | "ON_HOLD" | "BLOCKED";
 };
 
+// Tipo mínimo requerido para validar un registro de cliente desde la API
+type RetailCustomerApiEntry = {
+  id: number;
+  code: string;
+  name: string;
+  taxId?: string | null;
+  paymentTermCode?: string | null;
+  creditLimit?: number;
+  creditUsed?: number;
+  creditOnHold?: number;
+  availableCredit?: number;
+  creditStatus?: "ACTIVE" | "ON_HOLD" | "BLOCKED";
+};
+
 type RetailPaymentTerm = {
   code: string;
   name: string;
@@ -2279,7 +2293,7 @@ function FacturacionWorkspace({
 
       const items: unknown[] = Array.isArray(payload?.items) ? payload.items : [];
       const normalized: RetailCustomerRecord[] = items
-        .filter((entry: unknown): entry is Partial<RetailCustomerRecord> & { id: number; code: string; name: string } => {
+        .filter((entry: unknown): entry is RetailCustomerApiEntry => {
           if (!entry || typeof entry !== "object") {
             return false;
           }
