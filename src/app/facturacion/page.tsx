@@ -212,7 +212,7 @@ function FacturacionHomeMenu({ allowPriceLists }: { allowPriceLists: boolean }) 
   const isRetailMode = publicFeatures.retailModeEnabled;
   const cards: Array<{ key: FacturacionMode; title: string; description: string; icon: LucideIcon; highlight?: string }> = [
     {
-      key: "sin-pedido",
+      key: "sin-pedido" as const,
       title: "Facturación sin pedido",
       description: "Crea facturas manuales desde mostrador y asigna mesas disponibles en el momento.",
       icon: Receipt,
@@ -220,20 +220,20 @@ function FacturacionHomeMenu({ allowPriceLists }: { allowPriceLists: boolean }) 
     },
     // Oculta 'con-pedido' si está en modo retail
     ...(!isRetailMode ? [{
-      key: "con-pedido",
+      key: "con-pedido" as const,
       title: "Facturación con pedido",
       description: "Convierte órdenes de mesas ocupadas en facturas listas para cobro y cierre.",
       icon: UtensilsCrossed,
       highlight: "Pedidos",
     }] : []),
     {
-      key: "historial",
+      key: "historial" as const,
       title: "Historial de facturas",
       description: "Consulta facturas emitidas, filtra por fecha y anula si aplica.",
       icon: History,
     },
     {
-      key: "listas-precio",
+      key: "listas-precio" as const,
       title: "Listas de precio",
       description: "Administra listas base, happy hour o convenios con clientes corporativos.",
       icon: Tags,
@@ -1957,7 +1957,7 @@ function InvoicesHistory() {
                />
              ) : (
                <div className="hidden sm:block" aria-hidden="true" />
-             }
+             )}
             <div className="flex items-center justify-end gap-2">
               <Button
                 type="button"
@@ -2066,15 +2066,34 @@ function FacturacionWorkspace({
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [paymentMode, setPaymentMode] = useState<"CONTADO" | "CREDITO">("CONTADO");
   const [selectedPaymentTermCode, setSelectedPaymentTermCode] = useState<string>("");
-  const customerOptions = useMemo<ComboboxOption<number>[]>(
-    () =>
-      retailCustomers.map((customer) => ({
-        value: customer.id,
-        label: `${customer.code} • ${customer.name}`,
-        description: `${customer.creditStatus === "ACTIVE" ? "Crédito activo" : customer.creditStatus === "ON_HOLD" ? "En revisión" : "Crédito bloqueado"} · Disponible: ${formatCurrency(customer.availableCredit, { currency: "local" })}`,
-      })),
-    [retailCustomers]
-  );
+  // Estados para modal de búsqueda de cliente (similar al de artículos)
+  const [showCustomerModal, setShowCustomerModal] = useState(false);
+  const [customerCodeInput, setCustomerCodeInput] = useState<string>("");
+  const [customerNameInput, setCustomerNameInput] = useState<string>("");
+  const [customerSearch, setCustomerSearch] = useState<string>("");
+  const filteredCustomers = useMemo(() => {
+    const term = customerSearch.trim().toLowerCase();
+    if (!term) return retailCustomers;
+    return retailCustomers.filter(
+      (c) =>
+        c.code.toLowerCase().includes(term) ||
+        c.name.toLowerCase().includes(term) ||
+        (c.taxId ?? "").toLowerCase().includes(term)
+    );
+  }, [customerSearch, retailCustomers]);
+  const handleSelectCustomerModal = (customer: RetailCustomerRecord, confirm = false) => {
+    setSelectedCustomerId(customer.id);
+    setCustomerCodeInput(customer.code);
+    setCustomerNameInput(customer.name);
+    setCustomerName(customer.name);
+    setCustomerTaxId(customer.taxId || "");
+    if (customer.paymentTermCode) {
+      setSelectedPaymentTermCode(customer.paymentTermCode);
+    }
+    if (confirm) {
+      setShowCustomerModal(false);
+    }
+  };
   const paymentTermOptions = useMemo<ComboboxOption<string>[]>(
     () =>
       paymentTerms.map((term) => {
@@ -3217,7 +3236,7 @@ function FacturacionWorkspace({
       });
       return false;
     }
-  }, [mode, refreshOrders, selectedOrder, serviceRate, toast]);
+  }, [mode, refreshOrders, selectedOrder, serviceRate, toast, vatRate]);
 
    useEffect(() => {
      // sincroniza monto recibido con suma de pagos
@@ -3260,7 +3279,7 @@ function FacturacionWorkspace({
       setPaymentMode("CONTADO");
       setSelectedPaymentTermCode(defaultCashTermCode);
     }
-  }, [defaultCashTermCode, draftInvoice.items, mode, priceLists, retailManualFlow, retailCustomers, serviceRate, vatRate]);
+  }, [defaultCashTermCode, defaultPriceListCode, mode, priceLists, retailManualFlow, retailCustomers, serviceRate, vatRate]);
 
   type SaveInvoiceResult = { id: number | null; invoiceNumber: string | null };
 

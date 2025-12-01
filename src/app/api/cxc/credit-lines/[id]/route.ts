@@ -62,7 +62,7 @@ const ensureRetailMode = () => {
   return null;
 };
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const retailGuard = ensureRetailMode();
   if (retailGuard) {
     return retailGuard;
@@ -76,7 +76,8 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     return access.response;
   }
 
-  const lineId = Number(params.id);
+  const { id } = await params;
+  const lineId = Number(id);
   if (!Number.isFinite(lineId) || lineId <= 0) {
     return NextResponse.json(
       { success: false, message: "Identificador de línea inválido" },
