@@ -42,7 +42,7 @@ const ensureRetailMode = () => {
   return null;
 };
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const retailGuard = ensureRetailMode();
   if (retailGuard) {
     return retailGuard;
@@ -56,7 +56,8 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     return access.response;
   }
 
-  const id = Number(params.id);
+  const { id: rawId } = await params;
+  const id = Number(rawId);
   if (!Number.isFinite(id) || id <= 0) {
     return NextResponse.json({ success: false, message: "Identificador inválido" }, { status: 400 });
   }

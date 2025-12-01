@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { CXC_PERMISSIONS, requireCxCPermissions } from "@/lib/auth/cxc-access";
 import { customerDocumentApplicationService } from "@/lib/services/cxc/CustomerDocumentApplicationService";
 
-type RouteContext = { params: { id: string } };
+type RouteContext = { params: Promise<{ id: string }> };
 
 export async function DELETE(request: NextRequest, context: RouteContext) {
   const access = await requireCxCPermissions(request, {
@@ -14,7 +14,8 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
     return access.response;
   }
 
-  const rawId = context.params?.id ?? "";
+  const params = await context.params;
+  const rawId = params?.id ?? "";
   const id = Number(rawId);
   if (!Number.isFinite(id) || id <= 0) {
     return NextResponse.json({ success: false, message: "Identificador inválido" }, { status: 400 });
