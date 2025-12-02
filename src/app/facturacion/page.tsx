@@ -2347,8 +2347,8 @@ function FacturacionWorkspace({
 
   const { toast } = useToast();
 
-  const loadRetailCustomers = useCallback(async () => {
-    if (retailCustomersRequestedRef.current) {
+  const loadRetailCustomers = useCallback(async (force = false) => {
+    if (!force && retailCustomersRequestedRef.current) {
       return;
     }
     retailCustomersRequestedRef.current = true;
@@ -3881,7 +3881,10 @@ function FacturacionWorkspace({
                   variant="outline"
                   size="sm"
                   className="rounded-2xl"
-                  onClick={() => setSettingsModalOpen(true)}
+                  onClick={() => {
+                    setSettingsModalOpen(true);
+                    void loadRetailCustomers(true);
+                  }}
                 >
                   Ajustes
                 </Button>
@@ -3946,10 +3949,14 @@ function FacturacionWorkspace({
                               handleSelectCustomerModal(found);
                             } else {
                               setShowCustomerModal(true);
+                              void loadRetailCustomers(true);
                             }
                           }
                         }}
-                        onDoubleClick={() => setShowCustomerModal(true)}
+                        onDoubleClick={() => {
+                          setShowCustomerModal(true);
+                          void loadRetailCustomers(true);
+                        }}
                         placeholder="Ej: CLI-001"
                         className="rounded-2xl"
                       />
@@ -3966,10 +3973,14 @@ function FacturacionWorkspace({
                               handleSelectCustomerModal(found);
                             } else {
                               setShowCustomerModal(true);
+                              void loadRetailCustomers(true);
                             }
                           }
                         }}
-                        onDoubleClick={() => setShowCustomerModal(true)}
+                        onDoubleClick={() => {
+                          setShowCustomerModal(true);
+                          void loadRetailCustomers(true);
+                        }}
                         placeholder="Nombre o razón social"
                         className="rounded-2xl"
                       />

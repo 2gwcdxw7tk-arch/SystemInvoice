@@ -511,6 +511,9 @@ ALTER TABLE app.invoices ADD COLUMN IF NOT EXISTS payment_term_id INTEGER REFERE
 -- Asegura la columna customer_id en instalaciones previas
 ALTER TABLE app.invoices ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES app.customers(id) ON DELETE SET NULL;
 
+-- Asegura la columna due_date en instalaciones previas
+ALTER TABLE app.invoices ADD COLUMN IF NOT EXISTS due_date DATE;
+
 DROP TRIGGER IF EXISTS trg_invoices_touch_updated_at ON app.invoices;
 CREATE TRIGGER trg_invoices_touch_updated_at
 BEFORE UPDATE ON app.invoices

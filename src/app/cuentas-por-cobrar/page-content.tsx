@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType, type FormEvent } from "react";
 import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, CheckCircle2, CircleAlert, Clock3, FileSpreadsheet, HandCoins, LayoutDashboard, Loader2, Pencil, Plus, RefreshCw, Search, Users2, Ban } from "lucide-react";
 
 import { FeatureGuardNotice } from "@/components/layout/feature-guard-notice";
@@ -3420,9 +3420,6 @@ function CreateDocumentModal({ state, onClose, onSubmit, onFieldChange, onReload
   ];
 
   const selectedCustomer = form.customerId ? customers.find((customer) => customer.id === form.customerId) ?? null : null;
-  const selectedPaymentTerm = form.paymentTermCode
-    ? paymentTerms.find((term) => term.code === form.paymentTermCode) ?? null
-    : null;
   const disableForm = loading || saving;
   const isDebit = isDebitDocumentTypeLocal(form.documentType);
 
