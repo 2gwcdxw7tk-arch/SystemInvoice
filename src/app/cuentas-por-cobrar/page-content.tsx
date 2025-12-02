@@ -3363,10 +3363,18 @@ function CustomerSearchModal({ open, onClose, customers, onSelect }: CustomerSea
                     onClose();
                   }}
                 >
-                  <div className="font-medium">
-                    {customer.code} • {customer.name}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-medium">
+                      {customer.code} • {customer.name}
+                    </div>
+                    <div className="whitespace-nowrap font-medium text-foreground">
+                      {formatCurrency(customer.creditUsed)}
+                    </div>
                   </div>
-                  <div className="text-xs text-muted-foreground">RUC: {customer.taxId || "N/A"}</div>
+                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>RUC: {customer.taxId || "N/A"}</span>
+                    <span>Condición: {customer.paymentTermCode}</span>
+                  </div>
                 </button>
               ))}
             </div>
@@ -3397,6 +3405,15 @@ function CreateDocumentModal({ state, onClose, onSubmit, onFieldChange, onReload
         })),
     [paymentTerms]
   );
+
+  const creditCustomers = useMemo(() => {
+    const creditTerms = new Set(
+      paymentTerms
+        .filter((t) => t.days + t.graceDays > 0)
+        .map((t) => t.code)
+    );
+    return customers.filter((c) => c.paymentTermCode && creditTerms.has(c.paymentTermCode));
+  }, [customers, paymentTerms]);
 
   const currencyOptions: ComboboxOption<string>[] = [
     {
@@ -3586,45 +3603,21 @@ function CreateDocumentModal({ state, onClose, onSubmit, onFieldChange, onReload
             </div>
           </div>
 
-          {selectedCustomer ? (
-            <div className="rounded-2xl border border-muted bg-background/90 px-4 py-3 text-xs text-muted-foreground">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <span className="font-semibold text-foreground">
-                  {selectedCustomer.code} • {selectedCustomer.name}
-                </span>
-                <span>Término sugerido: {selectedCustomer.paymentTermCode ?? "CONTADO"}</span>
-              </div>
-            </div>
-          ) : null}
-
-          {selectedPaymentTerm ? (
-            <div className="rounded-2xl border border-muted bg-background/90 px-4 py-3 text-xs text-muted-foreground">
-              <span className="font-semibold text-foreground">{selectedPaymentTerm.name}</span>
-              <span className="ml-2">({selectedPaymentTerm.code})</span>
-              <span className="ml-2">Plazo: {selectedPaymentTerm.days + selectedPaymentTerm.graceDays} días</span>
-            </div>
-          ) : null}
-
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">
-              Si omites el vencimiento, se calculará automáticamente usando la condición de pago seleccionada.
-            </p>
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" className="rounded-2xl" onClick={handleClose} disabled={saving}>
-                Cancelar
-              </Button>
-              <Button type="submit" className="rounded-2xl" disabled={disableForm}>
-                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Guardar
-              </Button>
-            </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={handleClose} disabled={saving}>
+              Cancelar
+            </Button>
+            <Button type="submit" className="rounded-2xl" disabled={disableForm}>
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Guardar
+            </Button>
           </div>
         </form>
       </Modal>
       <CustomerSearchModal
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
-        customers={customers}
+        customers={creditCustomers}
         onSelect={(id) => onFieldChange("customerId", id)}
       />
     </>
