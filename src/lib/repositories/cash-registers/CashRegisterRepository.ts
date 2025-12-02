@@ -92,6 +92,39 @@ const defaultCustomerSelect = {
 
 type PrismaClientOrTransaction = Prisma.TransactionClient | PrismaClient;
 
+async function ensureDefaultCustomerId<T extends { id: number | bigint; default_customer_id?: number | bigint | null }>(
+  client: PrismaClientOrTransaction,
+  registers: T[]
+): Promise<T[]> {
+  const missingIds = registers.filter((r) => r.default_customer_id === undefined);
+  if (missingIds.length === 0) {
+    return registers;
+  }
+
+  const ids = missingIds.map((r) => Number(r.id));
+  if (ids.length === 0) return registers;
+
+  try {
+    const rawRows = (await client.$queryRaw`
+      SELECT id, default_customer_id 
+      FROM "app"."cash_registers" 
+      WHERE id IN (${Prisma.join(ids)})
+    `) as Array<{ id: number; default_customer_id: bigint | null }>;
+
+    const map = new Map(rawRows.map((r) => [Number(r.id), r.default_customer_id]));
+
+    return registers.map((r) => {
+      if (r.default_customer_id === undefined) {
+        return { ...r, default_customer_id: map.get(Number(r.id)) ?? null };
+      }
+      return r;
+    });
+  } catch (error) {
+    console.error("Error fetching default_customer_id via raw SQL:", error);
+    return registers;
+  }
+}
+
 async function hydrateDefaultCustomers<T extends { default_customer_id: number | bigint | null }>(
   client: PrismaClientOrTransaction,
   registers: readonly T[]
@@ -396,6 +429,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       if (shouldIncludeDefault) {
         this.defaultCustomerRelationSupported = true;
       } else {
+        registerRows = await ensureDefaultCustomerId(this.prisma, registerRows);
         registerRows = (await hydrateDefaultCustomers(this.prisma, registerRows)) as CashRegisterWithWarehouse[];
       }
 
@@ -667,6 +701,9 @@ export class CashRegisterRepository implements ICashRegisterRepository {
                 default_customer_id: requestedDefaultCustomerId,
               } as CashRegisterWithWarehouse;
             }
+          } else {
+            const withId = await ensureDefaultCustomerId(tx, [registerRow]);
+            registerRow = withId[0];
           }
 
           const hydrated = await hydrateDefaultCustomers(tx, [registerRow]);
@@ -727,7 +764,8 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       if (shouldIncludeDefault) {
         this.defaultCustomerRelationSupported = true;
       } else {
-        const hydrated = await hydrateDefaultCustomers(this.prisma, [registerRow]);
+        const withId = await ensureDefaultCustomerId(this.prisma, [registerRow]);
+        const hydrated = await hydrateDefaultCustomers(this.prisma, withId);
         registerRow = (hydrated[0] ?? registerRow) as CashRegisterWithWarehouse;
       }
 
@@ -779,7 +817,8 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       if (shouldIncludeDefault) {
         this.defaultCustomerRelationSupported = true;
       } else {
-        const hydrated = await hydrateDefaultCustomers(this.prisma, [registerRow]);
+        const withId = await ensureDefaultCustomerId(this.prisma, [registerRow]);
+        const hydrated = await hydrateDefaultCustomers(this.prisma, withId);
         registerRow = (hydrated[0] ?? registerRow) as CashRegisterWithWarehouse;
       }
 
@@ -1075,34 +1114,67 @@ export class CashRegisterRepository implements ICashRegisterRepository {
   }
 
   async getActiveCashRegisterSessionByAdmin(adminUserId: number): Promise<CashRegisterSessionRecord | null> {
-    const session = await this.prisma.cash_register_sessions.findFirst({
-      where: { admin_user_id: adminUserId, status: "OPEN" },
-      include: {
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
+
+    try {
+      const include = {
         cash_registers: {
-          include: {
-            warehouses: {
-              select: { id: true, code: true, name: true },
+          include: buildIncludeWithDefault(
+            {
+              warehouses: {
+                select: { id: true, code: true, name: true },
+              },
             },
+            shouldIncludeDefault
+          ),
+        },
+      };
+
+      const session = await this.prisma.cash_register_sessions.findFirst({
+        where: { admin_user_id: adminUserId, status: "OPEN" },
+        include,
+        orderBy: { opening_at: "desc" },
+      });
+
+      if (!session || !session.cash_registers || !session.cash_registers.warehouses) return null;
+
+      let sessionWithRelations = session as unknown as CashRegisterSessionWithRelations;
+
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
+      } else {
+        if (sessionWithRelations.cash_registers) {
+          const withId = await ensureDefaultCustomerId(this.prisma, [sessionWithRelations.cash_registers as CashRegisterWithWarehouse]);
+          const hydrated = await hydrateDefaultCustomers(this.prisma, withId);
+          const resolved = hydrated[0];
+          if (resolved) {
+            sessionWithRelations = {
+              ...sessionWithRelations,
+              cash_registers: resolved,
+            } as CashRegisterSessionWithRelations;
+          }
+        }
+      }
+
+      // Simulate is_default from cash_register_users for mapping
+      const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
+        where: {
+          cash_register_id_admin_user_id: {
+            cash_register_id: session.cash_register_id,
+            admin_user_id: adminUserId,
           },
         },
-      },
-      orderBy: { opening_at: "desc" },
-    });
+        select: { is_default: true },
+      });
 
-    if (!session || !session.cash_registers || !session.cash_registers.warehouses) return null;
-
-    // Simulate is_default from cash_register_users for mapping
-    const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
-      where: {
-        cash_register_id_admin_user_id: {
-          cash_register_id: session.cash_register_id,
-          admin_user_id: adminUserId,
-        },
-      },
-      select: { is_default: true },
-    });
-
-    return mapSessionToRecord({ ...session, is_default: cashRegisterUser?.is_default ?? false });
+      return mapSessionToRecord({ ...sessionWithRelations, is_default: cashRegisterUser?.is_default ?? false });
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.getActiveCashRegisterSessionByAdmin(adminUserId);
+      }
+      throw error;
+    }
   }
 
   async listCashRegisterSessionsForAdmin(adminUserId: number, options: { limit?: number } = {}): Promise<CashRegisterSessionRecord[]> {
@@ -1144,61 +1216,92 @@ export class CashRegisterRepository implements ICashRegisterRepository {
 
   async getCashRegisterSessionById(sessionId: number | string): Promise<CashRegisterSessionRecord | null> {
     const normalizedId = normalizeSessionId(sessionId);
-    const session = await this.prisma.cash_register_sessions.findUnique({
-      where: { id: normalizedId },
-      include: {
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
+
+    try {
+      const include = {
         cash_registers: {
-          include: {
-            warehouses: {
-              select: { id: true, code: true, name: true },
+          include: buildIncludeWithDefault(
+            {
+              warehouses: {
+                select: { id: true, code: true, name: true },
+              },
             },
+            shouldIncludeDefault
+          ),
+        },
+      };
+
+      const session = await this.prisma.cash_register_sessions.findUnique({
+        where: { id: normalizedId },
+        include,
+      });
+
+      if (!session) return null;
+
+      // Ensure we always have a cash_registers object with a warehouse fallback so callers
+      // (like report endpoints) don't fail when related rows were removed o son incompletos.
+      const fallbackWarehouse = { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } as const;
+      let sessionWithRelations: CashRegisterSessionWithRelations;
+
+      if (session.cash_registers && session.cash_registers.warehouses) {
+        sessionWithRelations = session as unknown as CashRegisterSessionWithRelations;
+      } else if (session.cash_registers) {
+        sessionWithRelations = {
+          ...session,
+          cash_registers: {
+            ...session.cash_registers,
+            warehouses: session.cash_registers.warehouses ?? { ...fallbackWarehouse },
+          },
+        } as unknown as CashRegisterSessionWithRelations;
+      } else {
+        sessionWithRelations = {
+          ...session,
+          cash_registers: {
+            id: session.cash_register_id,
+            code: "UNKNOWN",
+            name: "Unknown",
+            allow_manual_warehouse_override: false,
+            warehouses: { ...fallbackWarehouse },
+          },
+        } as unknown as CashRegisterSessionWithRelations;
+      }
+
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
+      } else {
+        if (sessionWithRelations.cash_registers) {
+          const withId = await ensureDefaultCustomerId(this.prisma, [sessionWithRelations.cash_registers as CashRegisterWithWarehouse]);
+          const hydrated = await hydrateDefaultCustomers(this.prisma, withId);
+          const resolved = hydrated[0];
+          if (resolved) {
+            sessionWithRelations = {
+              ...sessionWithRelations,
+              cash_registers: resolved,
+            } as CashRegisterSessionWithRelations;
+          }
+        }
+      }
+
+      // Simulate is_default from cash_register_users for mapping
+      const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
+        where: {
+          cash_register_id_admin_user_id: {
+            cash_register_id: session.cash_register_id,
+            admin_user_id: session.admin_user_id,
           },
         },
-      },
-    });
+        select: { is_default: true },
+      });
 
-    if (!session) return null;
-
-    // Ensure we always have a cash_registers object with a warehouse fallback so callers
-    // (like report endpoints) don't fail when related rows were removed o son incompletos.
-    const fallbackWarehouse = { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } as const;
-    let sessionWithRelations: CashRegisterSessionWithRelations;
-
-    if (session.cash_registers && session.cash_registers.warehouses) {
-      sessionWithRelations = session;
-    } else if (session.cash_registers) {
-      sessionWithRelations = {
-        ...session,
-        cash_registers: {
-          ...session.cash_registers,
-          warehouses: session.cash_registers.warehouses ?? { ...fallbackWarehouse },
-        },
-      };
-    } else {
-      sessionWithRelations = {
-        ...session,
-        cash_registers: {
-          id: session.cash_register_id,
-          code: "UNKNOWN",
-          name: "Unknown",
-          allow_manual_warehouse_override: false,
-          warehouses: { ...fallbackWarehouse },
-        },
-      };
+      return mapSessionToRecord({ ...sessionWithRelations, is_default: cashRegisterUser?.is_default ?? false });
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.getCashRegisterSessionById(sessionId);
+      }
+      throw error;
     }
-
-    // Simulate is_default from cash_register_users for mapping
-    const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
-      where: {
-        cash_register_id_admin_user_id: {
-          cash_register_id: session.cash_register_id,
-          admin_user_id: session.admin_user_id,
-        },
-      },
-      select: { is_default: true },
-    });
-
-    return mapSessionToRecord({ ...sessionWithRelations, is_default: cashRegisterUser?.is_default ?? false });
   }
 
   async openCashRegisterSession(params: {
@@ -1211,42 +1314,93 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     openingDenominations?: Array<{ currency: string; value: number; qty: number; kind?: string }>;
   }): Promise<CashRegisterSessionRecord> {
     const { adminUserId, cashRegisterCode, openingAmount, openingNotes, allowUnassigned = false, openingDenominations } = params;
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
 
-    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const normalizedCode = normalizeCode(cashRegisterCode);
-      let targetCashRegister: CashRegisterWithWarehouse | null = null;
-      let isDefaultAssignment = false;
-      const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
+    try {
+      return await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const normalizedCode = normalizeCode(cashRegisterCode);
+        let targetCashRegister: CashRegisterWithWarehouse | null = null;
+        let isDefaultAssignment = false;
 
-      if (allowUnassigned) {
-        const include = buildIncludeWithDefault(
-          {
-            warehouses: {
-              select: { id: true, code: true, name: true },
+        if (allowUnassigned) {
+          const include = buildIncludeWithDefault(
+            {
+              warehouses: {
+                select: { id: true, code: true, name: true },
+              },
+              sequence_definitions: {
+                select: { id: true, code: true, name: true },
+              },
             },
-            sequence_definitions: {
-              select: { id: true, code: true, name: true },
-            },
-          },
-          shouldIncludeDefault
-        );
+            shouldIncludeDefault
+          );
 
-        const register = await tx.cash_registers.findFirst({
-          where: { code: normalizedCode, is_active: true },
-          include,
+          const register = await tx.cash_registers.findFirst({
+            where: { code: normalizedCode, is_active: true },
+            include,
+          });
+          targetCashRegister = register ? (register as unknown as CashRegisterWithWarehouse) : null;
+        } else {
+          const assignment = await tx.cash_register_users.findFirst({
+            where: { admin_user_id: adminUserId, cash_registers: { code: normalizedCode, is_active: true } },
+            include: {
+              cash_registers: {
+                include: buildIncludeWithDefault(
+                  {
+                    warehouses: {
+                      select: { id: true, code: true, name: true },
+                    },
+                    sequence_definitions: {
+                      select: { id: true, code: true, name: true },
+                    },
+                  },
+                  shouldIncludeDefault
+                ),
+              },
+            },
+          });
+          if (assignment) {
+            targetCashRegister = assignment.cash_registers as unknown as CashRegisterWithWarehouse;
+            isDefaultAssignment = assignment.is_default;
+          }
+        }
+
+        if (targetCashRegister && !shouldIncludeDefault) {
+          const hydrated = await hydrateDefaultCustomers(tx, [targetCashRegister]);
+          targetCashRegister = (hydrated[0] ?? targetCashRegister) as CashRegisterWithWarehouse;
+        }
+
+        if (!targetCashRegister || !targetCashRegister.warehouses) {
+          throw new Error(`No tienes permisos para operar la caja ${cashRegisterCode} o no existe/está inactiva`);
+        }
+
+        const openForUser = await tx.cash_register_sessions.findFirst({
+          where: { admin_user_id: adminUserId, status: "OPEN" },
         });
-        targetCashRegister = register ? (register as unknown as CashRegisterWithWarehouse) : null;
-      } else {
-        const assignment = await tx.cash_register_users.findFirst({
-          where: { admin_user_id: adminUserId, cash_registers: { code: normalizedCode, is_active: true } },
+        if (openForUser) {
+          throw new Error("Ya tienes una caja abierta. Debes cerrarla antes de abrir otra.");
+        }
+
+        const openForRegister = await tx.cash_register_sessions.findFirst({
+          where: { cash_register_id: Number(targetCashRegister.id), status: "OPEN" },
+        });
+        if (openForRegister) {
+          throw new Error("La caja seleccionada ya cuenta con una apertura activa.");
+        }
+
+        const newSession = await tx.cash_register_sessions.create({
+          data: {
+            cash_register_id: Number(targetCashRegister.id),
+            admin_user_id: adminUserId,
+            opening_amount: openingAmount,
+            opening_notes: openingNotes,
+            opening_denominations: (openingDenominations as unknown as InputJsonValue) ?? undefined,
+          },
           include: {
             cash_registers: {
               include: buildIncludeWithDefault(
                 {
                   warehouses: {
-                    select: { id: true, code: true, name: true },
-                  },
-                  sequence_definitions: {
                     select: { id: true, code: true, name: true },
                   },
                 },
@@ -1255,71 +1409,32 @@ export class CashRegisterRepository implements ICashRegisterRepository {
             },
           },
         });
-        if (assignment) {
-          targetCashRegister = assignment.cash_registers as unknown as CashRegisterWithWarehouse;
-          isDefaultAssignment = assignment.is_default;
+
+        let sessionWithRelations = newSession as unknown as CashRegisterSessionWithRelations;
+        if (!shouldIncludeDefault && sessionWithRelations.cash_registers) {
+          const hydrated = await hydrateDefaultCustomers(tx, [sessionWithRelations.cash_registers as CashRegisterWithWarehouse]);
+          const resolved = hydrated[0];
+          if (resolved) {
+            sessionWithRelations = {
+              ...sessionWithRelations,
+              cash_registers: resolved,
+            };
+          }
         }
-      }
 
-      if (targetCashRegister && !shouldIncludeDefault) {
-        const hydrated = await hydrateDefaultCustomers(tx, [targetCashRegister]);
-        targetCashRegister = (hydrated[0] ?? targetCashRegister) as CashRegisterWithWarehouse;
-      }
-
-      if (!targetCashRegister || !targetCashRegister.warehouses) {
-        throw new Error(`No tienes permisos para operar la caja ${cashRegisterCode} o no existe/está inactiva`);
-      }
-
-      const openForUser = await tx.cash_register_sessions.findFirst({
-        where: { admin_user_id: adminUserId, status: "OPEN" },
-      });
-      if (openForUser) {
-        throw new Error("Ya tienes una caja abierta. Debes cerrarla antes de abrir otra.");
-      }
-
-      const openForRegister = await tx.cash_register_sessions.findFirst({
-        where: { cash_register_id: Number(targetCashRegister.id), status: "OPEN" },
-      });
-      if (openForRegister) {
-        throw new Error("La caja seleccionada ya cuenta con una apertura activa.");
-      }
-
-      const newSession = await tx.cash_register_sessions.create({
-        data: {
-          cash_register_id: Number(targetCashRegister.id),
-          admin_user_id: adminUserId,
-          opening_amount: openingAmount,
-          opening_notes: openingNotes,
-          opening_denominations: (openingDenominations as unknown as InputJsonValue) ?? undefined,
-        },
-        include: {
-          cash_registers: {
-            include: buildIncludeWithDefault(
-              {
-                warehouses: {
-                  select: { id: true, code: true, name: true },
-                },
-              },
-              shouldIncludeDefault
-            ),
-          },
-        },
-      });
-
-      let sessionWithRelations = newSession as unknown as CashRegisterSessionWithRelations;
-      if (!shouldIncludeDefault && sessionWithRelations.cash_registers) {
-        const hydrated = await hydrateDefaultCustomers(tx, [sessionWithRelations.cash_registers as CashRegisterWithWarehouse]);
-        const resolved = hydrated[0];
-        if (resolved) {
-          sessionWithRelations = {
-            ...sessionWithRelations,
-            cash_registers: resolved,
-          };
+        if (shouldIncludeDefault) {
+          this.defaultCustomerRelationSupported = true;
         }
-      }
 
-      return mapSessionToRecord({ ...sessionWithRelations, is_default: isDefaultAssignment });
-    });
+        return mapSessionToRecord({ ...sessionWithRelations, is_default: isDefaultAssignment });
+      });
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.openCashRegisterSession(params);
+      }
+      throw error;
+    }
   }
 
   async closeCashRegisterSession(params: {
@@ -1332,154 +1447,166 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     closingDenominations?: Array<{ currency: string; value: number; qty: number; kind?: string }>;
   }): Promise<CashRegisterClosureSummary> {
     const { adminUserId, sessionId, closingAmount, payments, closingNotes, allowDifferentUser = false, closingDenominations } = params;
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
 
-    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      let sessionToClose: CashRegisterSessionWithRelations | null = null;
-      const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
+    try {
+      return await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        let sessionToClose: CashRegisterSessionWithRelations | null = null;
 
-      if (sessionId) {
-        sessionToClose = await tx.cash_register_sessions.findUnique({
-          where: { id: BigInt(sessionId) },
-          include: {
-            cash_registers: {
-              include: buildIncludeWithDefault(
-                {
-                  warehouses: {
-                    select: { id: true, code: true, name: true },
+        if (sessionId) {
+          sessionToClose = await tx.cash_register_sessions.findUnique({
+            where: { id: BigInt(sessionId) },
+            include: {
+              cash_registers: {
+                include: buildIncludeWithDefault(
+                  {
+                    warehouses: {
+                      select: { id: true, code: true, name: true },
+                    },
                   },
-                },
-                shouldIncludeDefault
-              ),
+                  shouldIncludeDefault
+                ),
+              },
             },
-          },
-        });
-      } else {
-        sessionToClose = await tx.cash_register_sessions.findFirst({
-          where: { admin_user_id: adminUserId, status: "OPEN" },
-          include: {
-            cash_registers: {
-              include: buildIncludeWithDefault(
-                {
-                  warehouses: {
-                    select: { id: true, code: true, name: true },
+          });
+        } else {
+          sessionToClose = await tx.cash_register_sessions.findFirst({
+            where: { admin_user_id: adminUserId, status: "OPEN" },
+            include: {
+              cash_registers: {
+                include: buildIncludeWithDefault(
+                  {
+                    warehouses: {
+                      select: { id: true, code: true, name: true },
+                    },
                   },
-                },
-                shouldIncludeDefault
-              ),
+                  shouldIncludeDefault
+                ),
+              },
             },
-          },
-          orderBy: { opening_at: "desc" },
-        });
-      }
-
-      if (sessionToClose && !shouldIncludeDefault && sessionToClose.cash_registers) {
-        const hydrated = await hydrateDefaultCustomers(tx, [sessionToClose.cash_registers as CashRegisterWithWarehouse]);
-        const resolved = hydrated[0];
-        if (resolved) {
-          sessionToClose = {
-            ...sessionToClose,
-            cash_registers: resolved,
-          } as CashRegisterSessionWithRelations;
+            orderBy: { opening_at: "desc" },
+          });
         }
-      }
 
-      if (!sessionToClose || !sessionToClose.cash_registers || !sessionToClose.cash_registers.warehouses) {
-        throw new Error("No se encontró una apertura de caja activa");
-      }
-      if (sessionToClose.status !== "OPEN") {
-        throw new Error("La sesión indicada ya fue cerrada");
-      }
-      const sessionOwnerId = Number(sessionToClose.admin_user_id);
-      if (sessionOwnerId !== adminUserId && !allowDifferentUser) {
-        throw new Error("Solo el usuario que abrió la caja puede cerrarla");
-      }
+        if (sessionToClose && !shouldIncludeDefault && sessionToClose.cash_registers) {
+          const hydrated = await hydrateDefaultCustomers(tx, [sessionToClose.cash_registers as CashRegisterWithWarehouse]);
+          const resolved = hydrated[0];
+          if (resolved) {
+            sessionToClose = {
+              ...sessionToClose,
+              cash_registers: resolved,
+            } as CashRegisterSessionWithRelations;
+          }
+        }
 
-      // Simulate is_default for mapping
-      const cashRegisterUser = await tx.cash_register_users.findUnique({
-        where: {
-          cash_register_id_admin_user_id: {
-            cash_register_id: sessionToClose.cash_register_id,
-            admin_user_id: sessionOwnerId,
-          },
-        },
-        select: { is_default: true },
-      });
-      const mappedSession = mapSessionToRecord({ ...sessionToClose, is_default: cashRegisterUser?.is_default ?? false });
+        if (!sessionToClose || !sessionToClose.cash_registers || !sessionToClose.cash_registers.warehouses) {
+          throw new Error("No se encontró una apertura de caja activa");
+        }
+        if (sessionToClose.status !== "OPEN") {
+          throw new Error("La sesión indicada ya fue cerrada");
+        }
+        const sessionOwnerId = Number(sessionToClose.admin_user_id);
+        if (sessionOwnerId !== adminUserId && !allowDifferentUser) {
+          throw new Error("Solo el usuario que abrió la caja puede cerrarla");
+        }
 
-      const expectedPaymentsResult = await tx.invoice_payments.groupBy({
-        by: ["payment_method"],
-        where: {
-          invoices: {
-            cash_register_session_id: sessionToClose.id,
-          },
-        },
-        _sum: { amount: true },
-        _count: { invoice_id: true },
-      });
-
-      const expectedPayments: ExpectedPayment[] = expectedPaymentsResult.map((row: { payment_method: string; _sum: { amount: Decimal | null }; _count: { invoice_id: number } }) => ({
-        method: row.payment_method.trim().toUpperCase(),
-        amount: Number(row._sum.amount ?? 0),
-        txCount: Number(row._count.invoice_id ?? 0),
-      }));
-
-      const totalInvoices = await tx.invoices.count({
-        where: { cash_register_session_id: sessionToClose.id },
-      });
-
-      const summary = buildClosureSummary({
-        session: mappedSession,
-        closingUserId: adminUserId,
-        closingAmount,
-        closingAt: new Date(),
-        closingNotes,
-        expectedPayments,
-        reportedPayments: payments,
-        totalInvoices,
-      });
-
-      await tx.cash_register_sessions.update({
-        where: { id: sessionToClose.id },
-        data: {
-          closing_amount: summary.closingAmount,
-          closing_at: summary.closingAt,
-          closing_notes: summary.closingNotes,
-          closing_user_id: adminUserId,
-          status: "CLOSED",
-          totals_snapshot: summary as InputJsonValue, // Prisma JSON type
-          closing_denominations: (closingDenominations as unknown as InputJsonValue) ?? undefined,
-        },
-      });
-
-      // Upsert cash_register_session_payments
-      for (const payment of summary.payments) {
-        await tx.cash_register_session_payments.upsert({
+        // Simulate is_default for mapping
+        const cashRegisterUser = await tx.cash_register_users.findUnique({
           where: {
-            session_id_payment_method: {
+            cash_register_id_admin_user_id: {
+              cash_register_id: sessionToClose.cash_register_id,
+              admin_user_id: sessionOwnerId,
+            },
+          },
+          select: { is_default: true },
+        });
+        const mappedSession = mapSessionToRecord({ ...sessionToClose, is_default: cashRegisterUser?.is_default ?? false });
+
+        const expectedPaymentsResult = await tx.invoice_payments.groupBy({
+          by: ["payment_method"],
+          where: {
+            invoices: {
+              cash_register_session_id: sessionToClose.id,
+            },
+          },
+          _sum: { amount: true },
+          _count: { invoice_id: true },
+        });
+
+        const expectedPayments: ExpectedPayment[] = expectedPaymentsResult.map((row: { payment_method: string; _sum: { amount: Decimal | null }; _count: { invoice_id: number } }) => ({
+          method: row.payment_method.trim().toUpperCase(),
+          amount: Number(row._sum.amount ?? 0),
+          txCount: Number(row._count.invoice_id ?? 0),
+        }));
+
+        const totalInvoices = await tx.invoices.count({
+          where: { cash_register_session_id: sessionToClose.id },
+        });
+
+        const summary = buildClosureSummary({
+          session: mappedSession,
+          closingUserId: adminUserId,
+          closingAmount,
+          closingAt: new Date(),
+          closingNotes,
+          expectedPayments,
+          reportedPayments: payments,
+          totalInvoices,
+        });
+
+        await tx.cash_register_sessions.update({
+          where: { id: sessionToClose.id },
+          data: {
+            closing_amount: summary.closingAmount,
+            closing_at: summary.closingAt,
+            closing_notes: summary.closingNotes,
+            closing_user_id: adminUserId,
+            status: "CLOSED",
+            totals_snapshot: summary as InputJsonValue, // Prisma JSON type
+            closing_denominations: (closingDenominations as unknown as InputJsonValue) ?? undefined,
+          },
+        });
+
+        // Upsert cash_register_session_payments
+        for (const payment of summary.payments) {
+          await tx.cash_register_session_payments.upsert({
+            where: {
+              session_id_payment_method: {
+                session_id: summary.sessionId,
+                payment_method: payment.method,
+              },
+            },
+            update: {
+              expected_amount: payment.expectedAmount,
+              reported_amount: payment.reportedAmount,
+              difference_amount: payment.differenceAmount,
+              transaction_count: payment.transactionCount,
+              updated_at: new Date(),
+            },
+            create: {
               session_id: summary.sessionId,
               payment_method: payment.method,
+              expected_amount: payment.expectedAmount,
+              reported_amount: payment.reportedAmount,
+              difference_amount: payment.differenceAmount,
+              transaction_count: payment.transactionCount,
             },
-          },
-          update: {
-            expected_amount: payment.expectedAmount,
-            reported_amount: payment.reportedAmount,
-            difference_amount: payment.differenceAmount,
-            transaction_count: payment.transactionCount,
-            updated_at: new Date(),
-          },
-          create: {
-            session_id: summary.sessionId,
-            payment_method: payment.method,
-            expected_amount: payment.expectedAmount,
-            reported_amount: payment.reportedAmount,
-            difference_amount: payment.differenceAmount,
-            transaction_count: payment.transactionCount,
-          },
-        });
-      }
+          });
+        }
 
-      return summary;
-    });
+        if (shouldIncludeDefault) {
+          this.defaultCustomerRelationSupported = true;
+        }
+
+        return summary;
+      });
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.closeCashRegisterSession(params);
+      }
+      throw error;
+    }
   }
 
   async getCashRegisterClosureReport(sessionId: number | string): Promise<{

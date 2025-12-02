@@ -98,6 +98,14 @@ export async function POST(request: NextRequest) {
     if (!sessionRecord) {
       return NextResponse.json({ success: false, message: "No se encontró la sesión indicada" }, { status: 404 });
     }
+
+    if (!env.publicFeatures.isRestaurant && !sessionRecord.cashRegister.defaultCustomer) {
+      return NextResponse.json(
+        { success: false, message: "La caja debe tener un cliente por defecto asignado para realizar el cierre." },
+        { status: 400 }
+      );
+    }
+
     const expectedTotal = Number((report.expectedTotalAmount || 0).toFixed(2));
     if (sessionRecord.status !== "OPEN") {
       // Sesión ya cerrada: devolver estado y evitar segundo cierre fantasma

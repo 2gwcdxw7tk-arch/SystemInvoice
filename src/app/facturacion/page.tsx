@@ -4671,8 +4671,8 @@ function FacturacionWorkspace({
                 </>
               )}
             </Button>
-            <Button type="button" size="sm" className="rounded-2xl" asChild>
-              <Link href="/caja">Gestionar caja</Link>
+            <Button type="button" size="sm" className="rounded-2xl" onClick={() => router.push("/caja")}>
+              Gestionar caja
             </Button>
           </div>
         </div>

@@ -65,6 +65,7 @@
 - Document new environment variables in `.env.example` and the README.
 - When modifying shared helpers or UI components, run `npm run lint` and perform a global search to detect side effects.
 - Update the README or `docs/` with the current architecture after completing migrations or cross-cutting changes.
+- Cierra cada bloque de trabajo con un commit descriptivo que resuma los cambios aplicados antes de avanzar al siguiente paso.
 
 ## Continuous Updates
 - Always update the following files with significant changes:
