@@ -73,6 +73,9 @@ const mockInvoices: MockInvoiceRec[] = [];
 const mockPayments: { invoice_id: number; payment: InvoicePaymentInput }[] = [];
 const mockItems: { invoice_id: number; line_number: number; description: string; quantity: number; unit_price: number; line_total: number }[] = [];
 
+const MAX_SEQUENCE_LOOKUP_ATTEMPTS = 2500;
+const MAX_INVOICE_PERSISTENCE_RETRIES = 3;
+
 export class InvoiceService {
   constructor(
     private readonly invoiceRepository: IInvoiceRepository = new InvoiceRepository(),
@@ -83,8 +86,6 @@ export class InvoiceService {
     const payments = input.payments.map(clonePayment);
     const normalizedItems = normalizeItemsForPersistence(input.items);
     const movementLines = buildMovementLinesFromItems(input.items);
-
-    const invoiceNumber = await this.resolveInvoiceNumber(input);
 
     const roundCurrency = (value: number) => Math.round(value * 100) / 100;
     const totalAmount = roundCurrency(input.total_amount);
@@ -99,7 +100,7 @@ export class InvoiceService {
     let resolvedPaymentTerm: PaymentTermDTO | null = null;
     let resolvedDueDate: Date | null = input.due_date ?? null;
     let outstandingAmount = 0;
-    let customerDocumentPayload: InvoicePersistenceInput["customerDocument"];
+    let customerDocumentFactory: ((invoiceNumber: string) => InvoicePersistenceInput["customerDocument"]) | undefined;
 
     if (isRetailMode) {
       if (!resolvedCustomerId || resolvedCustomerId <= 0) {
@@ -164,7 +165,7 @@ export class InvoiceService {
       resolvedDueDate = dueDate;
 
       const documentStatus = outstandingAmount > 0 ? "PENDIENTE" : "PAGADO";
-      customerDocumentPayload = {
+      customerDocumentFactory = (invoiceNumber: string) => ({
         customerId: resolvedCustomerId,
         documentType: "INVOICE",
         documentNumber: invoiceNumber,
@@ -178,12 +179,15 @@ export class InvoiceService {
         notes: input.notes ?? null,
         paymentTermId: resolvedPaymentTerm?.id ?? null,
         metadata: { saleType: resolvedSaleType ?? "CONTADO" },
-      };
+      });
     } else if (missingAmount > 0) {
       throw new Error("No puedes guardar la factura con saldo pendiente. Registra el cobro completo antes de continuar.");
     }
 
+    const manualInvoiceNumberProvided = Boolean(this.extractProvidedInvoiceNumber(input));
+
     if (env.useMockData) {
+      const invoiceNumber = await this.resolveInvoiceNumber(input);
       return this.createInvoiceMock(
         {
           ...input,
@@ -196,13 +200,13 @@ export class InvoiceService {
           invoice_number: invoiceNumber,
           payments,
           items: normalizedItems,
-          customerDocument: customerDocumentPayload,
+          customerDocument: customerDocumentFactory ? customerDocumentFactory(invoiceNumber) : undefined,
         },
         movementLines
       );
     }
 
-    const persistencePayload: InvoicePersistenceInput = {
+    const persistenceBase: Omit<InvoicePersistenceInput, "invoice_number" | "customerDocument"> = {
       ...input,
       customer_id: resolvedCustomerId,
       customer_code: resolvedCustomerCode ?? null,
@@ -210,24 +214,57 @@ export class InvoiceService {
       payment_term_id: resolvedPaymentTerm?.id ?? null,
       payment_term_code: resolvedPaymentTerm?.code ?? null,
       due_date: resolvedDueDate ?? null,
-      invoice_number: invoiceNumber,
       payments,
       items: normalizedItems,
       movementLines,
-      customerDocument: customerDocumentPayload,
     };
 
-    const result = await this.invoiceRepository.createInvoice(persistencePayload);
+    const persistInvoice = async (invoiceNumber: string): Promise<InvoiceInsertResult> => {
+      const result = await this.invoiceRepository.createInvoice({
+        ...persistenceBase,
+        invoice_number: invoiceNumber,
+        customerDocument: customerDocumentFactory ? customerDocumentFactory(invoiceNumber) : undefined,
+      });
 
-    if (input.originOrderId) {
-      await this.orderService.markOrderAsInvoiced(input.originOrderId, input.invoiceDate);
+      if (input.originOrderId) {
+        await this.orderService.markOrderAsInvoiced(input.originOrderId, input.invoiceDate);
+      }
+
+      if (env.features.retailModeEnabled && resolvedCustomerId) {
+        await customerCreditLineService.syncCustomerCreditUsageByCustomerId(resolvedCustomerId);
+      }
+
+      return result;
+    };
+
+    if (manualInvoiceNumberProvided) {
+      const invoiceNumber = await this.resolveInvoiceNumber(input);
+      try {
+        return await persistInvoice(invoiceNumber);
+      } catch (error) {
+        if (this.isInvoiceNumberConflictError(error)) {
+          throw new Error("El número de factura proporcionado ya existe. Usa un folio diferente.");
+        }
+        throw error;
+      }
     }
 
-    if (env.features.retailModeEnabled && resolvedCustomerId) {
-      await customerCreditLineService.syncCustomerCreditUsageByCustomerId(resolvedCustomerId);
+    for (let attempt = 0; attempt < MAX_INVOICE_PERSISTENCE_RETRIES; attempt++) {
+      const invoiceNumber = await this.resolveInvoiceNumber(input);
+      try {
+        return await persistInvoice(invoiceNumber);
+      } catch (error) {
+        if (this.isInvoiceNumberConflictError(error) && attempt + 1 < MAX_INVOICE_PERSISTENCE_RETRIES) {
+          continue;
+        }
+        if (this.isInvoiceNumberConflictError(error)) {
+          throw new Error("No se pudo generar un número de factura único. Intenta nuevamente o revisa el consecutivo asignado a la caja.");
+        }
+        throw error;
+      }
     }
 
-    return result;
+    throw new Error("No se pudo generar un número de factura único después de varios intentos. Revisa la configuración de consecutivos.");
   }
 
   async getInvoiceByNumber(invoiceNumber: string): Promise<InvoiceInsertResult | null> {
@@ -384,21 +421,61 @@ export class InvoiceService {
   }
 
   private async resolveInvoiceNumber(input: InvoiceInsertInput): Promise<string> {
-    const provided = input.invoice_number?.trim();
+    const provided = this.extractProvidedInvoiceNumber(input);
 
     if (env.useMockData) {
-      return provided && provided.length > 0 ? provided : `F-MOCK-${Date.now()}`;
+      return provided ?? `F-MOCK-${Date.now()}`;
+    }
+
+    if (provided) {
+      const existing = await this.invoiceRepository.getInvoiceByNumber(provided);
+      if (existing) {
+        throw new Error("El número de factura proporcionado ya existe. Usa un folio diferente o actualiza el consecutivo de la caja.");
+      }
+      return provided;
     }
 
     if (!input.cash_register_id || !input.cash_register_session_id) {
       throw new Error("Configura un consecutivo para la caja antes de facturar");
     }
 
-    return sequenceService.generateInvoiceNumber({
-      cashRegisterId: input.cash_register_id,
-      cashRegisterCode: input.cash_register_code ?? "",
-      sessionId: input.cash_register_session_id,
-    });
+    for (let attempt = 0; attempt < MAX_SEQUENCE_LOOKUP_ATTEMPTS; attempt++) {
+      const candidate = await sequenceService.generateInvoiceNumber({
+        cashRegisterId: input.cash_register_id,
+        cashRegisterCode: input.cash_register_code ?? "",
+        sessionId: input.cash_register_session_id,
+      });
+
+      const exists = await this.invoiceRepository.getInvoiceByNumber(candidate);
+      if (!exists) {
+        return candidate;
+      }
+    }
+
+    throw new Error("No se pudo generar un número de factura único. Revisa la configuración de consecutivos asignados a las cajas.");
+  }
+
+  private extractProvidedInvoiceNumber(input: InvoiceInsertInput): string | null {
+    const provided = input.invoice_number?.trim();
+    return provided && provided.length > 0 ? provided : null;
+  }
+
+  private isInvoiceNumberConflictError(error: unknown): boolean {
+    if (typeof error !== "object" || error === null) {
+      return false;
+    }
+    const maybeCode = (error as { code?: string }).code;
+    if (maybeCode !== "P2002") {
+      return false;
+    }
+    const target = (error as { meta?: { target?: string | string[] } }).meta?.target;
+    if (Array.isArray(target)) {
+      return target.some((field) => field?.includes("invoice_number"));
+    }
+    if (typeof target === "string") {
+      return target.includes("invoice_number");
+    }
+    return true;
   }
 }
 

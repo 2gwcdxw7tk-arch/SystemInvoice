@@ -10,9 +10,17 @@ jest.mock('@/lib/env', () => ({
   },
 }));
 
+jest.mock('@/lib/services/SequenceService', () => ({
+  sequenceService: {
+    generateInvoiceNumber: jest.fn(),
+  },
+}));
+
+import { env } from '@/lib/env';
 import { InvoiceService } from '@/lib/services/InvoiceService';
 import type { IInvoiceRepository, InvoiceInsertInput, InvoiceInsertResult } from '@/lib/repositories/invoices/IInvoiceRepository';
 import { OrderService } from '@/lib/services/orders/OrderService';
+import { sequenceService } from '@/lib/services/SequenceService';
 
 // Mock para el repositorio de facturas
 const mockInvoiceRepository: jest.Mocked<IInvoiceRepository> = {
@@ -35,10 +43,12 @@ const mockOrderService = {
 
 describe('InvoiceService', () => {
   let invoiceService: InvoiceService;
+  const mockedSequenceService = sequenceService as jest.Mocked<typeof sequenceService>;
 
   beforeEach(() => {
     // Limpiar mocks antes de cada prueba
     jest.clearAllMocks();
+    env.useMockData = true;
     // Instanciar InvoiceService con los mocks
     invoiceService = new InvoiceService(mockInvoiceRepository, mockOrderService);
   });
@@ -153,5 +163,87 @@ describe('InvoiceService', () => {
 
     expect(result).toBeNull();
     expect(mockInvoiceRepository.getInvoiceByNumber).not.toHaveBeenCalled();
+  });
+
+  it('skips duplicate folios returned by the sequence service', async () => {
+    env.useMockData = false;
+
+    const invoiceInput: InvoiceInsertInput = {
+      table_code: null,
+      waiter_code: null,
+      invoiceDate: new Date('2025-11-17'),
+      subtotal: 10,
+      service_charge: 0,
+      vat_amount: 1.5,
+      vat_rate: 0.15,
+      total_amount: 11.5,
+      currency_code: 'USD',
+      payments: [{ method: 'CASH', amount: 11.5, reference: null }],
+      items: [{ description: 'Item', quantity: 1, unit_price: 10 }],
+      issuer_admin_user_id: 1,
+      cash_register_id: 1,
+      cash_register_session_id: 1,
+      cash_register_code: 'REG-1',
+      cashRegisterWarehouseCode: 'MAIN',
+    };
+
+    mockedSequenceService.generateInvoiceNumber
+      .mockResolvedValueOnce('FAC-000001')
+      .mockResolvedValueOnce('FAC-000002');
+
+    mockInvoiceRepository.getInvoiceByNumber
+      .mockResolvedValueOnce({ id: 99, invoice_number: 'FAC-000001' })
+      .mockResolvedValueOnce(null);
+
+    mockInvoiceRepository.createInvoice.mockResolvedValue({ id: 200, invoice_number: 'FAC-000002' });
+
+    const result = await invoiceService.createInvoice(invoiceInput);
+
+    expect(result.invoice_number).toBe('FAC-000002');
+    expect(mockInvoiceRepository.createInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({ invoice_number: 'FAC-000002' })
+    );
+    expect(mockedSequenceService.generateInvoiceNumber).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries when persistence detects a duplicate folio', async () => {
+    env.useMockData = false;
+
+    const invoiceInput: InvoiceInsertInput = {
+      table_code: null,
+      waiter_code: null,
+      invoiceDate: new Date('2025-11-17'),
+      subtotal: 20,
+      service_charge: 0,
+      vat_amount: 3,
+      vat_rate: 0.15,
+      total_amount: 23,
+      currency_code: 'USD',
+      payments: [{ method: 'CARD', amount: 23, reference: null }],
+      items: [{ description: 'Item', quantity: 1, unit_price: 20 }],
+      issuer_admin_user_id: 1,
+      cash_register_id: 2,
+      cash_register_session_id: 5,
+      cash_register_code: 'REG-2',
+      cashRegisterWarehouseCode: 'MAIN',
+    };
+
+    mockedSequenceService.generateInvoiceNumber
+      .mockResolvedValueOnce('FAC-000010')
+      .mockResolvedValueOnce('FAC-000011');
+
+    mockInvoiceRepository.getInvoiceByNumber.mockResolvedValue(null);
+
+    const duplicateError = { code: 'P2002', meta: { target: ['invoice_number'] } } as const;
+
+    mockInvoiceRepository.createInvoice
+      .mockRejectedValueOnce(duplicateError)
+      .mockResolvedValueOnce({ id: 201, invoice_number: 'FAC-000011' });
+
+    const result = await invoiceService.createInvoice(invoiceInput);
+
+    expect(result.invoice_number).toBe('FAC-000011');
+    expect(mockInvoiceRepository.createInvoice).toHaveBeenCalledTimes(2);
+    expect(mockedSequenceService.generateInvoiceNumber).toHaveBeenCalledTimes(2);
   });
 });
