@@ -3991,9 +3991,6 @@ function FacturacionWorkspace({
                     </div>
                   ) : null}
                 </div>
-                <Button type="button" variant="outline" className="rounded-2xl md:w-fit" asChild>
-                  <Link href={"/cuentas-por-cobrar" as Route}>Gestionar clientes</Link>
-                </Button>
               </div>
               {selectedRetailCustomer ? (
                 <div className="rounded-2xl border border-primary/20 bg-background/90 p-3 text-xs text-muted-foreground">
