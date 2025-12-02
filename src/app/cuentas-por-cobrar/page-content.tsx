@@ -1396,8 +1396,9 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   });
   const [createState, setCreateState] = useState<CreateDocumentState>(() => createInitialCreateState());
-  const createCustomersLoadedRef = useRef(false);
-  const createPaymentTermsLoadedRef = useRef(false);
+  // Removed refs to force reload on every open to avoid stale data
+  // const createCustomersLoadedRef = useRef(false);
+  // const createPaymentTermsLoadedRef = useRef(false);
 
   useEffect(() => {
     const incoming = searchParams.get("promptApply") ?? searchParams.get("apply") ?? searchParams.get("applyDocumentId");
@@ -1467,66 +1468,59 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
   const loadCreateDocumentCatalogs = useCallback(async () => {
     const tasks: Promise<void>[] = [];
 
-    if (!createCustomersLoadedRef.current) {
-      tasks.push(
-        (async () => {
-          try {
-            const response = await fetch("/api/cxc/clientes?includeInactive=false&limit=400", {
-              cache: "no-store",
-              credentials: "include",
-            });
-            const payload = await response.json().catch(() => null);
-            if (!response.ok) {
-              const message = payload?.message ?? "No se pudieron obtener los clientes";
-              throw new Error(message);
-            }
-            const items: unknown[] = Array.isArray(payload?.items) ? payload.items : [];
-            const normalized = items
-              .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
-              .map((record) => normalizeCustomerRecord(record as Record<string, unknown>))
-              .filter((item): item is CustomerDTO => item !== null)
-              .sort((a, b) => a.name.localeCompare(b.name, "es"));
-            createCustomersLoadedRef.current = true;
-            setCreateState((prev) => ({ ...prev, customers: normalized }));
-          } catch (err) {
-            throw err instanceof Error ? err : new Error("No se pudieron obtener los clientes");
+    // Always fetch customers to ensure credit limits and balances are up to date
+    tasks.push(
+      (async () => {
+        try {
+          const response = await fetch("/api/cxc/clientes?includeInactive=false&limit=400", {
+            cache: "no-store",
+            credentials: "include",
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            const message = payload?.message ?? "No se pudieron obtener los clientes";
+            throw new Error(message);
           }
-        })()
-      );
-    }
+          const items: unknown[] = Array.isArray(payload?.items) ? payload.items : [];
+          const normalized = items
+            .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+            .map((record) => normalizeCustomerRecord(record as Record<string, unknown>))
+            .filter((item): item is CustomerDTO => item !== null)
+            .sort((a, b) => a.name.localeCompare(b.name, "es"));
+          
+          setCreateState((prev) => ({ ...prev, customers: normalized }));
+        } catch (err) {
+          throw err instanceof Error ? err : new Error("No se pudieron obtener los clientes");
+        }
+      })()
+    );
 
-    if (!createPaymentTermsLoadedRef.current) {
-      tasks.push(
-        (async () => {
-          try {
-            const response = await fetch("/api/preferencias/terminos-pago?includeInactive=true", {
-              cache: "no-store",
-              credentials: "include",
-            });
-            const payload = await response.json().catch(() => null);
-            if (!response.ok) {
-              const message = payload?.message ?? "No se pudieron obtener las condiciones de pago";
-              throw new Error(message);
-            }
-            const items: unknown[] = Array.isArray(payload?.items) ? payload.items : [];
-            const normalized = items
-              .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
-              .map((record) => normalizeDocumentPaymentTerm(record as Record<string, unknown>))
-              .filter((item): item is DocumentPaymentTerm => item !== null)
-              .sort((a, b) => a.code.localeCompare(b.code, "es"));
-            createPaymentTermsLoadedRef.current = true;
-            setCreateState((prev) => ({ ...prev, paymentTerms: normalized }));
-          } catch (err) {
-            throw err instanceof Error ? err : new Error("No se pudieron obtener las condiciones de pago");
+    // Always fetch payment terms to ensure we have the latest configuration
+    tasks.push(
+      (async () => {
+        try {
+          const response = await fetch("/api/preferencias/terminos-pago?includeInactive=true", {
+            cache: "no-store",
+            credentials: "include",
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            const message = payload?.message ?? "No se pudieron obtener las condiciones de pago";
+            throw new Error(message);
           }
-        })()
-      );
-    }
-
-    if (tasks.length === 0) {
-      setCreateState((prev) => ({ ...prev, loading: false, error: null }));
-      return;
-    }
+          const items: unknown[] = Array.isArray(payload?.items) ? payload.items : [];
+          const normalized = items
+            .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+            .map((record) => normalizeDocumentPaymentTerm(record as Record<string, unknown>))
+            .filter((item): item is DocumentPaymentTerm => item !== null)
+            .sort((a, b) => a.code.localeCompare(b.code, "es"));
+          
+          setCreateState((prev) => ({ ...prev, paymentTerms: normalized }));
+        } catch (err) {
+          throw err instanceof Error ? err : new Error("No se pudieron obtener las condiciones de pago");
+        }
+      })()
+    );
 
     const results = await Promise.allSettled(tasks);
     const errors = results
@@ -1545,7 +1539,6 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
       toast({ variant: "warning", title: "Documentos", description: "No tienes permisos para crear documentos." });
       return;
     }
-    const needsCatalogs = !createCustomersLoadedRef.current || !createPaymentTermsLoadedRef.current;
     
     // Check for customerId in searchParams
     const customerIdParam = searchParams.get("customerId");
@@ -1554,7 +1547,7 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
     setCreateState((prev) => ({
       ...prev,
       open: true,
-      loading: needsCatalogs,
+      loading: true, // Always loading initially
       saving: false,
       error: null,
       form: {
@@ -1562,9 +1555,9 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
         customerId: preselectedCustomerId && Number.isFinite(preselectedCustomerId) ? preselectedCustomerId : null,
       },
     }));
-    if (needsCatalogs) {
-      void loadCreateDocumentCatalogs();
-    }
+    
+    // Always load catalogs to get fresh data
+    void loadCreateDocumentCatalogs();
   }, [canManageDocuments, loadCreateDocumentCatalogs, searchParams, toast]);
 
   const handleReloadCreateCatalogs = useCallback(() => {
