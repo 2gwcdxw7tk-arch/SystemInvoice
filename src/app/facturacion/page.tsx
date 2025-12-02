@@ -2195,7 +2195,7 @@ function FacturacionWorkspace({
     const defaultCode = sessionDefaultCustomer.code.trim().toUpperCase();
     return defaultCode.length > 0 && defaultCode === selectedRetailCustomer.code.toUpperCase();
   }, [sessionDefaultCustomer, selectedRetailCustomer]);
-  const allowManualCustomerOverrides = isSessionDefaultCustomerSelected || !selectedRetailCustomer;
+  const allowManualCustomerOverrides = retailManualFlow && isSessionDefaultCustomerSelected;
 
   useEffect(() => {
     if (vatRate === 0) {
@@ -2694,7 +2694,6 @@ function FacturacionWorkspace({
 
   const [cashWarningModalOpen, setCashWarningModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const settingDefaultBusyRef = useRef(false);
 
   useEffect(() => {
     if (!canManageCashRegisters) {
@@ -4025,113 +4024,36 @@ function FacturacionWorkspace({
                   Selecciona un cliente para continuar. Estos datos se sincronizarán con el módulo de Cuentas por Cobrar.
                 </div>
               )}
-              <div className="rounded-2xl border border-muted bg-background/90 p-3">
-                <div className="flex flex-col gap-1">
-                  <span className="text-xs font-semibold uppercase text-muted-foreground">Datos para la factura</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {allowManualCustomerOverrides
-                      ? "Modifica estos campos para ventas de mostrador sin registrar un nuevo cliente."
-                      : "Solo se pueden editar cuando utilizas el cliente mostrador asignado a la caja."}
-                  </span>
-                </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <Label htmlFor="retail-manual-invoice-name" className="text-xs uppercase text-muted-foreground">Nombre en factura</Label>
-                    <Input
-                      id="retail-manual-invoice-name"
-                      value={customerName}
-                      onChange={(event) => handleManualCustomerNameChange(event.target.value)}
-                      placeholder={DEFAULT_MANUAL_CUSTOMER_NAME}
-                      disabled={!allowManualCustomerOverrides}
-                      className="rounded-2xl"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="retail-manual-invoice-tax" className="text-xs uppercase text-muted-foreground">RUC / NIT en factura</Label>
-                    <Input
-                      id="retail-manual-invoice-tax"
-                      value={customerTaxId}
-                      onChange={(event) => handleManualCustomerTaxIdChange(event.target.value)}
-                      placeholder="Identificador fiscal (opcional)"
-                      disabled={!allowManualCustomerOverrides}
-                      className="rounded-2xl"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {canManageCashRegisters && cashSessionState.activeSession ? (
-                <div className="rounded-2xl border border-dashed border-muted bg-muted/10 p-3">
+              {allowManualCustomerOverrides ? (
+                <div className="rounded-2xl border border-muted bg-background/90 p-3">
                   <div className="flex flex-col gap-1">
-                    <span className="text-xs uppercase text-muted-foreground">Cliente predeterminado de la caja</span>
-                    <span className="text-[11px] text-muted-foreground">Caja activa: {cashSessionState.activeSession.cashRegister.cashRegisterName} ({cashSessionState.activeSession.cashRegister.cashRegisterCode})</span>
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">Datos para la factura</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      Modifica estos campos cuando utilizas el cliente mostrador asignado a la caja.
+                    </span>
                   </div>
-                  <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Actual: </span>
-                      <span className="font-semibold text-foreground">
-                        {sessionDefaultCustomer ? `${sessionDefaultCustomer.code} • ${sessionDefaultCustomer.name}` : "Sin cliente"}
-                      </span>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Label htmlFor="retail-manual-invoice-name" className="text-xs uppercase text-muted-foreground">Nombre en factura</Label>
+                      <Input
+                        id="retail-manual-invoice-name"
+                        value={customerName}
+                        onChange={(event) => handleManualCustomerNameChange(event.target.value)}
+                        placeholder={DEFAULT_MANUAL_CUSTOMER_NAME}
+                        disabled={!allowManualCustomerOverrides}
+                        className="rounded-2xl"
+                      />
                     </div>
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
+                    <div className="space-y-1">
+                      <Label htmlFor="retail-manual-invoice-tax" className="text-xs uppercase text-muted-foreground">RUC / NIT en factura</Label>
+                      <Input
+                        id="retail-manual-invoice-tax"
+                        value={customerTaxId}
+                        onChange={(event) => handleManualCustomerTaxIdChange(event.target.value)}
+                        placeholder="Identificador fiscal (opcional)"
+                        disabled={!allowManualCustomerOverrides}
                         className="rounded-2xl"
-                        disabled={!selectedRetailCustomer || cashSessionState.loading}
-                        onClick={async () => {
-                          if (!selectedRetailCustomer || !cashSessionState.activeSession) return;
-                          if (settingDefaultBusyRef.current) return;
-                          try {
-                            settingDefaultBusyRef.current = true;
-                            const code = cashSessionState.activeSession.cashRegister.cashRegisterCode;
-                            const res = await fetch(`/api/cajas/${encodeURIComponent(code)}`, {
-                              method: "PATCH",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ default_customer_code: selectedRetailCustomer.code }),
-                            });
-                            if (!res.ok) throw new Error(await res.text());
-                            toast({ variant: "success", title: "Caja", description: "Cliente predeterminado actualizado." });
-                            await loadCashSession();
-                          } catch (error) {
-                            console.error("No se pudo actualizar cliente predeterminado", error);
-                            toast({ variant: "error", title: "Caja", description: "No se pudo actualizar el cliente predeterminado." });
-                          } finally {
-                            settingDefaultBusyRef.current = false;
-                          }
-                        }}
-                      >
-                        Usar seleccionado
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="rounded-2xl"
-                        disabled={!sessionDefaultCustomer || cashSessionState.loading}
-                        onClick={async () => {
-                          if (!cashSessionState.activeSession) return;
-                          if (settingDefaultBusyRef.current) return;
-                          try {
-                            settingDefaultBusyRef.current = true;
-                            const code = cashSessionState.activeSession.cashRegister.cashRegisterCode;
-                            const res = await fetch(`/api/cajas/${encodeURIComponent(code)}`, {
-                              method: "PATCH",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ default_customer_code: null }),
-                            });
-                            if (!res.ok) throw new Error(await res.text());
-                            toast({ variant: "success", title: "Caja", description: "Cliente predeterminado removido." });
-                            await loadCashSession();
-                          } catch (error) {
-                            console.error("No se pudo remover cliente predeterminado", error);
-                            toast({ variant: "error", title: "Caja", description: "No se pudo remover el cliente predeterminado." });
-                          } finally {
-                            settingDefaultBusyRef.current = false;
-                          }
-                        }}
-                      >
-                        Quitar predeterminado
-                      </Button>
+                      />
                     </div>
                   </div>
                 </div>

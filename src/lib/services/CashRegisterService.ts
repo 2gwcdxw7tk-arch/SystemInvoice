@@ -156,6 +156,83 @@ export class CashRegisterService {
     }
   }
 
+  private defaultCustomerFeatureEnabled(): boolean {
+    return env.features.retailModeEnabled;
+  }
+
+  private sanitizeCashRegister(record: CashRegisterRecord): CashRegisterRecord {
+    if (this.defaultCustomerFeatureEnabled() || !record.defaultCustomer) {
+      return record;
+    }
+    return { ...record, defaultCustomer: null };
+  }
+
+  private sanitizeCashRegisterList(records: CashRegisterRecord[]): CashRegisterRecord[] {
+    return records.map((record) => this.sanitizeCashRegister(record));
+  }
+
+  private sanitizeAssignment(assignment: CashRegisterAssignment): CashRegisterAssignment {
+    if (this.defaultCustomerFeatureEnabled() || !assignment.defaultCustomer) {
+      return assignment;
+    }
+    return { ...assignment, defaultCustomer: null };
+  }
+
+  private sanitizeAssignmentList(assignments: CashRegisterAssignment[]): CashRegisterAssignment[] {
+    return assignments.map((assignment) => this.sanitizeAssignment(assignment));
+  }
+
+  private sanitizeAssignmentGroup(group: CashRegisterAssignmentGroup): CashRegisterAssignmentGroup {
+    if (this.defaultCustomerFeatureEnabled()) {
+      return group;
+    }
+    if (!group.assignments.length) {
+      return group;
+    }
+    return {
+      ...group,
+      assignments: this.sanitizeAssignmentList(group.assignments),
+    };
+  }
+
+  private sanitizeAssignmentGroups(groups: CashRegisterAssignmentGroup[]): CashRegisterAssignmentGroup[] {
+    return groups.map((group) => this.sanitizeAssignmentGroup(group));
+  }
+
+  private sanitizeSession(session: CashRegisterSessionRecord): CashRegisterSessionRecord {
+    if (this.defaultCustomerFeatureEnabled() || !session.cashRegister.defaultCustomer) {
+      return session;
+    }
+    return {
+      ...session,
+      cashRegister: this.sanitizeAssignment(session.cashRegister),
+    };
+  }
+
+  private sanitizeSessionList(sessions: CashRegisterSessionRecord[]): CashRegisterSessionRecord[] {
+    return sessions.map((session) => this.sanitizeSession(session));
+  }
+
+  private sanitizeClosureSummary(summary: CashRegisterClosureSummary): CashRegisterClosureSummary {
+    if (this.defaultCustomerFeatureEnabled()) {
+      return summary;
+    }
+    return {
+      ...summary,
+      cashRegister: this.sanitizeAssignment(summary.cashRegister),
+    };
+  }
+
+  private sanitizeReport(report: CashRegisterReport): CashRegisterReport {
+    if (this.defaultCustomerFeatureEnabled()) {
+      return report;
+    }
+    return {
+      ...report,
+      cashRegister: this.sanitizeAssignment(report.cashRegister),
+    };
+  }
+
   private resolveLicenseLimit(): number | null {
     const { hasCashRegisterLimit, maxCashRegisters } = env.licenses;
     if (!hasCashRegisterLimit) {
@@ -260,18 +337,25 @@ export class CashRegisterService {
   async listCashRegisters(options: { includeInactive?: boolean } = {}): Promise<CashRegisterRecord[]> {
     if (env.useMockData) {
       const includeInactive = options.includeInactive ?? false;
-      return this.mockCashRegisters
+      const registers = this.mockCashRegisters
         .filter((register) => includeInactive || register.isActive)
         .map((register) => mapRegisterToRecord(cloneRegister(register)))
         .sort((a, b) => a.code.localeCompare(b.code));
+      return this.sanitizeCashRegisterList(registers);
     }
-    return this.repository.listCashRegisters(options);
+    const registers = await this.repository.listCashRegisters(options);
+    return this.sanitizeCashRegisterList(registers);
   }
 
   async createCashRegister(input: CreateCashRegisterInput): Promise<CashRegisterRecord> {
+    const allowDefaultCustomer = this.defaultCustomerFeatureEnabled();
     if (!env.useMockData) {
       await this.ensureActiveRegisterCapacity();
-      return this.repository.createCashRegister(input);
+      const created = await this.repository.createCashRegister({
+        ...input,
+        defaultCustomerCode: allowDefaultCustomer ? input.defaultCustomerCode : undefined,
+      });
+      return this.sanitizeCashRegister(created);
     }
 
     const normalizedCode = normalizeCode(input.code);
@@ -292,7 +376,11 @@ export class CashRegisterService {
     let defaultCustomerName: string | null = null;
     let defaultCustomerPaymentTermCode: string | null = null;
 
-    if (typeof input.defaultCustomerCode === "string" && input.defaultCustomerCode.trim().length > 0) {
+    if (
+      allowDefaultCustomer &&
+      typeof input.defaultCustomerCode === "string" &&
+      input.defaultCustomerCode.trim().length > 0
+    ) {
       const customer = await customerService.getByCode(input.defaultCustomerCode.trim());
       if (!customer) {
         throw new Error(`El cliente ${input.defaultCustomerCode.trim().toUpperCase()} no existe (mock)`);
@@ -325,11 +413,13 @@ export class CashRegisterService {
       defaultCustomerPaymentTermCode,
     };
     this.mockCashRegisters.push(newRegister);
-    return mapRegisterToRecord(cloneRegister(newRegister));
+    return this.sanitizeCashRegister(mapRegisterToRecord(cloneRegister(newRegister)));
   }
 
   async updateCashRegister(code: string, input: UpdateCashRegisterInput): Promise<CashRegisterRecord> {
     const normalizedCode = normalizeCode(code);
+    const allowDefaultCustomer = this.defaultCustomerFeatureEnabled();
+    const defaultCustomerCodeInput = allowDefaultCustomer ? input.defaultCustomerCode : undefined;
 
     if (!env.useMockData) {
       if (input.isActive === true) {
@@ -341,7 +431,11 @@ export class CashRegisterService {
           await this.ensureActiveRegisterCapacity();
         }
       }
-      return this.repository.updateCashRegister(normalizedCode, input);
+      const updated = await this.repository.updateCashRegister(normalizedCode, {
+        ...input,
+        defaultCustomerCode: defaultCustomerCodeInput,
+      });
+      return this.sanitizeCashRegister(updated);
     }
 
     const target = this.mockCashRegisters.find((register) => register.code === normalizedCode);
@@ -385,21 +479,21 @@ export class CashRegisterService {
       target.warehouseName = warehouse.name;
     }
 
-    if (typeof input.defaultCustomerCode !== "undefined") {
-      if (input.defaultCustomerCode === null) {
+    if (typeof defaultCustomerCodeInput !== "undefined") {
+      if (defaultCustomerCodeInput === null) {
         target.defaultCustomerId = null;
         target.defaultCustomerCode = null;
         target.defaultCustomerName = null;
         target.defaultCustomerPaymentTermCode = null;
       } else {
-        const trimmed = input.defaultCustomerCode.trim();
+        const trimmed = defaultCustomerCodeInput.trim();
         if (trimmed.length === 0) {
           target.defaultCustomerId = null;
           target.defaultCustomerCode = null;
           target.defaultCustomerName = null;
           target.defaultCustomerPaymentTermCode = null;
         } else {
-          const customer = await customerService.getByCode(trimmed);
+          const customer = allowDefaultCustomer ? await customerService.getByCode(trimmed) : null;
           if (!customer) {
             throw new Error(`El cliente ${trimmed.toUpperCase()} no existe (mock)`);
           }
@@ -412,7 +506,7 @@ export class CashRegisterService {
     }
 
     target.updatedAt = new Date().toISOString();
-    return mapRegisterToRecord(cloneRegister(target));
+    return this.sanitizeCashRegister(mapRegisterToRecord(cloneRegister(target)));
   }
 
   async setInvoiceSequenceForRegister(input: AssignInvoiceSequenceInput): Promise<CashRegisterRecord> {
@@ -426,25 +520,28 @@ export class CashRegisterService {
       target.invoiceSequenceCode = null;
       target.invoiceSequenceName = null;
       target.updatedAt = new Date().toISOString();
-      return mapRegisterToRecord(cloneRegister(target));
+      return this.sanitizeCashRegister(mapRegisterToRecord(cloneRegister(target)));
     }
 
-    return this.repository.updateCashRegister(normalizedCode, {
+    const updated = await this.repository.updateCashRegister(normalizedCode, {
       invoiceSequenceDefinitionId: input.sequenceDefinitionId ?? null,
     });
+    return this.sanitizeCashRegister(updated);
   }
 
   async getCashRegisterById(cashRegisterId: number): Promise<CashRegisterRecord | null> {
     if (env.useMockData) {
       const target = this.mockCashRegisters.find((register) => register.id === cashRegisterId);
-      return target ? mapRegisterToRecord(cloneRegister(target)) : null;
+      return target ? this.sanitizeCashRegister(mapRegisterToRecord(cloneRegister(target))) : null;
     }
-    return this.repository.getCashRegisterById(cashRegisterId);
+    const register = await this.repository.getCashRegisterById(cashRegisterId);
+    return register ? this.sanitizeCashRegister(register) : null;
   }
 
   async listCashRegisterAssignments(options: { adminUserIds?: number[] } = {}): Promise<CashRegisterAssignmentGroup[]> {
     if (!env.useMockData || !this.mockAssignments) {
-      return this.repository.listCashRegisterAssignments(options);
+      const groups = await this.repository.listCashRegisterAssignments(options);
+      return this.sanitizeAssignmentGroups(groups);
     }
     const { adminUserIds } = options;
     const allowList = adminUserIds && adminUserIds.length > 0 ? new Set(adminUserIds.map((id) => Number(id))) : null;
@@ -462,7 +559,7 @@ export class CashRegisterService {
       });
     }
     result.sort((a, b) => a.adminUserId - b.adminUserId);
-    return result;
+    return this.sanitizeAssignmentGroups(result);
   }
 
   async assignCashRegisterToAdmin(params: {
@@ -562,18 +659,22 @@ export class CashRegisterService {
 
   async listCashRegistersForAdmin(adminUserId: number): Promise<CashRegisterAssignment[]> {
     if (env.useMockData) {
-      return this.ensureMockAssignments(adminUserId);
+      const assignments = this.ensureMockAssignments(adminUserId);
+      return this.sanitizeAssignmentList(assignments);
     }
-    return this.repository.listCashRegistersForAdmin(adminUserId);
+    const assignments = await this.repository.listCashRegistersForAdmin(adminUserId);
+    return this.sanitizeAssignmentList(assignments);
   }
 
   async getActiveCashRegisterSessionByAdmin(adminUserId: number): Promise<CashRegisterSessionRecord | null> {
     if (env.useMockData && this.mockSessions) {
-      return this.findMockSession(
+      const session = this.findMockSession(
         (session) => session.adminUserId === adminUserId && session.status === "OPEN"
       );
+      return session ? this.sanitizeSession(session) : null;
     }
-    return this.repository.getActiveCashRegisterSessionByAdmin(adminUserId);
+    const session = await this.repository.getActiveCashRegisterSessionByAdmin(adminUserId);
+    return session ? this.sanitizeSession(session) : null;
   }
 
   async listRecentCashRegisterSessions(adminUserId: number, options: { limit?: number } = {}): Promise<CashRegisterSessionRecord[]> {
@@ -585,10 +686,11 @@ export class CashRegisterService {
         const timeB = new Date(b.openingAt).getTime();
         return timeB - timeA;
       });
-      return sessions.slice(0, limit).map((session) => cloneSession(session));
+      return this.sanitizeSessionList(sessions.slice(0, limit).map((session) => cloneSession(session)));
     }
 
-    return this.repository.listCashRegisterSessionsForAdmin(adminUserId, options);
+    const sessions = await this.repository.listCashRegisterSessionsForAdmin(adminUserId, options);
+    return this.sanitizeSessionList(sessions);
   }
 
   async getCashRegisterSessionById(sessionId: number | string): Promise<CashRegisterSessionRecord | null> {
@@ -598,9 +700,10 @@ export class CashRegisterService {
         return null;
       }
       const session = this.mockSessions.get(numericId);
-      return session ? cloneSession(session) : null;
+      return session ? this.sanitizeSession(cloneSession(session)) : null;
     }
-    return this.repository.getCashRegisterSessionById(sessionId);
+    const session = await this.repository.getCashRegisterSessionById(sessionId);
+    return session ? this.sanitizeSession(session) : null;
   }
 
   async recordInvoiceSequenceUsage(sessionId: number, invoiceLabel: string): Promise<void> {
@@ -722,12 +825,12 @@ export class CashRegisterService {
         invoiceSequenceEnd: null,
       };
       this.mockSessions.set(id, newSession);
-      return cloneSession(newSession);
+      return this.sanitizeSession(cloneSession(newSession));
     }
 
     await this.ensureSessionCapacity();
 
-    return this.repository.openCashRegisterSession({
+    const session = await this.repository.openCashRegisterSession({
       adminUserId: input.adminUserId,
       cashRegisterCode: input.cashRegisterCode,
       openingAmount: input.openingAmount,
@@ -736,6 +839,7 @@ export class CashRegisterService {
       actingAdminUserId: input.actingAdminUserId,
       openingDenominations: payloadOpeningDenoms,
     });
+    return this.sanitizeSession(session);
   }
 
   async closeCashRegisterSession(input: CloseCashRegisterSessionInput): Promise<CashRegisterClosureSummary> {
@@ -843,10 +947,10 @@ export class CashRegisterService {
         totalsSnapshot: summary,
       };
       this.mockSessions.set(session.id, updatedSession);
-      return summary;
+      return this.sanitizeClosureSummary(summary);
     }
 
-    return this.repository.closeCashRegisterSession({
+    const summary = await this.repository.closeCashRegisterSession({
       adminUserId: input.adminUserId,
       sessionId: input.sessionId ?? null,
       closingAmount,
@@ -855,6 +959,7 @@ export class CashRegisterService {
       allowDifferentUser,
       closingDenominations,
     });
+    return this.sanitizeClosureSummary(summary);
   }
 
   async getCashRegisterClosureReport(sessionId: number | string): Promise<CashRegisterReport | null> {
@@ -884,7 +989,7 @@ export class CashRegisterService {
           openingDenominations: session.openingDenominations ?? null,
           closingDenominations: session.closingDenominations ?? null,
         } satisfies CashRegisterReport;
-        return base;
+        return this.sanitizeReport(base);
       }
     }
 
@@ -923,11 +1028,11 @@ export class CashRegisterService {
         })),
         totalInvoices: invoices.length,
       });
-      return {
+      return this.sanitizeReport({
         ...built,
         openingDenominations: session.openingDenominations ?? null,
         closingDenominations: session.closingDenominations ?? null,
-      };
+      });
     }
 
     if (env.useMockData) {
@@ -953,11 +1058,11 @@ export class CashRegisterService {
       })),
       totalInvoices: result.totalInvoices,
     });
-    return {
+    return this.sanitizeReport({
       ...summary,
       openingDenominations: result.session.openingDenominations ?? null,
       closingDenominations: result.session.closingDenominations ?? null,
-    };
+    });
   }
 
   registerInvoiceForSession(params: {
@@ -984,10 +1089,11 @@ export class CashRegisterService {
     if (env.useMockData && this.mockSessions) {
       const sessions = Array.from(this.mockSessions.values()).filter((session) => session.status === "OPEN");
       sessions.sort((a, b) => new Date(a.openingAt).getTime() - new Date(b.openingAt).getTime());
-      return sessions.map((session) => cloneSession(session));
+      return this.sanitizeSessionList(sessions.map((session) => cloneSession(session)));
     }
 
-    return this.repository.listActiveCashRegisterSessions();
+    const sessions = await this.repository.listActiveCashRegisterSessions();
+    return this.sanitizeSessionList(sessions);
   }
 }
 

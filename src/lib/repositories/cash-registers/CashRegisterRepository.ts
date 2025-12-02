@@ -65,6 +65,20 @@ type DefaultCustomerInclude = {
 
 type CashRegisterIncludeWithDefault = Prisma.cash_registersInclude & Partial<DefaultCustomerInclude>;
 
+type CashRegisterCreateInputWithDefault = Prisma.cash_registersCreateInput & {
+  default_customer?: {
+    connect: { id: number | bigint };
+  };
+};
+
+type CashRegisterUpdateInputWithDefault = Prisma.cash_registersUpdateInput & {
+  default_customer?:
+    | { disconnect: true }
+    | {
+        connect: { id: number | bigint };
+      };
+};
+
 const defaultCustomerSelect = {
   id: true,
   code: true,
@@ -75,6 +89,56 @@ const defaultCustomerSelect = {
     },
   },
 } as const;
+
+type PrismaClientOrTransaction = Prisma.TransactionClient | PrismaClient;
+
+async function hydrateDefaultCustomers<T extends { default_customer_id: number | bigint | null }>(
+  client: PrismaClientOrTransaction,
+  registers: readonly T[]
+): Promise<Array<T & { default_customer: DefaultCustomerRow | null }>> {
+  if (registers.length === 0) {
+    return [];
+  }
+
+  const uniqueIds = Array.from(
+    new Set(
+      registers
+        .map((register) => register.default_customer_id)
+        .filter((id): id is number | bigint => id != null)
+        .map((id) => Number(id))
+    )
+  );
+
+  if (uniqueIds.length === 0) {
+    return registers.map((register) => ({ ...register, default_customer: null }));
+  }
+
+  const customers = await client.customers.findMany({
+    where: { id: { in: uniqueIds } },
+    select: defaultCustomerSelect,
+  });
+  const customerMap = new Map<number, DefaultCustomerRow>(
+    customers.map((customer) => [
+      Number(customer.id),
+      {
+        id: customer.id,
+        code: customer.code,
+        name: customer.name,
+        payment_terms: customer.payment_terms,
+      } satisfies DefaultCustomerRow,
+    ])
+  );
+
+  return registers.map((register) => {
+    const defaultCustomerId = register.default_customer_id;
+    const defaultCustomer =
+      defaultCustomerId != null ? customerMap.get(Number(defaultCustomerId)) ?? null : null;
+    return {
+      ...register,
+      default_customer: defaultCustomer,
+    };
+  });
+}
 
 function buildIncludeWithDefault(
   base: CashRegisterIncludeWithDefault,
@@ -107,10 +171,33 @@ type CashRegisterUserWithRelations = {
 };
 
 function isMissingDefaultCustomerRelationError(error: unknown): boolean {
-  if (!(error instanceof Prisma.PrismaClientValidationError)) {
+  if (!error) {
     return false;
   }
-  return typeof error.message === "string" && error.message.includes("default_customer");
+
+  const containsDefaultCustomer = (message?: unknown): boolean =>
+    typeof message === "string" && message.toLowerCase().includes("default_customer");
+
+  if (error instanceof Prisma.PrismaClientValidationError) {
+    return containsDefaultCustomer(error.message);
+  }
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (containsDefaultCustomer(error.message)) {
+      return true;
+    }
+    return containsDefaultCustomer(error.meta?.cause);
+  }
+
+  if (error instanceof Prisma.PrismaClientUnknownRequestError) {
+    return containsDefaultCustomer(error.message);
+  }
+
+  if (error instanceof Error) {
+    return containsDefaultCustomer(error.message);
+  }
+
+  return false;
 }
 
 type CashRegisterSessionWithRelations = {
@@ -305,16 +392,14 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         },
       });
 
+      let registerRows = registers as unknown as CashRegisterWithWarehouse[];
       if (shouldIncludeDefault) {
         this.defaultCustomerRelationSupported = true;
+      } else {
+        registerRows = (await hydrateDefaultCustomers(this.prisma, registerRows)) as CashRegisterWithWarehouse[];
       }
 
-      return registers.map((register) =>
-        mapRegisterToRecord({
-          ...(register as unknown as CashRegisterWithWarehouse),
-          default_customer: (register as unknown as CashRegisterWithWarehouse).default_customer ?? null,
-        })
-      );
+      return registerRows.map((register) => mapRegisterToRecord(register));
     } catch (error) {
       if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
         this.defaultCustomerRelationSupported = false;
@@ -325,26 +410,290 @@ export class CashRegisterRepository implements ICashRegisterRepository {
   }
 
   async createCashRegister(input: CreateCashRegisterInput): Promise<CashRegisterRecord> {
-    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const normalizedCode = normalizeCode(input.code);
-      const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
-      const allowManualWarehouseOverride = Boolean(input.allowManualWarehouseOverride);
-      const notes = input.notes?.trim() ? input.notes.trim().slice(0, 250) : null;
-      let defaultCustomerId: bigint | null = null;
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
 
-      if (typeof input.defaultCustomerCode === "string" && input.defaultCustomerCode.trim().length > 0) {
-        defaultCustomerId = await findCustomerIdByCode(tx, input.defaultCustomerCode);
-      }
+    try {
+      const createdRegister = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const normalizedCode = normalizeCode(input.code);
+        const normalizedWarehouseCode = normalizeCode(input.warehouseCode);
+        const allowManualWarehouseOverride = Boolean(input.allowManualWarehouseOverride);
+        const notes = input.notes?.trim() ? input.notes.trim().slice(0, 250) : null;
+        let defaultCustomerId: bigint | null = null;
 
-      const warehouse = await tx.warehouses.findFirst({
-        where: { code: normalizedWarehouseCode, is_active: true },
-        select: { id: true, code: true, name: true },
+        if (typeof input.defaultCustomerCode === "string") {
+          const trimmed = input.defaultCustomerCode.trim();
+          if (trimmed.length > 0) {
+            defaultCustomerId = await findCustomerIdByCode(tx, trimmed);
+          }
+        }
+
+        const warehouse = await tx.warehouses.findFirst({
+          where: { code: normalizedWarehouseCode, is_active: true },
+          select: { id: true, code: true, name: true },
+        });
+
+        if (!warehouse) {
+          throw new Error(`El almacén ${normalizedWarehouseCode} no existe o está inactivo`);
+        }
+
+        const include = buildIncludeWithDefault(
+          {
+            warehouses: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+              },
+            },
+            sequence_definitions: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+              },
+            },
+          },
+          shouldIncludeDefault
+        );
+
+        const createData: CashRegisterCreateInputWithDefault = {
+          code: normalizedCode,
+          name: input.name.trim(),
+          allow_manual_warehouse_override: allowManualWarehouseOverride,
+          notes,
+          warehouses: {
+            connect: { id: Number(warehouse.id) },
+          },
+        };
+
+        if (shouldIncludeDefault && typeof defaultCustomerId === "bigint") {
+          createData.default_customer = {
+            connect: { id: defaultCustomerId },
+          };
+        }
+
+        const newRegister = await tx.cash_registers.create({
+          data: createData,
+          include,
+        });
+
+        let registerRow = newRegister as unknown as CashRegisterWithWarehouse;
+        if (!shouldIncludeDefault) {
+          if (typeof defaultCustomerId === "bigint") {
+            const registerPrimaryKey =
+              typeof registerRow.id === "bigint" ? registerRow.id : BigInt(registerRow.id);
+            await tx.$executeRaw(
+              Prisma.sql`
+                UPDATE "app"."cash_registers"
+                SET default_customer_id = ${defaultCustomerId}
+                WHERE id = ${registerPrimaryKey}
+              `
+            );
+            registerRow = {
+              ...registerRow,
+              default_customer_id: defaultCustomerId,
+            } as CashRegisterWithWarehouse;
+          }
+
+          const hydrated = await hydrateDefaultCustomers(tx, [registerRow]);
+          registerRow = (hydrated[0] ?? registerRow) as CashRegisterWithWarehouse;
+        }
+
+        return registerRow;
       });
 
-      if (!warehouse) {
-        throw new Error(`El almacén ${normalizedWarehouseCode} no existe o está inactivo`);
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
       }
 
+      return mapRegisterToRecord(createdRegister as CashRegisterWithWarehouse);
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.createCashRegister(input);
+      }
+      throw error;
+    }
+  }
+
+  async updateCashRegister(cashRegisterCode: string, input: UpdateCashRegisterInput): Promise<CashRegisterRecord> {
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
+
+    try {
+      const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const normalizedCode = normalizeCode(cashRegisterCode);
+
+        const includeWithDefault = buildIncludeWithDefault(
+          {
+            warehouses: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+              },
+            },
+            sequence_definitions: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+              },
+            },
+          },
+          shouldIncludeDefault
+        );
+
+        const currentRegister = await tx.cash_registers.findUnique({
+          where: { code: normalizedCode },
+          include: includeWithDefault,
+        });
+
+        if (!currentRegister) {
+          throw new Error(`La caja ${normalizedCode} no existe`);
+        }
+
+        let targetWarehouseId: number | null = null;
+        if (typeof input.warehouseCode === "string" && input.warehouseCode.trim().length > 0) {
+          const normalizedInputWarehouseCode = normalizeCode(input.warehouseCode);
+          const newWarehouse = await tx.warehouses.findFirst({
+            where: { code: normalizedInputWarehouseCode, is_active: true },
+            select: { id: true, code: true, name: true },
+          });
+
+          if (!newWarehouse) {
+            throw new Error(`El almacén ${normalizedInputWarehouseCode} no existe o está inactivo`);
+          }
+          targetWarehouseId = Number(newWarehouse.id);
+        }
+
+        let targetSequenceDefinitionId: number | null | undefined = undefined;
+        if (typeof input.invoiceSequenceDefinitionId !== "undefined") {
+          if (input.invoiceSequenceDefinitionId === null) {
+            targetSequenceDefinitionId = null;
+          } else {
+            const candidate = await tx.sequence_definitions.findUnique({
+              where: { id: Number(input.invoiceSequenceDefinitionId) },
+              select: { id: true },
+            });
+            if (!candidate) {
+              throw new Error("La secuencia especificada no existe");
+            }
+            targetSequenceDefinitionId = Number(candidate.id);
+          }
+        }
+
+        let requestedDefaultCustomerId: bigint | null | undefined = undefined;
+        if (typeof input.defaultCustomerCode !== "undefined") {
+          if (input.defaultCustomerCode === null) {
+            requestedDefaultCustomerId = null;
+          } else {
+            const trimmed = input.defaultCustomerCode.trim();
+            if (trimmed.length === 0) {
+              requestedDefaultCustomerId = null;
+            } else {
+              requestedDefaultCustomerId = await findCustomerIdByCode(tx, trimmed);
+            }
+          }
+        }
+
+        const updateData: CashRegisterUpdateInputWithDefault = {};
+
+        if (typeof input.name === "string") {
+          updateData.name = input.name.trim();
+        }
+        if (typeof input.allowManualWarehouseOverride === "boolean") {
+          updateData.allow_manual_warehouse_override = input.allowManualWarehouseOverride;
+        }
+        if (typeof input.isActive === "boolean") {
+          updateData.is_active = input.isActive;
+        }
+        if (typeof input.notes !== "undefined") {
+          updateData.notes = input.notes?.trim() ? input.notes.trim().slice(0, 250) : null;
+        }
+
+        if (targetWarehouseId !== null) {
+          updateData.warehouses = {
+            connect: { id: targetWarehouseId },
+          };
+        }
+
+        if (typeof targetSequenceDefinitionId !== "undefined") {
+          updateData.sequence_definitions =
+            targetSequenceDefinitionId === null
+              ? { disconnect: true }
+              : { connect: { id: targetSequenceDefinitionId } };
+        }
+
+        if (shouldIncludeDefault && typeof requestedDefaultCustomerId !== "undefined") {
+          updateData.default_customer =
+            requestedDefaultCustomerId === null
+              ? { disconnect: true }
+              : { connect: { id: requestedDefaultCustomerId } };
+        }
+
+        const updatedRegister = await tx.cash_registers.update({
+          where: { code: normalizedCode },
+          data: updateData,
+          include: includeWithDefault,
+        });
+
+        let registerRow = updatedRegister as unknown as CashRegisterWithWarehouse;
+        if (!shouldIncludeDefault) {
+          if (typeof requestedDefaultCustomerId !== "undefined") {
+            const registerPrimaryKey =
+              typeof registerRow.id === "bigint" ? registerRow.id : BigInt(registerRow.id);
+            if (requestedDefaultCustomerId === null) {
+              await tx.$executeRaw(
+                Prisma.sql`
+                  UPDATE "app"."cash_registers"
+                  SET default_customer_id = NULL
+                  WHERE id = ${registerPrimaryKey}
+                `
+              );
+              registerRow = {
+                ...registerRow,
+                default_customer_id: null,
+              } as CashRegisterWithWarehouse;
+            } else {
+              await tx.$executeRaw(
+                Prisma.sql`
+                  UPDATE "app"."cash_registers"
+                  SET default_customer_id = ${requestedDefaultCustomerId}
+                  WHERE id = ${registerPrimaryKey}
+                `
+              );
+              registerRow = {
+                ...registerRow,
+                default_customer_id: requestedDefaultCustomerId,
+              } as CashRegisterWithWarehouse;
+            }
+          }
+
+          const hydrated = await hydrateDefaultCustomers(tx, [registerRow]);
+          registerRow = (hydrated[0] ?? registerRow) as CashRegisterWithWarehouse;
+        }
+
+        return registerRow;
+      });
+
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
+      }
+
+      return mapRegisterToRecord(result as CashRegisterWithWarehouse);
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.updateCashRegister(cashRegisterCode, input);
+      }
+      throw error;
+    }
+  }
+
+  async getCashRegisterById(cashRegisterId: number): Promise<CashRegisterRecord | null> {
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
+
+    try {
       const include = buildIncludeWithDefault(
         {
           warehouses: {
@@ -362,30 +711,42 @@ export class CashRegisterRepository implements ICashRegisterRepository {
             },
           },
         },
-        true
+        shouldIncludeDefault
       );
 
-      const newRegister = await tx.cash_registers.create({
-        data: {
-          code: normalizedCode,
-          name: input.name.trim(),
-          warehouse_id: Number(warehouse.id),
-          allow_manual_warehouse_override: allowManualWarehouseOverride,
-          notes: notes,
-          default_customer_id: typeof defaultCustomerId === "bigint" ? defaultCustomerId : undefined,
-        } as unknown as Prisma.cash_registersUncheckedCreateInput,
+      const register = await this.prisma.cash_registers.findUnique({
+        where: { id: Number(cashRegisterId) },
         include,
       });
 
-      return mapRegisterToRecord(newRegister as unknown as CashRegisterWithWarehouse);
-    });
+      if (!register || !register.warehouses) {
+        return null;
+      }
+
+      let registerRow = register as unknown as CashRegisterWithWarehouse;
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
+      } else {
+        const hydrated = await hydrateDefaultCustomers(this.prisma, [registerRow]);
+        registerRow = (hydrated[0] ?? registerRow) as CashRegisterWithWarehouse;
+      }
+
+      return mapRegisterToRecord(registerRow);
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.getCashRegisterById(cashRegisterId);
+      }
+      throw error;
+    }
   }
 
-  async updateCashRegister(cashRegisterCode: string, input: UpdateCashRegisterInput): Promise<CashRegisterRecord> {
-    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const normalizedCode = normalizeCode(cashRegisterCode);
+  async getCashRegisterByCode(cashRegisterCode: string): Promise<CashRegisterRecord | null> {
+    const normalizedCode = normalizeCode(cashRegisterCode);
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
 
-      const includeWithDefault = buildIncludeWithDefault(
+    try {
+      const include = buildIncludeWithDefault(
         {
           warehouses: {
             select: {
@@ -402,149 +763,34 @@ export class CashRegisterRepository implements ICashRegisterRepository {
             },
           },
         },
-        true
+        shouldIncludeDefault
       );
 
-      const currentRegister = await tx.cash_registers.findUnique({
+      const register = await this.prisma.cash_registers.findUnique({
         where: { code: normalizedCode },
-        include: includeWithDefault,
+        include,
       });
 
-      if (!currentRegister) {
-        throw new Error(`La caja ${normalizedCode} no existe`);
+      if (!register || !register.warehouses) {
+        return null;
       }
 
-      let targetWarehouseId = currentRegister.warehouse_id;
-      let targetSequenceDefinitionId = currentRegister.invoice_sequence_definition_id;
-      let defaultCustomerUpdate: bigint | null | undefined = undefined;
-
-      if (typeof input.warehouseCode === "string" && input.warehouseCode.trim().length > 0) {
-        const normalizedInputWarehouseCode = normalizeCode(input.warehouseCode);
-        const newWarehouse = await tx.warehouses.findFirst({
-          where: { code: normalizedInputWarehouseCode, is_active: true },
-          select: { id: true, code: true, name: true },
-        });
-
-        if (!newWarehouse) {
-          throw new Error(`El almacén ${normalizedInputWarehouseCode} no existe o está inactivo`);
-        }
-        targetWarehouseId = newWarehouse.id;
+      let registerRow = register as unknown as CashRegisterWithWarehouse;
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
+      } else {
+        const hydrated = await hydrateDefaultCustomers(this.prisma, [registerRow]);
+        registerRow = (hydrated[0] ?? registerRow) as CashRegisterWithWarehouse;
       }
 
-      if (typeof input.invoiceSequenceDefinitionId !== "undefined") {
-        if (input.invoiceSequenceDefinitionId === null) {
-          targetSequenceDefinitionId = null;
-        } else {
-          const candidate = await tx.sequence_definitions.findUnique({
-            where: { id: Number(input.invoiceSequenceDefinitionId) },
-            select: { id: true },
-          });
-          if (!candidate) {
-            throw new Error("La secuencia especificada no existe");
-          }
-          targetSequenceDefinitionId = Number(candidate.id);
-        }
+      return mapRegisterToRecord(registerRow);
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.getCashRegisterByCode(cashRegisterCode);
       }
-
-      if (typeof input.defaultCustomerCode !== "undefined") {
-        if (input.defaultCustomerCode === null) {
-          defaultCustomerUpdate = null;
-        } else {
-          const trimmed = input.defaultCustomerCode.trim();
-          if (trimmed.length === 0) {
-            defaultCustomerUpdate = null;
-          } else {
-            defaultCustomerUpdate = await findCustomerIdByCode(tx, trimmed);
-          }
-        }
-      }
-
-      const updatedRegister = await tx.cash_registers.update({
-        where: { code: normalizedCode },
-        data: {
-          name: input.name?.trim(),
-          allow_manual_warehouse_override: input.allowManualWarehouseOverride,
-          is_active: input.isActive,
-          notes: input.notes?.trim() ? input.notes.trim().slice(0, 250) : null,
-          warehouse_id: targetWarehouseId,
-          invoice_sequence_definition_id: targetSequenceDefinitionId,
-          default_customer_id:
-            typeof defaultCustomerUpdate === "undefined"
-              ? undefined
-              : defaultCustomerUpdate,
-        } as unknown as Prisma.cash_registersUncheckedUpdateInput,
-        include: includeWithDefault,
-      });
-
-      return mapRegisterToRecord(updatedRegister as unknown as CashRegisterWithWarehouse);
-    });
-  }
-
-  async getCashRegisterById(cashRegisterId: number): Promise<CashRegisterRecord | null> {
-    const include = buildIncludeWithDefault(
-      {
-        warehouses: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
-        sequence_definitions: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
-      },
-      true
-    );
-
-    const register = await this.prisma.cash_registers.findUnique({
-      where: { id: Number(cashRegisterId) },
-      include,
-    });
-
-    if (!register || !register.warehouses) {
-      return null;
+      throw error;
     }
-
-    return mapRegisterToRecord(register as unknown as CashRegisterWithWarehouse);
-  }
-
-  async getCashRegisterByCode(cashRegisterCode: string): Promise<CashRegisterRecord | null> {
-    const normalizedCode = normalizeCode(cashRegisterCode);
-    const include = buildIncludeWithDefault(
-      {
-        warehouses: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
-        sequence_definitions: {
-          select: {
-            id: true,
-            code: true,
-            name: true,
-          },
-        },
-      },
-      true
-    );
-
-    const register = await this.prisma.cash_registers.findUnique({
-      where: { code: normalizedCode },
-      include,
-    });
-
-    if (!register || !register.warehouses) {
-      return null;
-    }
-
-    return mapRegisterToRecord(register as unknown as CashRegisterWithWarehouse);
   }
 
   async countActiveCashRegisters(): Promise<number> {
@@ -577,11 +823,35 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         orderBy: [{ is_default: "desc" }, { cash_registers: { code: "asc" } }],
       });
 
+      let assignmentRows = assignments as CashRegisterUserWithRelations[];
       if (shouldIncludeDefault) {
         this.defaultCustomerRelationSupported = true;
+      } else {
+        const registersToHydrate = assignmentRows
+          .map((assignment) => assignment.cash_registers)
+          .filter((register): register is CashRegisterWithWarehouse => !!register);
+        if (registersToHydrate.length > 0) {
+          const hydrated = await hydrateDefaultCustomers(this.prisma, registersToHydrate);
+          const registerMap = new Map<number, CashRegisterWithWarehouse>(
+            hydrated.map((register) => [Number(register.id), register])
+          );
+          assignmentRows = assignmentRows.map((assignment) => {
+            if (!assignment.cash_registers) {
+              return assignment;
+            }
+            const hydratedRegister = registerMap.get(Number(assignment.cash_registers.id));
+            if (!hydratedRegister) {
+              return assignment;
+            }
+            return {
+              ...assignment,
+              cash_registers: hydratedRegister,
+            };
+          });
+        }
       }
 
-      return assignments
+      return assignmentRows
         .filter((a: CashRegisterUserWithRelations) => a.cash_registers !== null && a.cash_registers.warehouses !== null)
         .map((assignment: CashRegisterUserWithRelations) => ({
           cashRegisterId: Number(assignment.cash_registers!.id),
@@ -991,6 +1261,11 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         }
       }
 
+      if (targetCashRegister && !shouldIncludeDefault) {
+        const hydrated = await hydrateDefaultCustomers(tx, [targetCashRegister]);
+        targetCashRegister = (hydrated[0] ?? targetCashRegister) as CashRegisterWithWarehouse;
+      }
+
       if (!targetCashRegister || !targetCashRegister.warehouses) {
         throw new Error(`No tienes permisos para operar la caja ${cashRegisterCode} o no existe/está inactiva`);
       }
@@ -1031,7 +1306,19 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         },
       });
 
-      return mapSessionToRecord({ ...(newSession as unknown as CashRegisterSessionWithRelations), is_default: isDefaultAssignment });
+      let sessionWithRelations = newSession as unknown as CashRegisterSessionWithRelations;
+      if (!shouldIncludeDefault && sessionWithRelations.cash_registers) {
+        const hydrated = await hydrateDefaultCustomers(tx, [sessionWithRelations.cash_registers as CashRegisterWithWarehouse]);
+        const resolved = hydrated[0];
+        if (resolved) {
+          sessionWithRelations = {
+            ...sessionWithRelations,
+            cash_registers: resolved,
+          };
+        }
+      }
+
+      return mapSessionToRecord({ ...sessionWithRelations, is_default: isDefaultAssignment });
     });
   }
 
@@ -1083,6 +1370,17 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           },
           orderBy: { opening_at: "desc" },
         });
+      }
+
+      if (sessionToClose && !shouldIncludeDefault && sessionToClose.cash_registers) {
+        const hydrated = await hydrateDefaultCustomers(tx, [sessionToClose.cash_registers as CashRegisterWithWarehouse]);
+        const resolved = hydrated[0];
+        if (resolved) {
+          sessionToClose = {
+            ...sessionToClose,
+            cash_registers: resolved,
+          } as CashRegisterSessionWithRelations;
+        }
       }
 
       if (!sessionToClose || !sessionToClose.cash_registers || !sessionToClose.cash_registers.warehouses) {
@@ -1253,35 +1551,76 @@ export class CashRegisterRepository implements ICashRegisterRepository {
   }
 
   async listActiveCashRegisterSessions(): Promise<CashRegisterSessionRecord[]> {
-    const sessions = await this.prisma.cash_register_sessions.findMany({
-      where: { status: "OPEN" },
-      include: {
-        cash_registers: {
-          include: {
-            warehouses: {
-              select: { id: true, code: true, name: true },
-            },
+    const shouldIncludeDefault = this.defaultCustomerRelationSupported !== false;
+
+    try {
+      const sessions = await this.prisma.cash_register_sessions.findMany({
+        where: { status: "OPEN" },
+        include: {
+          cash_registers: {
+            include: buildIncludeWithDefault(
+              {
+                warehouses: {
+                  select: { id: true, code: true, name: true },
+                },
+              },
+              shouldIncludeDefault
+            ),
           },
         },
-      },
-      orderBy: { opening_at: "asc" },
-    });
+        orderBy: { opening_at: "asc" },
+      });
 
-    return Promise.all(sessions.map(async (session: CashRegisterSessionWithRelations) => {
-      if (!session.cash_registers || !session.cash_registers.warehouses) {
-        return mapSessionToRecord({ ...session, is_default: false, cash_registers: { ...session.cash_registers!, warehouses: { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } } });
+      let sessionsWithRelations = sessions as CashRegisterSessionWithRelations[];
+      if (shouldIncludeDefault) {
+        this.defaultCustomerRelationSupported = true;
+      } else {
+        const registersToHydrate = sessionsWithRelations
+          .map((session) => session.cash_registers)
+          .filter((register): register is CashRegisterWithWarehouse => !!register);
+        if (registersToHydrate.length > 0) {
+          const hydrated = await hydrateDefaultCustomers(this.prisma, registersToHydrate);
+          const registerMap = new Map<number, CashRegisterWithWarehouse>(
+            hydrated.map((register) => [Number(register.id), register])
+          );
+          sessionsWithRelations = sessionsWithRelations.map((session) => {
+            if (!session.cash_registers) {
+              return session;
+            }
+            const hydratedRegister = registerMap.get(Number(session.cash_registers.id));
+            if (!hydratedRegister) {
+              return session;
+            }
+            return {
+              ...session,
+              cash_registers: hydratedRegister,
+            } as CashRegisterSessionWithRelations;
+          });
+        }
       }
 
-      const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
-        where: {
-          cash_register_id_admin_user_id: {
-            cash_register_id: session.cash_register_id,
-            admin_user_id: session.admin_user_id,
+      return Promise.all(sessionsWithRelations.map(async (session: CashRegisterSessionWithRelations) => {
+        if (!session.cash_registers || !session.cash_registers.warehouses) {
+          return mapSessionToRecord({ ...session, is_default: false, cash_registers: { ...session.cash_registers!, warehouses: { id: 0, code: "UNKNOWN", name: "Unknown Warehouse" } } });
+        }
+
+        const cashRegisterUser = await this.prisma.cash_register_users.findUnique({
+          where: {
+            cash_register_id_admin_user_id: {
+              cash_register_id: session.cash_register_id,
+              admin_user_id: session.admin_user_id,
+            },
           },
-        },
-        select: { is_default: true },
-      });
-      return mapSessionToRecord({ ...session, is_default: cashRegisterUser?.is_default ?? false });
-    }));
+          select: { is_default: true },
+        });
+        return mapSessionToRecord({ ...session, is_default: cashRegisterUser?.is_default ?? false });
+      }));
+    } catch (error) {
+      if (shouldIncludeDefault && isMissingDefaultCustomerRelationError(error)) {
+        this.defaultCustomerRelationSupported = false;
+        return this.listActiveCashRegisterSessions();
+      }
+      throw error;
+    }
   }
 }

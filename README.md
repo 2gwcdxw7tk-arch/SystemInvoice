@@ -235,6 +235,9 @@ Errores devuelven `{ success: false, message: string }` con estado 400 (validaci
 
 Los usuarios con rol `FACTURADOR` deben abrir una caja antes de emitir facturas. El flujo completo se expone vía endpoints protegidos:
 
+- El cliente mostrador predeterminado de cada caja se define desde el tab **Cajas** en `/preferencias` cuando `NEXT_PUBLIC_ES_RESTAURANTE=false`. Haz doble clic en la columna **Cliente predeterminado** para abrir el buscador (solo lista clientes activos con condición de pago CONTADO). Solo los administradores pueden asignar o remover esta relación y el backend valida que el código de cliente exista antes de persistirlo.
+- Un consecutivo de facturación (`SequenceService.generateInvoiceNumber`) es obligatorio por caja y se asigna desde el tab **Consecutivos** en `/preferencias`.
+
 - `GET /api/cajas/sesion-activa`: devuelve la caja asignada, la apertura en curso (si existe) y el listado de cajas autorizadas para el usuario actual. El endpoint se usa en la UI para mostrar el banner de sesión o desplegar el modal de apertura.
 - `POST /api/cajas/aperturas`: abre una jornada de caja. Requiere `cash_register_code`, `opening_amount` y notas opcionales. Valida que no existan otras sesiones `OPEN` para el usuario ni para la caja objetivo.
 - `GET /api/cajas/aperturas/{sessionId}/reporte?format=html[&token=JWT]`: construye un reporte de apertura imprimible con los datos de la sesión, responsable y notas capturadas. Disponible para el titular de la caja, supervisores (`cash.report.view`) y administradores. El token opcional se envía al abrir la caja desde la UI para ver el HTML sin reenviar credenciales.

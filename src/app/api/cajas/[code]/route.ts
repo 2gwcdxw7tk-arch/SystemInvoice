@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireAdministrator } from "@/lib/auth/access";
+import { env } from "@/lib/env";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
 
 const updateCashRegisterSchema = z
@@ -70,16 +71,21 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
   try {
     const data = parsed.data;
+    const allowDefaultCustomer = env.features.retailModeEnabled;
+    const rawDefaultCustomerCode =
+      typeof data.default_customer_code === "string"
+        ? data.default_customer_code.trim().length > 0
+          ? data.default_customer_code.trim().toUpperCase()
+          : null
+        : data.default_customer_code;
+    const sanitizedDefaultCustomerCode = allowDefaultCustomer ? rawDefaultCustomerCode : undefined;
     const item = await cashRegisterService.updateCashRegister(code, {
       name: data.name,
       warehouseCode: data.warehouse_code,
       allowManualWarehouseOverride: data.allow_manual_warehouse_override,
       isActive: data.is_active,
       notes: data.notes != null && data.notes.trim().length > 0 ? data.notes.trim() : data.notes === null ? null : undefined,
-      defaultCustomerCode:
-        typeof data.default_customer_code === "string"
-          ? (data.default_customer_code.trim().length > 0 ? data.default_customer_code.trim().toUpperCase() : null)
-          : data.default_customer_code,
+      defaultCustomerCode: sanitizedDefaultCustomerCode,
     });
     return NextResponse.json({ success: true, item });
   } catch (error) {

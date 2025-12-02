@@ -133,17 +133,23 @@ describe('Cajas API core', () => {
   });
 
   it('POST /api/cajas', async () => {
-    const req = new Request('http://localhost/api/cajas', { method: 'POST', body: JSON.stringify({ code: 'CR-02', name: 'Secundaria', warehouse_code: 'ALM' }) });
+    const req = new Request('http://localhost/api/cajas', { method: 'POST', body: JSON.stringify({ code: 'CR-02', name: 'Secundaria', warehouse_code: 'ALM', default_customer_code: 'CLI-001' }) });
     // @ts-expect-error NextRequest compatible shape
     const res = await CajasPOST(req);
     expect([200,201]).toContain(res.status);
+    expect(mockedCashRegisterService.createCashRegister).toHaveBeenLastCalledWith(expect.objectContaining({
+      defaultCustomerCode: 'CLI-001',
+    }));
   });
 
   it('PATCH /api/cajas/[code]', async () => {
-    const req = new Request('http://localhost/api/cajas/CR-01', { method: 'PATCH', body: JSON.stringify({ name: 'Principal X' }) });
+    const req = new Request('http://localhost/api/cajas/CR-01', { method: 'PATCH', body: JSON.stringify({ name: 'Principal X', default_customer_code: '' }) });
     // @ts-expect-error NextRequest compatible shape
     const res = await CajaPATCH(req, { params: Promise.resolve({ code: 'CR-01' }) });
     expect(res.status).toBe(200);
+    expect(mockedCashRegisterService.updateCashRegister).toHaveBeenLastCalledWith('CR-01', expect.objectContaining({
+      defaultCustomerCode: null,
+    }));
   });
 });
 

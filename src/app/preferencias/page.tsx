@@ -8,6 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-provider";
 import { Combobox } from "@/components/ui/combobox";
+import { publicFeatures } from "@/lib/features/public";
+import { filterEligibleDefaultCustomers, isDefaultCustomerEligible } from "@/lib/services/cash-registers/default-customer";
 import type { CashRegisterAssignmentGroup, CashRegisterRecord } from "@/lib/services/cash-registers/types";
 
 const ALLOWED_TABS = ["unidades", "zonas", "clasificaciones", "alertas", "notificaciones", "cajas", "consecutivos"] as const;
@@ -110,6 +112,9 @@ interface CashRegisterFormState {
   allowManualWarehouseOverride: boolean;
   notes: string;
   isActive: boolean;
+  defaultCustomerCode: string;
+  defaultCustomerName: string | null;
+  defaultCustomerPaymentTerm: string | null;
 }
 
 interface FacturadorUserRow {
@@ -117,6 +122,14 @@ interface FacturadorUserRow {
   username: string;
   displayName: string | null;
   isActive: boolean;
+}
+
+interface CustomerSummaryItem {
+  id: number;
+  code: string;
+  name: string;
+  taxId: string | null;
+  paymentTermCode: string | null;
 }
 
 type SequenceScope = "INVOICE" | "INVENTORY";
@@ -176,6 +189,9 @@ const EMPTY_CASH_REGISTER_FORM: CashRegisterFormState = {
   allowManualWarehouseOverride: false,
   notes: "",
   isActive: true,
+  defaultCustomerCode: "",
+  defaultCustomerName: null,
+  defaultCustomerPaymentTerm: null,
 };
 
 const EMPTY_SEQUENCE_FORM: SequenceDefinitionFormState = {
@@ -220,6 +236,7 @@ function parseThreshold(value: string) {
 
 export default function PreferenciasPage() {
   const { toast } = useToast();
+  const retailModeEnabled = publicFeatures.retailModeEnabled;
   const [activeTab, setActiveTab] = useState<TabKey>("unidades");
 
   const [units, setUnits] = useState<UnitRow[]>([]);
@@ -275,6 +292,15 @@ export default function PreferenciasPage() {
 
   const [assignmentSelections, setAssignmentSelections] = useState<Record<number, string>>({});
 
+  const [customerSummaries, setCustomerSummaries] = useState<CustomerSummaryItem[]>([]);
+  const [customerSummariesLoading, setCustomerSummariesLoading] = useState(false);
+  const [customerSummariesError, setCustomerSummariesError] = useState<string | null>(null);
+  const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const [customerPickerTarget, setCustomerPickerTarget] = useState<CashRegisterRecord | null>(null);
+  const [customerPickerSearch, setCustomerPickerSearch] = useState("");
+  const [customerPickerSelectedCode, setCustomerPickerSelectedCode] = useState<string | null>(null);
+  const [customerPickerSaving, setCustomerPickerSaving] = useState(false);
+
   const [sequenceDefinitions, setSequenceDefinitions] = useState<SequenceDefinitionRow[]>([]);
   const [sequenceDefinitionsLoading, setSequenceDefinitionsLoading] = useState(false);
   const [sequenceModalOpen, setSequenceModalOpen] = useState(false);
@@ -302,6 +328,7 @@ export default function PreferenciasPage() {
   const sequenceDefinitionsRequestedRef = useRef(false);
   const inventorySequencesRequestedRef = useRef(false);
   const cashRegisterSequencesRequestedRef = useRef(false);
+  const customerSummariesRequestedRef = useRef(false);
 
   useEffect(() => {
     const applyHash = () => {
@@ -502,6 +529,53 @@ export default function PreferenciasPage() {
     }
   }, [toast]);
 
+  const loadCustomerSummaries = useCallback(async (force = false) => {
+    if (customerSummariesRequestedRef.current && !force) return;
+    customerSummariesRequestedRef.current = true;
+    setCustomerSummariesLoading(true);
+    try {
+      const res = await fetch("/api/cxc/clientes?summary=true&limit=500", { cache: "no-store", credentials: "include" });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = payload?.message ?? "No se pudieron cargar los clientes";
+        throw new Error(message);
+      }
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const normalized: CustomerSummaryItem[] = items
+        .filter((item: unknown): item is Record<string, unknown> => !!item && typeof item === "object")
+        .map((item: Record<string, unknown>) => {
+          const candidate = item as Record<string, unknown>;
+          const id = typeof candidate.id === "number" ? candidate.id : Number(candidate.id ?? 0);
+          const code = typeof candidate.code === "string" ? candidate.code : "";
+          const name = typeof candidate.name === "string" ? candidate.name : code;
+          const taxId = typeof candidate.taxId === "string" && candidate.taxId.length > 0 ? candidate.taxId : null;
+          const paymentTermCode = typeof candidate.paymentTermCode === "string" && candidate.paymentTermCode.length > 0
+            ? candidate.paymentTermCode
+            : null;
+          return {
+            id,
+            code,
+            name,
+            taxId,
+            paymentTermCode,
+          } satisfies CustomerSummaryItem;
+        })
+        .filter((item: CustomerSummaryItem): item is CustomerSummaryItem => item.id > 0 && item.code.length > 0)
+        .sort((a: CustomerSummaryItem, b: CustomerSummaryItem) => a.name.localeCompare(b.name, "es"));
+
+      setCustomerSummaries(normalized);
+      setCustomerSummariesError(null);
+    } catch (error) {
+      customerSummariesRequestedRef.current = false;
+      const message = error instanceof Error ? error.message : "No se pudieron cargar los clientes";
+      setCustomerSummaries([]);
+      setCustomerSummariesError(message);
+      toast({ variant: "error", title: "Clientes", description: message });
+    } finally {
+      setCustomerSummariesLoading(false);
+    }
+  }, [toast]);
+
   const loadCashAssignments = useCallback(async (force = false) => {
     if (cashAssignmentsRequestedRef.current && !force) return;
     cashAssignmentsRequestedRef.current = true;
@@ -604,7 +678,22 @@ export default function PreferenciasPage() {
     void loadCashRegisters();
     void loadFacturadores();
     void loadCashAssignments();
-  }, [activeTab, loadWarehouses, loadCashRegisters, loadFacturadores, loadCashAssignments]);
+    if (retailModeEnabled) {
+      void loadCustomerSummaries();
+    } else {
+      setCustomerSummaries([]);
+      setCustomerSummariesError(null);
+      customerSummariesRequestedRef.current = false;
+    }
+  }, [
+    activeTab,
+    loadWarehouses,
+    loadCashRegisters,
+    loadFacturadores,
+    loadCashAssignments,
+    loadCustomerSummaries,
+    retailModeEnabled,
+  ]);
 
   useEffect(() => {
     if (activeTab !== "consecutivos") return;
@@ -666,6 +755,52 @@ export default function PreferenciasPage() {
         })),
     [cashRegisters]
   );
+
+  const eligibleDefaultCustomers = useMemo(() => {
+    if (!retailModeEnabled) {
+      return [] as CustomerSummaryItem[];
+    }
+    return filterEligibleDefaultCustomers(customerSummaries)
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name, "es"));
+  }, [customerSummaries, retailModeEnabled]);
+
+  const filteredDefaultCustomers = useMemo(() => {
+    if (!retailModeEnabled) {
+      return [] as CustomerSummaryItem[];
+    }
+    const term = customerPickerSearch.trim().toLowerCase();
+    if (term.length === 0) {
+      return eligibleDefaultCustomers;
+    }
+    return eligibleDefaultCustomers.filter((customer) => {
+      const codeMatch = customer.code.toLowerCase().includes(term);
+      const nameMatch = customer.name.toLowerCase().includes(term);
+      const taxMatch = (customer.taxId ?? "").toLowerCase().includes(term);
+      return codeMatch || nameMatch || taxMatch;
+    });
+  }, [eligibleDefaultCustomers, customerPickerSearch, retailModeEnabled]);
+
+  const selectedDefaultCustomer = useMemo(
+    () => {
+      if (!retailModeEnabled) {
+        return null;
+      }
+      return eligibleDefaultCustomers.find((customer) => customer.code === customerPickerSelectedCode) ?? null;
+    },
+    [eligibleDefaultCustomers, customerPickerSelectedCode, retailModeEnabled]
+  );
+
+  const currentDefaultCustomer = useMemo(() => {
+    if (!retailModeEnabled) {
+      return null;
+    }
+    return customerPickerTarget?.defaultCustomer ?? null;
+  }, [customerPickerTarget, retailModeEnabled]);
+  const currentDefaultEligible = useMemo(() => {
+    if (!retailModeEnabled || !currentDefaultCustomer) return false;
+    return isDefaultCustomerEligible({ paymentTermCode: currentDefaultCustomer.paymentTermCode });
+  }, [currentDefaultCustomer, retailModeEnabled]);
 
   const invoiceSequenceOptions = useMemo(
     () =>
@@ -805,14 +940,102 @@ export default function PreferenciasPage() {
       allowManualWarehouseOverride: register.allowManualWarehouseOverride,
       notes: register.notes ?? "",
       isActive: register.isActive,
+      defaultCustomerCode: retailModeEnabled ? register.defaultCustomer?.code ?? "" : "",
+      defaultCustomerName: retailModeEnabled ? register.defaultCustomer?.name ?? null : null,
+      defaultCustomerPaymentTerm: retailModeEnabled ? register.defaultCustomer?.paymentTermCode ?? null : null,
     });
     setCashRegisterModalOpen(true);
+  };
+
+  const handleOpenDefaultCustomerPicker = (register: CashRegisterRecord) => {
+    if (!retailModeEnabled) {
+      return;
+    }
+    setCustomerPickerTarget(register);
+    setCustomerPickerSearch("");
+    setCustomerPickerSelectedCode(register.defaultCustomer?.code ?? null);
+    setCustomerPickerSaving(false);
+    setCustomerPickerOpen(true);
+    void loadCustomerSummaries();
+  };
+
+  const handleCloseCustomerPicker = (force = false) => {
+    if (customerPickerSaving && !force) {
+      return;
+    }
+    setCustomerPickerOpen(false);
+    setCustomerPickerTarget(null);
+    setCustomerPickerSelectedCode(null);
+    setCustomerPickerSearch("");
+    setCustomerPickerSaving(false);
+  };
+
+  const handleApplyDefaultCustomer = async (code: string | null) => {
+    if (!retailModeEnabled) {
+      toast({ variant: "warning", title: "Cajas", description: "La asignación de cliente predeterminado está deshabilitada." });
+      return;
+    }
+    if (!customerPickerTarget) {
+      toast({ variant: "error", title: "Cajas", description: "Selecciona una caja antes de asignar el cliente." });
+      return;
+    }
+
+    const trimmed = typeof code === "string" ? code.trim().toUpperCase() : null;
+    if (trimmed && !eligibleDefaultCustomers.some((customer) => customer.code === trimmed)) {
+      toast({ variant: "error", title: "Cajas", description: "Solo puedes asignar clientes con condición de pago CONTADO." });
+      return;
+    }
+    if (!trimmed && code && code.trim().length > 0) {
+      toast({ variant: "error", title: "Cajas", description: "Ingresa un código de cliente válido." });
+      return;
+    }
+
+    setCustomerPickerSaving(true);
+    try {
+      const payload = {
+        default_customer_code: trimmed ?? null,
+      } as const;
+      const res = await fetch(`/api/cajas/${encodeURIComponent(customerPickerTarget.code)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        const message = body?.message ?? "No se pudo actualizar la caja";
+        throw new Error(message);
+      }
+
+      toast({
+        variant: "success",
+        title: "Cajas",
+        description: trimmed ? "Cliente predeterminado actualizado" : "Cliente predeterminado removido",
+      });
+
+      handleCloseCustomerPicker(true);
+      cashRegistersRequestedRef.current = false;
+      await loadCashRegisters(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "No se pudo actualizar la caja";
+      toast({ variant: "error", title: "Cajas", description: message });
+    } finally {
+      setCustomerPickerSaving(false);
+    }
   };
 
   const handleSaveCashRegister = async () => {
     const code = cashRegisterForm.code.trim().toUpperCase();
     const name = cashRegisterForm.name.trim();
     const warehouseCode = cashRegisterForm.warehouseCode.trim().toUpperCase();
+    const defaultCustomerCodeInput = retailModeEnabled
+      ? cashRegisterForm.defaultCustomerCode.trim().toUpperCase()
+      : "";
+    const defaultCustomerCodePayload = !retailModeEnabled
+      ? undefined
+      : defaultCustomerCodeInput.length > 0
+        ? defaultCustomerCodeInput
+        : null;
 
     if (!editingCashRegisterCode && code.length < 2) {
       toast({ variant: "error", title: "Cajas", description: "Ingresa un código válido" });
@@ -840,6 +1063,7 @@ export default function PreferenciasPage() {
             allow_manual_warehouse_override: cashRegisterForm.allowManualWarehouseOverride,
             is_active: cashRegisterForm.isActive,
             notes: cashRegisterForm.notes.trim().length > 0 ? cashRegisterForm.notes.trim() : null,
+            default_customer_code: defaultCustomerCodePayload,
           }),
         });
         if (!res.ok) {
@@ -858,6 +1082,7 @@ export default function PreferenciasPage() {
             warehouse_code: warehouseCode,
             allow_manual_warehouse_override: cashRegisterForm.allowManualWarehouseOverride,
             notes: cashRegisterForm.notes.trim().length > 0 ? cashRegisterForm.notes.trim() : null,
+            default_customer_code: defaultCustomerCodePayload,
           }),
         });
         if (!res.ok) {
@@ -1973,6 +2198,7 @@ export default function PreferenciasPage() {
                   <th className="px-3 py-2">Nombre</th>
                   <th className="px-3 py-2">Almacén</th>
                   <th className="px-3 py-2">Notas</th>
+                  {retailModeEnabled && <th className="px-3 py-2">Cliente predeterminado</th>}
                   <th className="px-3 py-2">Override almacén</th>
                   <th className="px-3 py-2">Estado</th>
                   <th className="px-3 py-2">Actualizada</th>
@@ -1982,13 +2208,13 @@ export default function PreferenciasPage() {
               <tbody className="divide-y">
                 {cashRegistersLoading ? (
                   <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                    <td colSpan={retailModeEnabled ? 9 : 8} className="px-3 py-8 text-center text-sm text-muted-foreground">
                       Cargando cajas...
                     </td>
                   </tr>
                 ) : cashRegisters.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                    <td colSpan={retailModeEnabled ? 9 : 8} className="px-3 py-8 text-center text-sm text-muted-foreground">
                       No hay cajas registradas.
                     </td>
                   </tr>
@@ -2013,6 +2239,38 @@ export default function PreferenciasPage() {
                         <td className="px-3 py-2 text-xs text-muted-foreground">
                           {register.notes ? register.notes : "—"}
                         </td>
+                        {retailModeEnabled && (
+                          <td className="px-3 py-2 text-xs text-muted-foreground">
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              className="cursor-pointer rounded-2xl border border-dashed border-transparent px-3 py-2 transition hover:border-primary/40 hover:bg-primary/5 focus:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/40"
+                              onDoubleClick={() => handleOpenDefaultCustomerPicker(register)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  handleOpenDefaultCustomerPicker(register);
+                                }
+                              }}
+                              title="Doble clic para asignar el cliente predeterminado"
+                            >
+                              {register.defaultCustomer ? (
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="font-mono text-[11px] uppercase text-muted-foreground">{register.defaultCustomer.code}</span>
+                                  <span className="text-sm font-medium text-foreground">{register.defaultCustomer.name}</span>
+                                  {register.defaultCustomer.paymentTermCode ? (
+                                    <span className="text-[10px] uppercase text-muted-foreground">Cond. pago: {register.defaultCustomer.paymentTermCode}</span>
+                                  ) : null}
+                                </div>
+                              ) : (
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-sm text-muted-foreground">Sin cliente asignado</span>
+                                </div>
+                              )}
+                              <span className="mt-2 block text-[10px] font-semibold uppercase text-primary/80">Doble clic para buscar cliente</span>
+                            </div>
+                          </td>
+                        )}
                         <td className="px-3 py-2">
                           <span
                             className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
@@ -3207,6 +3465,40 @@ export default function PreferenciasPage() {
               <span className="text-xs text-muted-foreground">Registra al menos un almacén activo para continuar.</span>
             ) : null}
           </div>
+          {retailModeEnabled && (
+            <div className="grid gap-1">
+              <Label className="text-xs uppercase text-muted-foreground">Cliente predeterminado</Label>
+              <Input
+                value={cashRegisterForm.defaultCustomerCode}
+                onChange={(event) =>
+                  setCashRegisterForm((prev) => {
+                    const sanitized = event.target.value.replace(/[^A-Za-z0-9_-]/g, "").toUpperCase();
+                    if (sanitized === prev.defaultCustomerCode) {
+                      return prev;
+                    }
+                    return {
+                      ...prev,
+                      defaultCustomerCode: sanitized,
+                      defaultCustomerName: null,
+                      defaultCustomerPaymentTerm: null,
+                    };
+                  })
+                }
+                placeholder="Código de cliente"
+                maxLength={50}
+                className="rounded-2xl"
+              />
+              {cashRegisterForm.defaultCustomerName ? (
+                <span className="text-[11px] text-muted-foreground">
+                  Actual: {cashRegisterForm.defaultCustomerCode} • {cashRegisterForm.defaultCustomerName}
+                  {cashRegisterForm.defaultCustomerPaymentTerm ? ` · Cond. pago ${cashRegisterForm.defaultCustomerPaymentTerm}` : ""}
+                </span>
+              ) : null}
+              <span className="text-[11px] text-muted-foreground">
+                Escribe el código exacto del cliente mostrador. Deja vacío para permitir ventas sin cliente fijo.
+              </span>
+            </div>
+          )}
           <label className="flex items-center gap-2 rounded-2xl border border-muted px-3 py-2 text-sm text-foreground">
             <input
               type="checkbox"
@@ -3266,6 +3558,145 @@ export default function PreferenciasPage() {
           </div>
         </div>
       </Modal>
+
+      {retailModeEnabled && (
+        <Modal
+          open={customerPickerOpen}
+          onClose={() => handleCloseCustomerPicker()}
+          title="Seleccionar cliente predeterminado"
+          description={
+            customerPickerTarget
+              ? `Caja ${customerPickerTarget.code} · ${customerPickerTarget.name}`
+              : "Selecciona el cliente mostrador con condición de pago CONTADO."
+          }
+          contentClassName="max-w-3xl"
+        >
+        <div className="space-y-4">
+          <div className="grid gap-1">
+            <Label htmlFor="cash-register-customer-search" className="text-xs uppercase text-muted-foreground">
+              Buscar cliente
+            </Label>
+            <Input
+              id="cash-register-customer-search"
+              autoFocus
+              disabled={customerSummariesLoading}
+              placeholder="Filtra por código, nombre o RUC/NIT"
+              value={customerPickerSearch}
+              onChange={(event) => setCustomerPickerSearch(event.target.value)}
+              className="rounded-2xl"
+            />
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Solo se muestran clientes activos con condición de pago CONTADO.
+          </p>
+          {customerSummariesError ? (
+            <p className="rounded-2xl bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+              {customerSummariesError}
+            </p>
+          ) : null}
+          <div className="rounded-2xl border border-muted bg-background/90">
+            <div className="max-h-72 overflow-y-auto">
+              <table className="min-w-full table-auto text-left text-sm text-foreground">
+                <thead className="border-b text-xs uppercase text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-2 font-medium">Código</th>
+                    <th className="px-4 py-2 font-medium">Nombre</th>
+                    <th className="px-4 py-2 font-medium">RUC/NIT</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {customerSummariesLoading ? (
+                    <tr>
+                      <td colSpan={3} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                        Cargando clientes...
+                      </td>
+                    </tr>
+                  ) : filteredDefaultCustomers.length > 0 ? (
+                    filteredDefaultCustomers.map((customer) => (
+                      <tr
+                        key={customer.id}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={customerPickerSelectedCode === customer.code}
+                        className={`cursor-pointer align-top border-l-2 border-transparent transition hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                          customerPickerSelectedCode === customer.code ? "border-primary bg-primary/10" : ""
+                        }`}
+                        onClick={() => {
+                          if (customerPickerSaving) return;
+                          setCustomerPickerSelectedCode(customer.code);
+                        }}
+                        onDoubleClick={() => {
+                          if (customerPickerSaving) return;
+                          void handleApplyDefaultCustomer(customer.code);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            if (customerPickerSaving) {
+                              return;
+                            }
+                            setCustomerPickerSelectedCode(customer.code);
+                            void handleApplyDefaultCustomer(customer.code);
+                          }
+                        }}
+                      >
+                        <td className="px-4 py-2 font-mono text-xs text-muted-foreground">{customer.code}</td>
+                        <td className="px-4 py-2">{customer.name}</td>
+                        <td className="px-4 py-2">{customer.taxId ?? "—"}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={3} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                        No hay clientes de contado que coincidan con la búsqueda.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="flex flex-col gap-3 border-t border-muted pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-[11px] text-muted-foreground">
+              {selectedDefaultCustomer ? (
+                <span>
+                  Seleccionado: <strong>{selectedDefaultCustomer.code}</strong> · {selectedDefaultCustomer.name}
+                </span>
+              ) : currentDefaultCustomer ? (
+                <span>
+                  Actual: <strong>{currentDefaultCustomer.code}</strong> · {currentDefaultCustomer.name}
+                  {!currentDefaultEligible ? " · Cond. de pago diferente de CONTADO" : ""}
+                </span>
+              ) : (
+                <span>Sin cliente predeterminado asignado.</span>
+              )}
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl"
+                disabled={customerPickerSaving || !currentDefaultCustomer}
+                onClick={() => void handleApplyDefaultCustomer(null)}
+              >
+                Quitar cliente
+              </Button>
+              <Button
+                type="button"
+                className="rounded-2xl"
+                disabled={customerPickerSaving || !selectedDefaultCustomer || currentDefaultCustomer?.code === selectedDefaultCustomer.code}
+                onClick={() => void handleApplyDefaultCustomer(customerPickerSelectedCode)}
+              >
+                {customerPickerSaving ? "Guardando..." : "Asignar"}
+              </Button>
+              <Button type="button" variant="ghost" className="rounded-2xl" onClick={() => handleCloseCustomerPicker()}>
+                Cancelar
+              </Button>
+            </div>
+          </div>
+        </div>
+        </Modal>
+      )}
     </section>
   );
 }

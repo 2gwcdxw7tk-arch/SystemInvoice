@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireAdministrator } from "@/lib/auth/access";
+import { env } from "@/lib/env";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
 
 const createCashRegisterSchema = z.object({
@@ -27,6 +28,13 @@ const createCashRegisterSchema = z.object({
     .optional()
     .or(z.literal(""))
     .nullable(),
+  default_customer_code: z
+    .union([
+      z.string().trim().max(50),
+      z.literal(""),
+      z.null(),
+    ])
+    .optional(),
 });
 
 export async function GET(request: NextRequest) {
@@ -58,12 +66,20 @@ export async function POST(request: NextRequest) {
 
   try {
     const payload = parsed.data;
+    const allowDefaultCustomer = env.features.retailModeEnabled;
+    const resolvedDefaultCustomerCode =
+      typeof payload.default_customer_code === "string"
+        ? payload.default_customer_code.trim().length > 0
+          ? payload.default_customer_code.trim().toUpperCase()
+          : null
+        : payload.default_customer_code ?? null;
     const item = await cashRegisterService.createCashRegister({
       code: payload.code,
       name: payload.name,
       warehouseCode: payload.warehouse_code,
       allowManualWarehouseOverride: payload.allow_manual_warehouse_override ?? false,
       notes: payload.notes && payload.notes.trim().length > 0 ? payload.notes.trim() : null,
+      defaultCustomerCode: allowDefaultCustomer ? resolvedDefaultCustomerCode ?? undefined : undefined,
     });
     return NextResponse.json({ success: true, item }, { status: 201 });
   } catch (error) {
