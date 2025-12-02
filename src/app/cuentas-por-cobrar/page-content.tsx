@@ -1546,18 +1546,26 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
       return;
     }
     const needsCatalogs = !createCustomersLoadedRef.current || !createPaymentTermsLoadedRef.current;
+    
+    // Check for customerId in searchParams
+    const customerIdParam = searchParams.get("customerId");
+    const preselectedCustomerId = customerIdParam ? Number(customerIdParam) : null;
+
     setCreateState((prev) => ({
       ...prev,
       open: true,
       loading: needsCatalogs,
       saving: false,
       error: null,
-      form: createInitialDocumentForm(),
+      form: {
+        ...createInitialDocumentForm(),
+        customerId: preselectedCustomerId && Number.isFinite(preselectedCustomerId) ? preselectedCustomerId : null,
+      },
     }));
     if (needsCatalogs) {
       void loadCreateDocumentCatalogs();
     }
-  }, [canManageDocuments, loadCreateDocumentCatalogs, toast]);
+  }, [canManageDocuments, loadCreateDocumentCatalogs, searchParams, toast]);
 
   const handleReloadCreateCatalogs = useCallback(() => {
     setCreateState((prev) => ({ ...prev, loading: true, error: null }));
@@ -1656,13 +1664,9 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
       toast({ variant: "warning", title: "Documentos", description: message });
       return;
     }
-    const balanceAmountValueRaw = form.balanceAmount.trim().length > 0 ? parseMoney(form.balanceAmount) : originalAmountValue;
-    if (!Number.isFinite(balanceAmountValueRaw) || balanceAmountValueRaw < 0) {
-      const message = "El saldo debe ser mayor o igual a cero.";
-      setCreateState((prev) => ({ ...prev, error: message }));
-      toast({ variant: "warning", title: "Documentos", description: message });
-      return;
-    }
+    // Balance always starts equal to original amount for new documents
+    const balanceAmountValueRaw = originalAmountValue;
+    
     const currencyRaw = form.currencyCode.trim().toUpperCase();
     const currencyCode = /^[A-Z]{3}$/.test(currencyRaw) ? currencyRaw : DEFAULT_DOCUMENT_CURRENCY;
 
@@ -3306,17 +3310,82 @@ type CreateDocumentModalProps = {
   onReloadCatalogs: () => void;
 };
 
+type CustomerSearchModalProps = {
+  open: boolean;
+  onClose: () => void;
+  customers: CustomerDTO[];
+  onSelect: (customerId: number) => void;
+};
+
+function CustomerSearchModal({ open, onClose, customers, onSelect }: CustomerSearchModalProps) {
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return customers.slice(0, 50);
+    return customers
+      .filter(
+        (c) =>
+          c.code.toLowerCase().includes(term) ||
+          c.name.toLowerCase().includes(term) ||
+          (c.taxId && c.taxId.toLowerCase().includes(term))
+      )
+      .slice(0, 50);
+  }, [customers, search]);
+
+  if (!open) return null;
+
+  return (
+    <Modal open={open} onClose={onClose} title="Buscar cliente" description="Selecciona un cliente para el documento.">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 rounded-2xl border border-muted px-3">
+          <Search className="h-4 w-4 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por código, nombre o RUC..."
+            className="border-none shadow-none focus-visible:ring-0"
+            autoFocus
+          />
+        </div>
+        <div className="max-h-[300px] overflow-y-auto rounded-2xl border border-muted">
+          {filtered.length === 0 ? (
+            <div className="p-4 text-center text-sm text-muted-foreground">No se encontraron clientes.</div>
+          ) : (
+            <div className="divide-y">
+              {filtered.map((customer) => (
+                <button
+                  key={customer.id}
+                  type="button"
+                  className="w-full px-4 py-3 text-left hover:bg-muted/50"
+                  onClick={() => {
+                    onSelect(customer.id);
+                    onClose();
+                  }}
+                >
+                  <div className="font-medium">
+                    {customer.code} • {customer.name}
+                  </div>
+                  <div className="text-xs text-muted-foreground">RUC: {customer.taxId || "N/A"}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end">
+          <Button type="button" variant="outline" onClick={onClose} className="rounded-2xl">
+            Cerrar
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function CreateDocumentModal({ state, onClose, onSubmit, onFieldChange, onReloadCatalogs }: CreateDocumentModalProps): JSX.Element | null {
   const { open, form, loading, saving, customers, paymentTerms, error } = state;
-  const customerOptions = useMemo<ComboboxOption<number>[]>(
-    () =>
-      customers.map((customer) => ({
-        value: customer.id,
-        label: `${customer.code} • ${customer.name}`,
-        description: customer.paymentTermCode ? `Cond. pago: ${customer.paymentTermCode}` : "Sin condición",
-      })),
-    [customers]
-  );
+  const [searchOpen, setSearchOpen] = useState(false);
+
   const paymentTermOptions = useMemo<ComboboxOption<string>[]>(
     () =>
       paymentTerms
@@ -3328,11 +3397,24 @@ function CreateDocumentModal({ state, onClose, onSubmit, onFieldChange, onReload
         })),
     [paymentTerms]
   );
+
+  const currencyOptions: ComboboxOption<string>[] = [
+    {
+      value: process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO",
+      label: `Moneda Local (${process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO"})`,
+    },
+    {
+      value: process.env.NEXT_PUBLIC_FOREIGN_CURRENCY_CODE || "USD",
+      label: `Moneda Extranjera (${process.env.NEXT_PUBLIC_FOREIGN_CURRENCY_CODE || "USD"})`,
+    },
+  ];
+
   const selectedCustomer = form.customerId ? customers.find((customer) => customer.id === form.customerId) ?? null : null;
   const selectedPaymentTerm = form.paymentTermCode
     ? paymentTerms.find((term) => term.code === form.paymentTermCode) ?? null
     : null;
   const disableForm = loading || saving;
+  const isDebit = isDebitDocumentTypeLocal(form.documentType);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -3347,204 +3429,205 @@ function CreateDocumentModal({ state, onClose, onSubmit, onFieldChange, onReload
     }
   };
 
-  const handleCurrencyChange = (value: string) => {
-    const sanitized = value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 3);
-    onFieldChange("currencyCode", sanitized);
-  };
-
   if (!open) {
     return null;
   }
 
   return (
-    <Modal
-      open={state.open}
-      onClose={handleClose}
-      title="Nuevo documento"
-      description="Registra un documento manual de cuentas por cobrar."
-      contentClassName="max-w-4xl"
-    >
-      <form className="space-y-6" onSubmit={handleSubmit}>
-        {loading ? (
-          <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-muted p-4 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Cargando catálogos…
-          </div>
-        ) : null}
-        {error ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            <span>{error}</span>
-            <Button type="button" variant="outline" className="rounded-2xl" onClick={onReloadCatalogs} disabled={loading || saving}>
-              Reintentar
-            </Button>
-          </div>
-        ) : null}
+    <>
+      <Modal
+        open={state.open}
+        onClose={handleClose}
+        title="Nuevo documento"
+        description="Registra un documento manual de cuentas por cobrar."
+        contentClassName="max-w-4xl"
+      >
+        <form className="space-y-6" onSubmit={handleSubmit}>
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-muted p-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Cargando catálogos…
+            </div>
+          ) : null}
+          {error ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+              <span>{error}</span>
+              <Button type="button" variant="outline" className="rounded-2xl" onClick={onReloadCatalogs} disabled={loading || saving}>
+                Reintentar
+              </Button>
+            </div>
+          ) : null}
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
-            <Combobox<number>
-              value={form.customerId}
-              onChange={(value) => onFieldChange("customerId", value ?? null)}
-              options={customerOptions}
-              placeholder={loading ? "Cargando clientes…" : "Selecciona cliente"}
-              emptyText={loading ? "Cargando…" : "Sin coincidencias"}
-              disabled={disableForm}
-              className="rounded-2xl"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Tipo de documento</Label>
-            <Combobox<CustomerDocumentType>
-              value={form.documentType}
-              onChange={(value) => onFieldChange("documentType", value ?? "INVOICE")}
-              options={DOCUMENT_TYPE_OPTIONS}
-              placeholder="Selecciona tipo"
-              disabled={disableForm}
-              className="rounded-2xl"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Número de documento</Label>
-            <Input
-              value={form.documentNumber}
-              onChange={(event) => onFieldChange("documentNumber", event.target.value.toUpperCase())}
-              placeholder="Ej: FAC-000123"
-              disabled={disableForm}
-              className="rounded-2xl"
-              required
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Código de moneda</Label>
-            <Input
-              value={form.currencyCode}
-              onChange={(event) => handleCurrencyChange(event.target.value)}
-              placeholder="NIO"
-              disabled={disableForm}
-              maxLength={3}
-              className="rounded-2xl"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Fecha de emisión</Label>
-            <DatePicker value={form.documentDate} onChange={(value) => onFieldChange("documentDate", value)} disabled={disableForm} />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Vencimiento (opcional)</Label>
-            <div className="flex items-center gap-2">
-              <DatePicker
-                value={form.dueDate ?? undefined}
-                onChange={(value) => onFieldChange("dueDate", value)}
-                disabled={disableForm}
-                className="flex-1"
-              />
-              {form.dueDate ? (
-                <Button type="button" variant="ghost" className="rounded-2xl" onClick={() => onFieldChange("dueDate", null)} disabled={disableForm}>
-                  Limpiar
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
+              <div className="flex gap-2">
+                <div className="flex-1 rounded-2xl border border-input bg-background px-3 py-2 text-sm shadow-sm">
+                  {selectedCustomer ? (
+                    <span className="font-medium">
+                      {selectedCustomer.code} • {selectedCustomer.name}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">Selecciona un cliente</span>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-2xl"
+                  onClick={() => setSearchOpen(true)}
+                  disabled={disableForm}
+                >
+                  <Search className="h-4 w-4" />
                 </Button>
-              ) : null}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Tipo de documento</Label>
+              <Combobox<CustomerDocumentType>
+                value={form.documentType}
+                onChange={(value) => onFieldChange("documentType", value ?? "INVOICE")}
+                options={DOCUMENT_TYPE_OPTIONS}
+                placeholder="Selecciona tipo"
+                disabled={disableForm}
+                className="rounded-2xl"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Número de documento</Label>
+              <Input
+                value={form.documentNumber}
+                onChange={(event) => onFieldChange("documentNumber", event.target.value.toUpperCase())}
+                placeholder="Ej: FAC-000123"
+                disabled={disableForm}
+                className="rounded-2xl"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Moneda</Label>
+              <Combobox<string>
+                value={form.currencyCode}
+                onChange={(value) => onFieldChange("currencyCode", value ?? (process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO"))}
+                options={currencyOptions}
+                placeholder="Selecciona moneda"
+                disabled={disableForm}
+                className="rounded-2xl"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Fecha de emisión</Label>
+              <DatePicker value={form.documentDate} onChange={(value) => onFieldChange("documentDate", value)} disabled={disableForm} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Vencimiento {isDebit ? "(opcional)" : "(no aplica)"}</Label>
+              <div className="flex items-center gap-2">
+                <DatePicker
+                  value={form.dueDate ?? undefined}
+                  onChange={(value) => onFieldChange("dueDate", value)}
+                  disabled={disableForm || !isDebit}
+                  className="flex-1"
+                />
+                {form.dueDate && isDebit ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="rounded-2xl"
+                    onClick={() => onFieldChange("dueDate", null)}
+                    disabled={disableForm}
+                  >
+                    Limpiar
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Monto total</Label>
+              <Input
+                value={form.originalAmount}
+                onChange={(event) => onFieldChange("originalAmount", event.target.value.replace(/[^0-9.,]/g, ""))}
+                placeholder="0.00"
+                disabled={disableForm}
+                className="rounded-2xl"
+                inputMode="decimal"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Referencia</Label>
+              <Input
+                value={form.reference}
+                onChange={(event) => onFieldChange("reference", event.target.value)}
+                placeholder="Opcional"
+                disabled={disableForm}
+                className="rounded-2xl"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs uppercase text-muted-foreground">Condición de pago</Label>
+              <Combobox<string>
+                value={form.paymentTermCode}
+                onChange={(value) => onFieldChange("paymentTermCode", value ?? null)}
+                options={paymentTermOptions}
+                placeholder={loading ? "Cargando…" : "Opcional"}
+                emptyText={paymentTermOptions.length === 0 ? "Sin opciones" : "Sin coincidencias"}
+                disabled={disableForm}
+                className="rounded-2xl"
+              />
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
+              <textarea
+                value={form.notes}
+                onChange={(event) => onFieldChange("notes", event.target.value)}
+                rows={3}
+                className="w-full rounded-2xl border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="Comentarios visibles para cobranza"
+                disabled={disableForm}
+              />
             </div>
           </div>
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Monto original</Label>
-            <Input
-              value={form.originalAmount}
-              onChange={(event) => onFieldChange("originalAmount", event.target.value.replace(/[^0-9.,]/g, ""))}
-              placeholder="0.00"
-              disabled={disableForm}
-              className="rounded-2xl"
-              inputMode="decimal"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Saldo actual</Label>
-            <Input
-              value={form.balanceAmount}
-              onChange={(event) => onFieldChange("balanceAmount", event.target.value.replace(/[^0-9.,]/g, ""))}
-              placeholder="0.00"
-              disabled={disableForm}
-              className="rounded-2xl"
-              inputMode="decimal"
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="mt-1 h-7 rounded-2xl px-2 text-xs"
-              onClick={() => onFieldChange("balanceAmount", form.originalAmount)}
-              disabled={disableForm}
-            >
-              Igualar al total
-            </Button>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Referencia</Label>
-            <Input
-              value={form.reference}
-              onChange={(event) => onFieldChange("reference", event.target.value)}
-              placeholder="Opcional"
-              disabled={disableForm}
-              className="rounded-2xl"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs uppercase text-muted-foreground">Condición de pago</Label>
-            <Combobox<string>
-              value={form.paymentTermCode}
-              onChange={(value) => onFieldChange("paymentTermCode", value ?? null)}
-              options={paymentTermOptions}
-              placeholder={loading ? "Cargando…" : "Opcional"}
-              emptyText={paymentTermOptions.length === 0 ? "Sin opciones" : "Sin coincidencias"}
-              disabled={disableForm}
-              className="rounded-2xl"
-            />
-          </div>
-          <div className="space-y-1 md:col-span-2">
-            <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
-            <textarea
-              value={form.notes}
-              onChange={(event) => onFieldChange("notes", event.target.value)}
-              rows={3}
-              className="w-full rounded-2xl border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              placeholder="Comentarios visibles para cobranza"
-              disabled={disableForm}
-            />
-          </div>
-        </div>
 
-        {selectedCustomer ? (
-          <div className="rounded-2xl border border-muted bg-background/90 px-4 py-3 text-xs text-muted-foreground">
-            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-              <span className="font-semibold text-foreground">{selectedCustomer.code} • {selectedCustomer.name}</span>
-              <span>Término sugerido: {selectedCustomer.paymentTermCode ?? "CONTADO"}</span>
+          {selectedCustomer ? (
+            <div className="rounded-2xl border border-muted bg-background/90 px-4 py-3 text-xs text-muted-foreground">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <span className="font-semibold text-foreground">
+                  {selectedCustomer.code} • {selectedCustomer.name}
+                </span>
+                <span>Término sugerido: {selectedCustomer.paymentTermCode ?? "CONTADO"}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {selectedPaymentTerm ? (
+            <div className="rounded-2xl border border-muted bg-background/90 px-4 py-3 text-xs text-muted-foreground">
+              <span className="font-semibold text-foreground">{selectedPaymentTerm.name}</span>
+              <span className="ml-2">({selectedPaymentTerm.code})</span>
+              <span className="ml-2">Plazo: {selectedPaymentTerm.days + selectedPaymentTerm.graceDays} días</span>
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              Si omites el vencimiento, se calculará automáticamente usando la condición de pago seleccionada.
+            </p>
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" className="rounded-2xl" onClick={handleClose} disabled={saving}>
+                Cancelar
+              </Button>
+              <Button type="submit" className="rounded-2xl" disabled={disableForm}>
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Guardar
+              </Button>
             </div>
           </div>
-        ) : null}
-
-        {selectedPaymentTerm ? (
-          <div className="rounded-2xl border border-muted bg-background/90 px-4 py-3 text-xs text-muted-foreground">
-            <span className="font-semibold text-foreground">{selectedPaymentTerm.name}</span>
-            <span className="ml-2">({selectedPaymentTerm.code})</span>
-            <span className="ml-2">Plazo: {selectedPaymentTerm.days + selectedPaymentTerm.graceDays} días</span>
-          </div>
-        ) : null}
-
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">
-            Si omites el vencimiento, se calculará automáticamente usando la condición de pago seleccionada.
-          </p>
-          <div className="flex gap-2">
-            <Button type="button" variant="outline" className="rounded-2xl" onClick={handleClose} disabled={saving}>
-              Cancelar
-            </Button>
-            <Button type="submit" className="rounded-2xl" disabled={disableForm}>
-              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Guardar
-            </Button>
-          </div>
-        </div>
-      </form>
-    </Modal>
+        </form>
+      </Modal>
+      <CustomerSearchModal
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        customers={customers}
+        onSelect={(id) => onFieldChange("customerId", id)}
+      />
+    </>
   );
 }
 
