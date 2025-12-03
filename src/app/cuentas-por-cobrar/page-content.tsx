@@ -3306,9 +3306,9 @@ export function DocumentsPanel({
   onFilterFieldChange,
   onApplyFilters,
   onClearFilters,
-  filtersDirty,
-  filterCustomerOptions,
-  filterCustomersLoading,
+  filtersDirty = false,
+  filterCustomerOptions = [],
+  filterCustomersLoading = false,
 }: {
   documents: CustomerDocumentEntry[];
   stats: { total: number; pending: number; pendingAmount: number; overdue: number; overdueAmount: number; collected: number };
@@ -3323,20 +3323,28 @@ export function DocumentsPanel({
   onApplyDocument?: (document: CustomerDocumentEntry) => void;
   canApply?: boolean;
   onCreateDocument?: () => void;
-  filterDraft: DocumentFilterState;
-  onFilterFieldChange: <K extends keyof DocumentFilterState>(field: K, value: DocumentFilterState[K]) => void;
-  onApplyFilters: () => void;
-  onClearFilters: () => void;
-  filtersDirty: boolean;
-  filterCustomerOptions: ComboboxOption<string>[];
-  filterCustomersLoading: boolean;
+  filterDraft?: DocumentFilterState;
+  onFilterFieldChange?: <K extends keyof DocumentFilterState>(field: K, value: DocumentFilterState[K]) => void;
+  onApplyFilters?: () => void;
+  onClearFilters?: () => void;
+  filtersDirty?: boolean;
+  filterCustomerOptions?: ComboboxOption<string>[];
+  filterCustomersLoading?: boolean;
 }) {
   const showActions = Boolean(onViewApplications || (canApply && onApplyDocument));
-  const customerFilterOptions = useMemo<ComboboxOption<string>[]>(
-    () => [{ value: "", label: "Todos los clientes" }, ...filterCustomerOptions],
+  const customerFilterOptionsWithAll = useMemo<ComboboxOption<string>[]>(
+    () => [{ value: "", label: "Todos los clientes" }, ...(filterCustomerOptions ?? [])],
     [filterCustomerOptions],
   );
-  const selectedCustomerValue = filterDraft.customerId ? String(filterDraft.customerId) : "";
+  const filterSupport = filterDraft && onFilterFieldChange && onApplyFilters && onClearFilters
+    ? {
+        draft: filterDraft,
+        onFieldChange: onFilterFieldChange,
+        onApplyFilters,
+        onClearFilters,
+      }
+    : null;
+  const filtersAreDirty = Boolean(filterSupport && filtersDirty);
 
   return (
     <div className="space-y-6">
@@ -3417,59 +3425,61 @@ export function DocumentsPanel({
           </div>
         </CardHeader>
         <CardContent className="space-y-4 pt-4">
-          <div className="space-y-3 rounded-3xl border border-muted/60 bg-muted/10 p-4">
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
-                <Combobox<string>
-                  value={selectedCustomerValue}
-                  onChange={(value) => {
-                    const numeric = value ? Number(value) : NaN;
-                    onFilterFieldChange("customerId", Number.isFinite(numeric) && numeric > 0 ? numeric : null);
-                  }}
-                  options={customerFilterOptions}
-                  placeholder={filterCustomersLoading ? "Cargando clientes" : "Todos los clientes"}
-                  emptyText={filterCustomersLoading ? "Cargando opciones" : "Sin coincidencias"}
-                  disabled={filterCustomersLoading}
-                  className="rounded-2xl"
-                />
+          {filterSupport ? (
+            <div className="space-y-3 rounded-3xl border border-muted/60 bg-muted/10 p-4">
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                <div className="space-y-1">
+                  <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
+                  <Combobox<string>
+                    value={filterSupport.draft.customerId ? String(filterSupport.draft.customerId) : ""}
+                    onChange={(value) => {
+                      const numeric = value ? Number(value) : NaN;
+                      filterSupport.onFieldChange("customerId", Number.isFinite(numeric) && numeric > 0 ? numeric : null);
+                    }}
+                    options={customerFilterOptionsWithAll}
+                    placeholder={filterCustomersLoading ? "Cargando clientes" : "Todos los clientes"}
+                    emptyText={filterCustomersLoading ? "Cargando opciones" : "Sin coincidencias"}
+                    disabled={filterCustomersLoading}
+                    className="rounded-2xl"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs uppercase text-muted-foreground">Tipo</Label>
+                  <Combobox<FilterDocumentType>
+                    value={filterSupport.draft.documentType}
+                    onChange={(value) => filterSupport.onFieldChange("documentType", (value ?? "ALL") as FilterDocumentType)}
+                    options={DOCUMENT_TYPE_FILTER_OPTIONS}
+                    placeholder="Todos los tipos"
+                    className="rounded-2xl"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
+                  <DatePicker
+                    value={filterSupport.draft.dateFrom ?? undefined}
+                    onChange={(value) => filterSupport.onFieldChange("dateFrom", value ?? null)}
+                    className="rounded-2xl"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
+                  <DatePicker
+                    value={filterSupport.draft.dateTo ?? undefined}
+                    onChange={(value) => filterSupport.onFieldChange("dateTo", value ?? null)}
+                    className="rounded-2xl"
+                  />
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Tipo</Label>
-                <Combobox<FilterDocumentType>
-                  value={filterDraft.documentType}
-                  onChange={(value) => onFilterFieldChange("documentType", (value ?? "ALL") as FilterDocumentType)}
-                  options={DOCUMENT_TYPE_FILTER_OPTIONS}
-                  placeholder="Todos los tipos"
-                  className="rounded-2xl"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
-                <DatePicker
-                  value={filterDraft.dateFrom ?? undefined}
-                  onChange={(value) => onFilterFieldChange("dateFrom", value ?? null)}
-                  className="rounded-2xl"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
-                <DatePicker
-                  value={filterDraft.dateTo ?? undefined}
-                  onChange={(value) => onFilterFieldChange("dateTo", value ?? null)}
-                  className="rounded-2xl"
-                />
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button type="button" variant="ghost" className="rounded-2xl" onClick={filterSupport.onClearFilters}>
+                  Limpiar
+                </Button>
+                <Button type="button" className="rounded-2xl" onClick={filterSupport.onApplyFilters} disabled={!filtersAreDirty}>
+                  Aplicar filtros
+                </Button>
               </div>
             </div>
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button type="button" variant="ghost" className="rounded-2xl" onClick={onClearFilters}>
-                Limpiar
-              </Button>
-              <Button type="button" className="rounded-2xl" onClick={onApplyFilters} disabled={!filtersDirty}>
-                Aplicar filtros
-              </Button>
-            </div>
-          </div>
+          ) : null}
           {loading ? (
             <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-muted p-6 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Cargando documentos…

@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, ExternalLink, Filter, Loader2, Printer, Search } from "lucide-react";
+import { ArrowLeft, Filter, Loader2, Printer, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -92,7 +92,7 @@ export default function DocumentosInventarioPage() {
     router.replace(nextUrl as Route, { scroll: false });
   }
 
-  async function loadWarehouses() {
+  const loadWarehouses = useCallback(async () => {
     try {
       const response = await fetch("/api/inventario/warehouses", { credentials: "include" });
       if (!response.ok) throw new Error("No se pudieron cargar los almacenes");
@@ -102,7 +102,7 @@ export default function DocumentosInventarioPage() {
     } catch (error) {
       console.error(error);
     }
-  }
+  }, []);
 
   async function loadDocuments(currentFilters = filters) {
     setListLoading(true);
@@ -132,8 +132,7 @@ export default function DocumentosInventarioPage() {
 
   useEffect(() => {
     loadWarehouses();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadWarehouses]);
 
   useEffect(() => {
     const folioParam = searchParams.get("folio");
@@ -146,7 +145,6 @@ export default function DocumentosInventarioPage() {
       setDetail(null);
       setDetailError(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   useEffect(() => {

@@ -3655,7 +3655,7 @@ function FacturacionWorkspace({
       }
       return {
         id: data?.id ?? null,
-        invoiceNumber: data?.invoice_number ?? payload.invoice_number ?? null,
+        invoiceNumber: data?.invoice_number ?? null,
       };
     } catch (error) {
       console.error("Error al guardar la factura", error);
