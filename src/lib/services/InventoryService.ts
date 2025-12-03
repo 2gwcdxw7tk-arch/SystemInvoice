@@ -25,6 +25,10 @@ import type {
   ConsumptionMovementRow,
   TransferListItem,
   InventoryTransactionResult,
+  InventoryDocument,
+  InventoryDocumentEntry,
+  InventoryDocumentListFilter,
+  InventoryTransactionHeader,
 } from "@/lib/types/inventory"; // Changed import path
 
 import { IArticleRepository } from "@/lib/repositories/IArticleRepository";
@@ -33,7 +37,11 @@ import { IArticleKitRepository } from "@/lib/repositories/IArticleKitRepository"
 import { ArticleKitRepository } from "@/lib/repositories/ArticleKitRepository";
 import { IWarehouseRepository } from "@/lib/repositories/IWarehouseRepository";
 import { WarehouseRepository } from "@/lib/repositories/WarehouseRepository";
-import { IInventoryTransactionRepository } from "@/lib/repositories/IInventoryTransactionRepository";
+import type {
+  IInventoryTransactionRepository,
+  InventoryTransactionHeaderFilter,
+  InventoryTransactionDocumentRecord,
+} from "@/lib/repositories/IInventoryTransactionRepository";
 import { InventoryTransactionRepository } from "@/lib/repositories/InventoryTransactionRepository";
 import { IWarehouseStockRepository } from "@/lib/repositories/IWarehouseStockRepository";
 import { WarehouseStockRepository } from "@/lib/repositories/WarehouseStockRepository";
@@ -95,6 +103,8 @@ function parseDateInput(value?: string, mode: "start" | "end" = "start"): Date {
   }
   return mode === "start" ? toCentralClosedDate(trimmed) : toCentralEndOfDay(trimmed);
 }
+
+const validTransactionTypes: TransactionType[] = ["PURCHASE", "CONSUMPTION", "ADJUSTMENT", "TRANSFER"];
 
 export class InventoryService {
   private readonly prisma: PrismaClient;
@@ -220,6 +230,90 @@ export class InventoryService {
       },
       tx
     );
+  }
+
+  private mapDocumentEntry(
+    entry: InventoryTransactionDocumentRecord["entries"][number],
+    index: number
+  ): InventoryDocumentEntry {
+    const enteredUnit: InventoryUnit = entry.entered_unit === "STORAGE" ? "STORAGE" : "RETAIL";
+    const baseConversion = entry.unit_conversion_factor ?? entry.article.conversion_factor ?? 1;
+    const safeConversion = baseConversion > 0 ? baseConversion : 1;
+    const quantityEntered = entry.quantity_entered;
+    const quantityRetail = enteredUnit === "STORAGE" ? quantityEntered * safeConversion : quantityEntered;
+    const quantityStorage = enteredUnit === "STORAGE" ? quantityEntered : quantityEntered / safeConversion;
+    const movements = entry.movements.map((movement) => ({
+      article_code: movement.article.article_code,
+      article_name: movement.article.name,
+      direction: movement.direction,
+      quantity_retail: movement.quantity_retail,
+      warehouse_code: movement.warehouse.code,
+      warehouse_name: movement.warehouse.name,
+      retail_unit: movement.article.retail_unit ?? null,
+      storage_unit: movement.article.storage_unit ?? null,
+      source_kit_article_code: movement.source_kit_article_code,
+    }));
+
+    return {
+      line_number: index + 1,
+      article_code: entry.article.article_code,
+      article_name: entry.article.name,
+      direction: entry.direction,
+      entered_unit: enteredUnit,
+      quantity_entered: quantityEntered,
+      quantity_retail: quantityRetail,
+      quantity_storage: quantityStorage,
+      retail_unit: entry.article.retail_unit ?? null,
+      storage_unit: entry.article.storage_unit ?? null,
+      kit_multiplier: entry.kit_multiplier ?? null,
+      cost_per_unit: entry.cost_per_unit ?? null,
+      subtotal: entry.subtotal ?? null,
+      notes: entry.notes ?? null,
+      movements,
+    } satisfies InventoryDocumentEntry;
+  }
+
+  private normalizeDocumentListFilter(
+    filters?: InventoryDocumentListFilter
+  ): InventoryTransactionHeaderFilter {
+    const transactionTypes = Array.from(
+      new Set(
+        (filters?.transaction_types ?? [])
+          .map((type) => type?.toUpperCase?.().trim() || "")
+          .filter((value): value is TransactionType => validTransactionTypes.includes(value as TransactionType))
+      )
+    );
+
+    const warehouseCodes = Array.from(
+      new Set(
+        (filters?.warehouse_codes ?? [])
+          .map((code) => code?.trim?.().toUpperCase?.() || "")
+          .filter((code) => code.length > 0)
+      )
+    );
+
+    const search = filters?.search?.trim();
+    const limit = Math.min(Math.max(filters?.limit ?? 50, 1), 200);
+    const from = filters?.from ? parseDateInput(filters.from) : undefined;
+    const to = filters?.to ? parseDateInput(filters.to, "end") : undefined;
+
+    const result: InventoryTransactionHeaderFilter = { limit };
+    if (transactionTypes.length > 0) {
+      result.transactionTypes = transactionTypes as TransactionType[];
+    }
+    if (warehouseCodes.length > 0) {
+      result.warehouseCodes = warehouseCodes;
+    }
+    if (search && search.length > 0) {
+      result.search = search;
+    }
+    if (from) {
+      result.from = from;
+    }
+    if (to) {
+      result.to = to;
+    }
+    return result;
   }
 
   async registerPurchase(input: RegisterPurchaseInput): Promise<{ id: number; transaction_code: string }> {
@@ -1285,6 +1379,58 @@ export class InventoryService {
         source_kit_code: r.articles_inventory_movements_source_kit_article_idToarticles?.article_code ?? null,
       } satisfies ConsumptionMovementRow;
     });
+  }
+
+  async getTransactionDocument(transactionCode: string): Promise<InventoryDocument | null> {
+    const normalizedCode = transactionCode?.trim();
+    if (!normalizedCode) {
+      throw new Error("Debes indicar un folio de inventario");
+    }
+
+    const record = await this.inventoryTransactionRepository.findTransactionDocumentByCode(normalizedCode);
+    if (!record) {
+      return null;
+    }
+
+    const entries = record.entries.map((entry, index) => this.mapDocumentEntry(entry, index));
+
+    return {
+      transaction_code: record.transaction_code,
+      transaction_type: record.transaction_type,
+      occurred_at: record.occurred_at.toISOString(),
+      created_at: record.created_at.toISOString(),
+      warehouse_code: record.warehouse.code,
+      warehouse_name: record.warehouse.name,
+      reference: record.reference ?? null,
+      counterparty_name: record.counterparty_name ?? null,
+      status: record.status,
+      notes: record.notes ?? null,
+      authorized_by: record.authorized_by ?? null,
+      created_by: record.created_by ?? null,
+      total_amount: record.total_amount ?? null,
+      entries,
+    } satisfies InventoryDocument;
+  }
+
+  async listTransactionHeaders(filters?: InventoryDocumentListFilter): Promise<InventoryTransactionHeader[]> {
+    const normalizedFilters = this.normalizeDocumentListFilter(filters);
+    const rows = await this.inventoryTransactionRepository.listTransactionHeaders(normalizedFilters);
+
+    return rows.map((row) => ({
+      transaction_code: row.transaction_code,
+      transaction_type: row.transaction_type,
+      occurred_at: row.occurred_at.toISOString(),
+      warehouse_code: row.warehouse.code,
+      warehouse_name: row.warehouse.name,
+      reference: row.reference ?? null,
+      counterparty_name: row.counterparty_name ?? null,
+      status: row.status,
+      notes: row.notes ?? null,
+      total_amount: row.total_amount ?? null,
+      entries_count: row.entries_count,
+      entries_in: row.entries_in,
+      entries_out: row.entries_out,
+    } satisfies InventoryTransactionHeader));
   }
 
   async reverseInvoiceMovements(input: { invoiceNumber: string; occurred_at?: string }): Promise<{ reversed: number }> {

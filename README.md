@@ -71,6 +71,8 @@ Para inicializar la base de datos desde cero, importa `database/schema_master.sq
 
 El endpoint `GET /api/health` valida la conectividad.
 
+> Nota 2025-12-03: la migración `20251203103000_inventory_transactions_updated_at` agrega la columna `updated_at` a `app.inventory_transactions`. Si tu esquema se creó antes de este cambio, ejecuta la nueva migración o vuelve a aplicar `database/schema_master.sql` para evitar el error `The column "new" does not exist` al actualizar transacciones de inventario.
+
 ### Fundamentos de Cuentas por Cobrar
 
 La migración `20251128101500_cxc_core_tables` introduce el bloque de datos para operar el modo retail/CxC directamente en PostgreSQL:
@@ -236,7 +238,7 @@ Errores devuelven `{ success: false, message: string }` con estado 400 (validaci
 Los usuarios con rol `FACTURADOR` deben abrir una caja antes de emitir facturas. El flujo completo se expone vía endpoints protegidos:
 
 - El cliente mostrador predeterminado de cada caja se define desde el tab **Cajas** en `/preferencias` cuando `NEXT_PUBLIC_ES_RESTAURANTE=false`. Haz doble clic en la columna **Cliente predeterminado** para abrir el buscador (solo lista clientes activos con condición de pago CONTADO). Solo los administradores pueden asignar o remover esta relación y el backend valida que el código de cliente exista antes de persistirlo.
-- Un consecutivo de facturación (`SequenceService.generateInvoiceNumber`) es obligatorio por caja y se asigna desde el tab **Consecutivos** en `/preferencias`.
+- Un consecutivo de facturación (`SequenceService.generateInvoiceNumber`) es obligatorio por caja y se asigna desde el tab **Consecutivos** en `/preferencias`. Si varias cajas comparten la misma definición, el contador es global para impedir que cada caja reinicie el folio.
 
 - `GET /api/cajas/sesion-activa`: devuelve la caja asignada, la apertura en curso (si existe) y el listado de cajas autorizadas para el usuario actual. El endpoint se usa en la UI para mostrar el banner de sesión o desplegar el modal de apertura.
 - `POST /api/cajas/aperturas`: abre una jornada de caja. Requiere `cash_register_code`, `opening_amount` y notas opcionales. Valida que no existan otras sesiones `OPEN` para el usuario ni para la caja objetivo.
@@ -289,6 +291,14 @@ curl -X POST http://localhost:3000/api/inventario/warehouses \
 
 La respuesta exitosa incluye `transaction_id` y `transaction_code`. Las validaciones garantizan almacenes distintos, autorizador obligatorio y cantidades positivas.
 
+### Documentos de inventario (`/api/inventario/documentos/[transactionCode]`)
+
+- `GET /api/inventario/documentos/{transactionCode}` devuelve el encabezado completo del folio (bodega, referencia, estado, contrapartes, totales) y el detalle de cada línea con cantidades en unidad capturada/detalle, costos y notas. Cada línea incluye el desglose de movimientos reales (`inventory_movements`) para identificar qué artículos/almacenes se afectaron, incluyendo componentes de kits.
+- Agrega `?format=html` para obtener una plantilla imprimible (A4) lista para el modal de impresión de inventario/reportes. El HTML reutiliza `formatCurrency` y agrupa los movimientos por línea para mantener contexto en auditorías o reimpresiones.
+- La ruta exige sesión de administrador (mismo guard que Kardex/Existencias) y delega todo el armado a `inventoryService.getTransactionDocument`, por lo que respeta el modo mock y cualquier futura extensión (p. ej., comentarios u hojas de autorización).
+- `GET /api/inventario/documentos` consume `inventoryService.listTransactionHeaders` y acepta filtros `search`, `from`, `to`, `type` (repetible), `warehouse` y `limit` para poblar el foliador del módulo. Se usa tanto en modo mock como en base real y comparte el mismo guardia de administrador.
+- Para construir listados paginados en la UI, usa `inventoryService.listTransactionHeaders`, que normaliza filtros (tipo, bodega, rango de fechas, búsqueda libre) antes de consultar Prisma. La nueva página `/inventario/documentos` ya consume este endpoint y permite abrir el visor JSON o la impresión HTML desde un mismo panel.
+
 ## Consecutivos configurables
 
 El tab **Consecutivos** dentro de `/preferencias` centraliza la administración de folios para facturación e inventario. Cada definición pertenece a un `scope` (`INVOICE` o `INVENTORY`) y compone el folio con `prefix`, `padding`, `suffix`, `startValue` y `step`. La interfaz muestra una vista previa del siguiente folio calculada a partir del contador real.
@@ -308,8 +318,8 @@ El tab **Consecutivos** dentro de `/preferencias` centraliza la administración 
 		}'
 	```
 	Los folios avanzan con `step` al confirmar transacciones. Puedes activar/desactivar definiciones sin perder el contador histórico.
-2. **Asignación a cajas** (`/api/preferencias/consecutivos/cajas`): cada caja debe tener un consecutivo `INVOICE` antes de emitir facturas. La UI enlaza una lista de cajas (activas e inactivas) y permite limpiar la asignación si requieres pausar el folio. Cuando una caja con sesión abierta usa `SequenceService.generateInvoiceNumber`, el folio queda registrado en la bitácora de la jornada.
-3. **Asignación a inventario** (`/api/preferencias/consecutivos/inventario`): define un consecutivo `INVENTORY` para cada tipo de movimiento (`PURCHASE`, `CONSUMPTION`, `ADJUSTMENT`, `TRANSFER`). `InventoryService` consume estos folios mediante `sequenceService.generateInventoryCode` al confirmar compras, consumos, ajustes o traspasos. Si falta la asignación correspondiente el servicio devuelve un error bloqueando la operación.
+2. **Asignación a cajas** (`/api/preferencias/consecutivos/cajas`): cada caja debe tener un consecutivo `INVOICE` antes de emitir facturas. La UI enlaza una lista de cajas (activas e inactivas) y permite limpiar la asignación si requieres pausar el folio. Cuando la misma definición se asigna a varias cajas, los folios avanzan sobre un único contador global para preservar la unicidad. Al facturar (`SequenceService.generateInvoiceNumber`), el folio queda registrado en la bitácora de la jornada.
+3. **Asignación a inventario** (`/api/preferencias/consecutivos/inventario`): define un consecutivo `INVENTORY` para cada tipo de movimiento (`PURCHASE`, `CONSUMPTION`, `ADJUSTMENT`, `TRANSFER`). `InventoryService` consume estos folios mediante `sequenceService.generateInventoryCode` al confirmar compras, consumos, ajustes o traspasos. Si varios tipos comparten la misma definición, el contador es global para impedir que cada flujo reinicie la numeración. Si falta la asignación correspondiente el servicio devuelve un error bloqueando la operación.
 
 Consejos prácticos:
 - Usa prefijos distintos por serie (ej. `CP-` para compras, `TR-` para traspasos) y mantén `padding` consistente para reportes ordenados.
@@ -402,7 +412,7 @@ VALUES ('2025-11-10', 17.38, 'MXN', 'USD', 'Banco de prueba');
 - Dashboard administrativo en `/dashboard` con menú lateral colapsable, métricas táctiles de ventas y recomendaciones operativas.
 - Facturación en `/facturacion`: vista inicial con menú de flujos internos. Desde allí se accede a **Facturación sin pedido** (facturas manuales o asignadas a mesas disponibles), **Facturación con pedido** (mesas ocupadas listas para cobro) y **Listas de precio** (administración de listas, activaciones, predeterminadas y mantenimiento de artículos/precios mediante modales con buscador). Cada flujo mantiene el historial de la sesión y soporta múltiples formas de pago, IVA opcional y ticket térmico 3".
 - Menú de artículos en `/articulos`: distribuye el mantenimiento en tres submódulos — **Catálogo de artículos** (`/articulos/catalogo`) con listado filtrable y formularios modales, **Unidades de medida** (`/articulos/unidades`) para mantener códigos, factores y estados, y **Ensamble de kits** (`/articulos/ensamble`) con listado de kits y modal de componentes usando `KitBuilder`.
-- Inventario en `/inventario`: nuevo hub que agrupa Kardex, Existencias, Registro de compras, Registro de consumos y Traspasos dentro del módulo. Cada subpágina ofrece filtros básicos con datos mock listos para conectar a SQL, manteniendo navegación táctil y botón de regreso consistente. Kardex y Existencias ahora incluyen filtros multiselección para artículos y bodegas (doble clic abre los modales) y admiten vista previa de impresión en orientación horizontal.
+- Inventario en `/inventario`: además del hub existente para Kardex, Existencias, Registro de compras, Registro de consumos y Traspasos, ahora incluye el foliador de **Documentos** con visor lateral e impresión directa. Las pantallas de captura (compras, consumos y traspasos) migraron a grillas editables multi-línea con totales en vivo y, tras guardar, muestran un banner con el folio real y accesos directos a “Ver detalle”/“Imprimir”. Kardex y Existencias mantienen filtros multiselección y vista previa de impresión en orientación horizontal.
 - Módulos base para `/mesas` y `/meseros`: vistas listas para alojar el mantenimiento operativo (zonas, asignaciones, credenciales) con estructura responsive y accesible, mientras se integran los formularios definitivos.
 
 ## Catálogo de artículos y precios

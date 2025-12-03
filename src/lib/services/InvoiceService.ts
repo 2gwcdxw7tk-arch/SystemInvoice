@@ -423,13 +423,9 @@ export class InvoiceService {
   private async resolveInvoiceNumber(input: InvoiceInsertInput): Promise<string> {
     const provided = this.extractProvidedInvoiceNumber(input);
 
-    if (env.useMockData) {
-      return provided ?? `F-MOCK-${Date.now()}`;
-    }
-
     if (provided) {
-      const existing = await this.invoiceRepository.getInvoiceByNumber(provided);
-      if (existing) {
+      const exists = await this.invoiceNumberExists(provided);
+      if (exists) {
         throw new Error("El número de factura proporcionado ya existe. Usa un folio diferente o actualiza el consecutivo de la caja.");
       }
       return provided;
@@ -446,13 +442,26 @@ export class InvoiceService {
         sessionId: input.cash_register_session_id,
       });
 
-      const exists = await this.invoiceRepository.getInvoiceByNumber(candidate);
+      const exists = await this.invoiceNumberExists(candidate);
       if (!exists) {
         return candidate;
       }
     }
 
     throw new Error("No se pudo generar un número de factura único. Revisa la configuración de consecutivos asignados a las cajas.");
+  }
+
+  private async invoiceNumberExists(value: string): Promise<boolean> {
+    if (!value) {
+      return false;
+    }
+
+    if (env.useMockData) {
+      return mockInvoices.some((invoice) => invoice.invoice_number === value);
+    }
+
+    const existing = await this.invoiceRepository.getInvoiceByNumber(value);
+    return Boolean(existing);
   }
 
   private extractProvidedInvoiceNumber(input: InvoiceInsertInput): string | null {

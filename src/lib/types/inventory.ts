@@ -180,4 +180,76 @@ export interface InventoryTransactionResult {
   lines: InventoryLineInput[];
 }
 
+export interface InventoryDocumentEntryMovement {
+  article_code: string;
+  article_name: string;
+  direction: MovementDirection;
+  quantity_retail: number;
+  warehouse_code: string;
+  warehouse_name: string;
+  retail_unit: string | null;
+  storage_unit: string | null;
+  source_kit_article_code: string | null;
+}
+
+export interface InventoryDocumentEntry {
+  line_number: number;
+  article_code: string;
+  article_name: string;
+  direction: MovementDirection;
+  entered_unit: InventoryUnit;
+  quantity_entered: number;
+  quantity_retail: number;
+  quantity_storage: number;
+  retail_unit: string | null;
+  storage_unit: string | null;
+  kit_multiplier: number | null;
+  cost_per_unit: number | null;
+  subtotal: number | null;
+  notes: string | null;
+  movements: InventoryDocumentEntryMovement[];
+}
+
+export interface InventoryDocument {
+  transaction_code: string;
+  transaction_type: TransactionType;
+  occurred_at: string;
+  created_at: string;
+  warehouse_code: string;
+  warehouse_name: string;
+  reference: string | null;
+  counterparty_name: string | null;
+  status: string;
+  notes: string | null;
+  authorized_by: string | null;
+  created_by: string | null;
+  total_amount: number | null;
+  entries: InventoryDocumentEntry[];
+}
+
+export interface InventoryDocumentListFilter {
+  transaction_types?: TransactionType[];
+  warehouse_codes?: string[];
+  search?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}
+
+export interface InventoryTransactionHeader {
+  transaction_code: string;
+  transaction_type: TransactionType;
+  occurred_at: string;
+  warehouse_code: string;
+  warehouse_name: string;
+  reference: string | null;
+  counterparty_name: string | null;
+  status: string;
+  notes: string | null;
+  total_amount: number | null;
+  entries_count: number;
+  entries_in: number;
+  entries_out: number;
+}
+
 export type NumericLike = number | string | bigint;

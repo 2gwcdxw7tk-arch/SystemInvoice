@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Loader2, Plus, RefreshCcw, Search, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Search, Trash2 } from "lucide-react";
 
+import { ArticleSearchModal } from "@/components/inventory/article-search-modal";
+import { RecentInventoryTransactionBanner } from "@/components/inventory/recent-transaction-banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -41,18 +43,12 @@ type PurchaseLineForm = {
   quantity: string;
   unit: "STORAGE" | "RETAIL";
   cost_per_unit: string;
-  notes?: string;
 };
 
 const STATUS_OPTIONS: Array<{ value: "PENDIENTE" | "PARCIAL" | "PAGADA"; label: string }> = [
   { value: "PENDIENTE", label: "Pendiente" },
   { value: "PARCIAL", label: "Pago parcial" },
   { value: "PAGADA", label: "Pagada" },
-];
-
-const UNIT_OPTIONS: Array<{ value: "STORAGE" | "RETAIL"; label: string }> = [
-  { value: "STORAGE", label: "Unidad almacén" },
-  { value: "RETAIL", label: "Unidad detalle" },
 ];
 
 function defaultLine(articleCode?: string): PurchaseLineForm {
@@ -77,24 +73,29 @@ export default function RegistroComprasPage() {
   const { toast } = useToast();
   const [supplierFilter, setSupplierFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const [fromDate, setFromDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [toDate, setToDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [purchases, setPurchases] = useState<PurchaseRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [recentTransactionCode, setRecentTransactionCode] = useState<string | null>(null);
   const [articles, setArticles] = useState<ArticleOption[]>([]);
+  const [articlesLoading, setArticlesLoading] = useState(false);
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
   const [form, setForm] = useState({
     document_number: "",
     supplier_name: "",
     occurred_at: new Date().toISOString().slice(0, 10),
-    status: "PENDIENTE" as "PENDIENTE" | "PARCIAL" | "PAGADA",
+    status: "PAGADA" as "PENDIENTE" | "PARCIAL" | "PAGADA",
     warehouse_code: "",
     notes: "",
     lines: [defaultLine()],
   });
+  const [articlePickerOpen, setArticlePickerOpen] = useState(false);
+  const [articlePickerLineIndex, setArticlePickerLineIndex] = useState<number | null>(null);
 
   async function loadPurchases(options?: { supplier?: string; status?: string; from?: string; to?: string }) {
     const supplier = options?.supplier ?? supplierFilter;
@@ -103,6 +104,7 @@ export default function RegistroComprasPage() {
     const to = options?.to ?? toDate;
     setLoading(true);
     setError(null);
+    setHasSearched(true);
     try {
       const url = new URL("/api/inventario/compras", window.location.origin);
       if (supplier.trim().length > 0) url.searchParams.set("supplier", supplier.trim());
@@ -123,6 +125,7 @@ export default function RegistroComprasPage() {
   }
 
   async function loadArticles() {
+    setArticlesLoading(true);
     try {
       const url = new URL("/api/articulos", window.location.origin);
       url.searchParams.set("unit", "RETAIL");
@@ -142,6 +145,8 @@ export default function RegistroComprasPage() {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "No se pudieron cargar artículos";
       toast({ variant: "warning", title: "Artículos", description: message });
+    } finally {
+      setArticlesLoading(false);
     }
   }
 
@@ -161,7 +166,6 @@ export default function RegistroComprasPage() {
   }
 
   useEffect(() => {
-    loadPurchases();
     loadArticles();
     loadWarehouses();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -188,7 +192,7 @@ export default function RegistroComprasPage() {
       document_number: "",
       supplier_name: "",
       occurred_at: new Date().toISOString().slice(0, 10),
-      status: "PENDIENTE",
+      status: "PAGADA",
       warehouse_code: warehouses[0]?.code || "",
       notes: "",
       lines: [defaultLine(articles[0]?.article_code)],
@@ -214,6 +218,25 @@ export default function RegistroComprasPage() {
       ...prev,
       lines: prev.lines.filter((_, idx) => idx !== index),
     }));
+  }
+
+  function openArticlePicker(lineIndex: number) {
+    if (!articles.length && !articlesLoading) {
+      void loadArticles();
+    }
+    setArticlePickerLineIndex(lineIndex);
+    setArticlePickerOpen(true);
+  }
+
+  function closeArticlePicker() {
+    setArticlePickerOpen(false);
+    setArticlePickerLineIndex(null);
+  }
+
+  function handleArticlePicked(articleCode: string) {
+    if (articlePickerLineIndex == null) return;
+    updateLine(articlePickerLineIndex, { article_code: articleCode });
+    closeArticlePicker();
   }
 
   function validateForm(): string | null {
@@ -250,10 +273,11 @@ export default function RegistroComprasPage() {
           })),
         }),
       });
+      const data = (await response.json().catch(() => null)) as { message?: string; transaction_code?: string } | null;
       if (!response.ok) {
-        const data = await response.json().catch(() => null);
         throw new Error(data?.message || "No se pudo registrar la compra");
       }
+      if (data?.transaction_code) setRecentTransactionCode(data.transaction_code);
       toast({ variant: "success", title: "Compra registrada", description: "El movimiento se guardó correctamente" });
       setModalOpen(false);
       resetForm();
@@ -295,10 +319,6 @@ export default function RegistroComprasPage() {
             </div>
           </div>
           <div className="flex items-start gap-2">
-            <Button type="button" variant="outline" onClick={() => loadPurchases()} className="h-11 rounded-2xl px-4">
-              <RefreshCcw className="mr-2 h-4 w-4" />
-              Refrescar
-            </Button>
             <Button type="button" onClick={() => { resetForm(); setModalOpen(true); }} className="h-11 rounded-2xl bg-primary px-4 font-semibold text-primary-foreground">
               <Plus className="mr-2 h-4 w-4" />
               Nueva compra
@@ -333,19 +353,22 @@ export default function RegistroComprasPage() {
             <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
             <DatePicker value={toDate} onChange={setToDate} className="rounded-2xl" />
           </div>
-          <div className="flex items-end gap-2">
+          <div className="flex h-full items-end justify-end gap-2">
             <Button type="button" onClick={() => loadPurchases()} disabled={loading} className="h-10 rounded-2xl px-4">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} Buscar
             </Button>
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               onClick={() => {
                 setSupplierFilter("");
                 setStatusFilter("");
-                setFromDate("");
-                setToDate("");
-                loadPurchases({ supplier: "", status: "", from: "", to: "" });
+                const today = new Date().toISOString().slice(0, 10);
+                setFromDate(today);
+                setToDate(today);
+                setPurchases([]);
+                setError(null);
+                setHasSearched(false);
               }}
               className="h-10 rounded-2xl px-4"
             >
@@ -355,14 +378,30 @@ export default function RegistroComprasPage() {
         </div>
       </header>
 
+      {recentTransactionCode ? (
+        <RecentInventoryTransactionBanner
+          code={recentTransactionCode}
+          message="Listo, abre el visor de documentos o imprime el folio recién generado."
+          onDismiss={() => setRecentTransactionCode(null)}
+        />
+      ) : null}
+
       <Card className="rounded-3xl border bg-background/95 shadow-sm">
         <CardHeader>
           <CardTitle className="text-xl font-semibold">Historial de compras</CardTitle>
-          <CardDescription>{loading ? "Consultando información..." : `Total de registros: ${filtered.length}`}</CardDescription>
+          <CardDescription>
+            {loading
+              ? "Consultando información..."
+              : hasSearched
+                ? `Total de registros: ${filtered.length}`
+                : "Aplica filtros de fecha y ejecuta una búsqueda para ver resultados."}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
-          {!loading && filtered.length === 0 ? (
+          {!hasSearched ? (
+            <p className="text-sm text-muted-foreground">Selecciona un rango de fechas y haz clic en Buscar para consultar el historial.</p>
+          ) : !loading && filtered.length === 0 ? (
             <p className="text-sm text-muted-foreground">No hay compras que coincidan con los filtros seleccionados.</p>
           ) : (
             <div className="overflow-x-auto">
@@ -434,7 +473,7 @@ export default function RegistroComprasPage() {
         }}
         title="Nueva compra"
         description="Registra una nueva entrada de inventario desde proveedores o traspasos."
-        contentClassName="max-w-4xl"
+        contentClassName="max-w-[82rem]"
       >
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid gap-4 md:grid-cols-2">
@@ -465,20 +504,6 @@ export default function RegistroComprasPage() {
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs uppercase text-muted-foreground">Estado</Label>
-              <select
-                value={form.status}
-                onChange={(event) => setForm((prev) => ({ ...prev, status: event.target.value as "PENDIENTE" | "PARCIAL" | "PAGADA" }))}
-                className="h-10 w-full rounded-2xl border border-muted bg-background/90 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
               <Label className="text-xs uppercase text-muted-foreground">Almacén</Label>
               <select
                 value={form.warehouse_code}
@@ -492,125 +517,132 @@ export default function RegistroComprasPage() {
                 ))}
               </select>
             </div>
-            <div className="space-y-1 md:col-span-2">
-              <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
-              <Input
-                value={form.notes}
-                onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
-                placeholder="Comentarios adicionales"
-                className="rounded-2xl"
-              />
-            </div>
           </div>
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">Líneas</h3>
-              <Button type="button" variant="outline" onClick={addLine} className="rounded-2xl px-3 text-xs">
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-col">
+                <h3 className="text-sm font-semibold text-foreground">Detalle de líneas</h3>
+                <p className="text-xs text-muted-foreground">Edita directamente sobre la grilla, suma nuevos artículos y consulta el importe por fila.</p>
+              </div>
+              <div className="ml-auto flex items-center gap-4 text-xs text-muted-foreground">
+                <span>{form.lines.length} líneas</span>
+              </div>
+              <Button type="button" variant="outline" onClick={addLine} className="rounded-2xl px-4 text-xs">
                 <Plus className="mr-2 h-4 w-4" />
-                Agregar línea
+                Agregar fila
               </Button>
             </div>
-            <div className="space-y-4">
-              {form.lines.map((line, index) => {
-                const currentArticle = articles.find((article) => article.article_code === line.article_code);
-                const storageUnit = currentArticle?.storage_unit || "Unidad almacén";
-                const retailUnit = currentArticle?.retail_unit || "Unidad detalle";
-                return (
-                  <div key={index} className="rounded-2xl border border-dashed border-muted p-4">
-                    <div className="grid gap-3 md:grid-cols-4">
-                      <div className="space-y-1 md:col-span-2">
-                        <Label className="text-xs uppercase text-muted-foreground">Artículo</Label>
-                        <select
-                          value={line.article_code}
-                          onChange={(event) => updateLine(index, { article_code: event.target.value })}
-                          className="h-10 w-full rounded-2xl border border-muted bg-background/90 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                        >
-                          <option value="">Selecciona un artículo</option>
-                          {articles.map((article) => (
-                            <option key={article.article_code} value={article.article_code}>
-                              {article.article_code} — {article.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs uppercase text-muted-foreground">Cantidad</Label>
-                        <Input
-                          value={line.quantity}
-                          onChange={(event) => updateLine(index, { quantity: event.target.value })}
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          className="rounded-2xl"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs uppercase text-muted-foreground">Unidad</Label>
-                        <select
-                          value={line.unit}
-                          onChange={(event) => updateLine(index, { unit: event.target.value as "STORAGE" | "RETAIL" })}
-                          className="h-10 w-full rounded-2xl border border-muted bg-background/90 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                        >
-                          {UNIT_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="text-xs text-muted-foreground">
-                          {line.unit === "STORAGE" ? storageUnit : retailUnit}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-4">
-                      <div className="space-y-1">
-                        <Label className="text-xs uppercase text-muted-foreground">Costo unitario</Label>
-                        <Input
-                          value={line.cost_per_unit}
-                          onChange={(event) => updateLine(index, { cost_per_unit: event.target.value })}
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          className="rounded-2xl"
-                        />
-                      </div>
-                      <div className="md:col-span-2 space-y-1">
-                        <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
-                        <Input
-                          value={line.notes ?? ""}
-                          onChange={(event) => updateLine(index, { notes: event.target.value })}
-                          placeholder="Detalle adicional"
-                          className="rounded-2xl"
-                        />
-                      </div>
-                      <div className="flex items-end justify-end">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          onClick={() => removeLine(index)}
-                          className="rounded-2xl px-3 text-xs text-destructive hover:bg-destructive/10"
-                          aria-label="Eliminar línea"
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Quitar
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="overflow-x-auto rounded-2xl border border-dashed border-muted">
+              <table className="w-full min-w-[1080px] table-auto text-sm text-foreground">
+                <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                  <tr>
+                    <th className="w-10 px-3 py-2 text-left">#</th>
+                    <th className="w-[42%] px-3 py-2 text-left">Artículo</th>
+                    <th className="w-[24%] px-3 py-2 text-left">Unidad</th>
+                    <th className="w-[10%] px-3 py-2 text-right">Cantidad</th>
+                    <th className="w-[12%] px-3 py-2 text-right">Costo unitario</th>
+                    <th className="w-[10%] px-3 py-2 text-right">Importe</th>
+                    <th className="w-14 px-3 py-2 text-right" aria-label="Acciones" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-muted/70">
+                  {form.lines.map((line, index) => {
+                    const currentArticle = articles.find((article) => article.article_code === line.article_code);
+                    const storageUnit = currentArticle?.storage_unit || "N/D";
+                    const retailUnit = currentArticle?.retail_unit || "N/D";
+                    const numericQuantity = Number(line.quantity) || 0;
+                    const numericCost = Number(line.cost_per_unit) || 0;
+                    const lineTotal = numericQuantity * numericCost;
+                    const unitOptions = [
+                      { value: "STORAGE" as const, label: `${storageUnit} — Unidad almacén` },
+                      { value: "RETAIL" as const, label: `${retailUnit} — Unidad detalle` },
+                    ];
+                    return (
+                      <tr key={`line-${index}`} className="align-middle">
+                        <td className="px-3 py-3 text-xs text-muted-foreground">{index + 1}</td>
+                        <td className="px-3 py-3 align-top">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="flex h-10 w-full items-center justify-between rounded-2xl px-3 text-left font-normal"
+                            onClick={() => openArticlePicker(index)}
+                          >
+                            <span className="truncate">
+                              {currentArticle ? `${line.article_code} — ${currentArticle.name}` : "Buscar artículo"}
+                            </span>
+                            <Search className="ml-2 h-4 w-4 text-muted-foreground" />
+                          </Button>
+                        </td>
+                        <td className="px-3 py-3 align-top">
+                          <select
+                            value={line.unit}
+                            onChange={(event) => updateLine(index, { unit: event.target.value as "STORAGE" | "RETAIL" })}
+                            className="h-10 w-full rounded-2xl border border-muted bg-background/95 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          >
+                            {unitOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-3 py-3 text-right">
+                          <Input
+                            value={line.quantity}
+                            onChange={(event) => updateLine(index, { quantity: event.target.value })}
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="w-28 rounded-2xl text-right"
+                          />
+                        </td>
+                        <td className="px-3 py-3 text-right">
+                          <Input
+                            value={line.cost_per_unit}
+                            onChange={(event) => updateLine(index, { cost_per_unit: event.target.value })}
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="w-32 rounded-2xl text-right"
+                          />
+                        </td>
+                        <td className="px-3 py-3 text-right font-semibold">{formatCurrency(lineTotal)}</td>
+                        <td className="px-3 py-3 text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            disabled={form.lines.length === 1}
+                            onClick={() => removeLine(index)}
+                            className="rounded-2xl px-3 text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                            aria-label="Eliminar línea"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
 
-          <div className="flex flex-col gap-2 border-t pt-4">
+          <div className="space-y-2 border-t pt-4">
+            <Label className="text-xs uppercase text-muted-foreground">Notas del documento</Label>
+            <textarea
+              value={form.notes}
+              onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
+              placeholder="Comentarios adicionales"
+              className="min-h-[80px] w-full rounded-2xl border border-muted bg-background/95 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            />
+          </div>
+
+          <div className="flex flex-col gap-2 pt-4">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-muted-foreground">Total estimado</span>
               <span className="text-xl font-semibold text-foreground">{formatCurrency(totalAmount)}</span>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Los costos se almacenan según la unidad capturada y se convierten automáticamente a unidad detalle para kardex e inventario.
-            </p>
           </div>
 
           <div className="flex items-center justify-end gap-3">
@@ -624,6 +656,17 @@ export default function RegistroComprasPage() {
           </div>
         </form>
       </Modal>
+      <ArticleSearchModal
+        open={articlePickerOpen}
+        onClose={closeArticlePicker}
+        articles={articles}
+        loading={articlesLoading}
+        onSelect={handleArticlePicked}
+        selectedCode={articlePickerLineIndex != null ? form.lines[articlePickerLineIndex]?.article_code : null}
+        onReload={() => void loadArticles()}
+        title="Seleccionar artículo"
+        description="Filtra el catálogo y asigna el artículo a la línea en captura."
+      />
     </section>
   );
 }

@@ -281,6 +281,58 @@ CREATE TABLE IF NOT EXISTS app.sequence_counters (
 CREATE INDEX IF NOT EXISTS ix_sequence_counters_updated
   ON app.sequence_counters (sequence_definition_id, updated_at DESC);
 
+-- Asegura que los consecutivos compartidos por varias cajas utilicen el mismo contador global
+DO $$
+DECLARE
+  seq_record RECORD;
+BEGIN
+  FOR seq_record IN
+    SELECT sequence_definition_id, MAX(current_value) AS max_value
+    FROM app.sequence_counters
+    WHERE scope_type = 'CASH_REGISTER'
+    GROUP BY sequence_definition_id
+  LOOP
+    INSERT INTO app.sequence_counters (
+      sequence_definition_id,
+      scope_type,
+      scope_key,
+      current_value,
+      updated_at
+    )
+    VALUES (seq_record.sequence_definition_id, 'GLOBAL', '', seq_record.max_value, NOW())
+    ON CONFLICT (sequence_definition_id, scope_type, scope_key)
+    DO UPDATE
+      SET current_value = GREATEST(app.sequence_counters.current_value, EXCLUDED.current_value),
+          updated_at = NOW();
+  END LOOP;
+END $$;
+
+-- Alinear contadores globales cuando varias transacciones de inventario comparten la misma definición
+DO $$
+DECLARE
+  seq_record RECORD;
+BEGIN
+  FOR seq_record IN
+    SELECT sequence_definition_id, MAX(current_value) AS max_value
+    FROM app.sequence_counters
+    WHERE scope_type = 'INVENTORY_TYPE'
+    GROUP BY sequence_definition_id
+  LOOP
+    INSERT INTO app.sequence_counters (
+      sequence_definition_id,
+      scope_type,
+      scope_key,
+      current_value,
+      updated_at
+    )
+    VALUES (seq_record.sequence_definition_id, 'GLOBAL', '', seq_record.max_value, NOW())
+    ON CONFLICT (sequence_definition_id, scope_type, scope_key)
+    DO UPDATE
+      SET current_value = GREATEST(app.sequence_counters.current_value, EXCLUDED.current_value),
+          updated_at = NOW();
+  END LOOP;
+END $$;
+
 -- ========================================================
 -- Tabla: app.inventory_sequence_settings (asignaciones por tipo)
 -- ========================================================
@@ -1240,6 +1292,10 @@ CREATE TABLE IF NOT EXISTS app.inventory_transactions (
   total_amount NUMERIC(18,2),
   updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Asegura la columna updated_at en instalaciones previas
+ALTER TABLE app.inventory_transactions
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
 
 DROP TRIGGER IF EXISTS trg_inventory_transactions_touch_updated_at ON app.inventory_transactions;
 CREATE TRIGGER trg_inventory_transactions_touch_updated_at

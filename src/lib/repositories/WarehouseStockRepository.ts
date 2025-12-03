@@ -92,9 +92,21 @@ export class WarehouseStockRepository implements IWarehouseStockRepository {
     });
 
     if (!association) {
-      throw new Error(
-        `El artículo ${articleId} no está asociado a la bodega ${warehouseId}.`
-      );
+      const [article, warehouse] = await Promise.all([
+        client.articles.findUnique({
+          where: { id: BigInt(articleId) },
+          select: { article_code: true, name: true },
+        }),
+        client.warehouses.findUnique({
+          where: { id: warehouseId },
+          select: { code: true, name: true },
+        }),
+      ]);
+
+      const articleLabel = article ? `${article.article_code} — ${article.name}` : `ID ${articleId}`;
+      const warehouseLabel = warehouse ? `${warehouse.code} (${warehouse.name})` : `ID ${warehouseId}`;
+
+      throw new Error(`El artículo ${articleLabel} no está asociado al almacén ${warehouseLabel}.`);
     }
   }
 }

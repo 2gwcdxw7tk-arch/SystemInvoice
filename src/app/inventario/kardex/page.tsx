@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Printer, RefreshCcw } from "lucide-react";
+import { ArrowLeft, Printer } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -388,14 +388,10 @@ export default function KardexPage() {
               <Printer className="mr-2 h-4 w-4" />
               Imprimir
             </Button>
-            <Button type="button" variant="outline" onClick={() => loadMovements()} className="h-11 rounded-2xl px-4">
-              <RefreshCcw className="mr-2 h-4 w-4" />
-              Refrescar
-            </Button>
           </div>
         </div>
-        <div className="grid gap-3 lg:grid-cols-5 md:grid-cols-4 sm:grid-cols-2">
-          <div className="space-y-1">
+        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-6">
+          <div className="space-y-1 md:col-span-2">
             <Label className="text-xs uppercase text-muted-foreground">Artículo</Label>
             <Input
               value={articleInputValue}
@@ -429,13 +425,13 @@ export default function KardexPage() {
             />
             <p className="text-xs text-muted-foreground">Deja vacío para incluir todas las bodegas. Doble clic abre el catálogo.</p>
           </div>
-          <div className="flex items-end justify-end gap-2">
+          <div className="flex h-full items-end justify-end gap-2 md:col-span-1">
             <Button type="button" onClick={() => loadMovements()} disabled={loading} className="h-10 rounded-2xl px-4">
               {loading ? "Buscando..." : "Buscar"}
             </Button>
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               onClick={() => {
                 applyArticleCodes([]);
                 applyWarehouseCodes([]);

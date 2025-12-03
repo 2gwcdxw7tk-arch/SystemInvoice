@@ -165,6 +165,40 @@ describe('InvoiceService', () => {
     expect(mockInvoiceRepository.getInvoiceByNumber).not.toHaveBeenCalled();
   });
 
+  it('uses the configured sequence even when running in mock mode', async () => {
+    env.useMockData = true;
+
+    const invoiceInput: InvoiceInsertInput = {
+      table_code: null,
+      waiter_code: null,
+      invoiceDate: new Date('2025-11-18'),
+      subtotal: 30,
+      service_charge: 0,
+      vat_amount: 4.5,
+      vat_rate: 0.15,
+      total_amount: 34.5,
+      currency_code: 'USD',
+      payments: [{ method: 'CASH', amount: 34.5, reference: null }],
+      items: [{ description: 'Item', quantity: 1, unit_price: 30 }],
+      issuer_admin_user_id: 1,
+      cash_register_id: 3,
+      cash_register_session_id: 7,
+      cash_register_code: 'REG-3',
+      cashRegisterWarehouseCode: 'MAIN',
+    };
+
+    mockedSequenceService.generateInvoiceNumber.mockResolvedValueOnce('FAC-MOCK-0001');
+
+    const result = await invoiceService.createInvoice(invoiceInput);
+
+    expect(result.invoice_number).toBe('FAC-MOCK-0001');
+    expect(mockedSequenceService.generateInvoiceNumber).toHaveBeenCalledWith({
+      cashRegisterId: 3,
+      cashRegisterCode: 'REG-3',
+      sessionId: 7,
+    });
+  });
+
   it('skips duplicate folios returned by the sequence service', async () => {
     env.useMockData = false;
 

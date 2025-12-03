@@ -176,9 +176,6 @@ export default function WarehousesPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Button type="button" variant="outline" onClick={() => void loadWarehouses()} className="rounded-2xl" disabled={loading}>
-              {loading ? "Actualizando..." : "Refrescar"}
-            </Button>
             <Button type="button" onClick={openCreateModal} className="rounded-2xl">
               Nueva bodega
             </Button>

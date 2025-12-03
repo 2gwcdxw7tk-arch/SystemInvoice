@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Loader2, Plus, RefreshCcw, Search, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Search, Trash2 } from "lucide-react";
 
+import { ArticleSearchModal } from "@/components/inventory/article-search-modal";
+import { RecentInventoryTransactionBanner } from "@/components/inventory/recent-transaction-banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -76,14 +78,17 @@ function formatDateParts(iso: string) {
 export default function RegistroConsumosPage() {
   const { toast } = useToast();
   const [articleFilter, setArticleFilter] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const [fromDate, setFromDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [toDate, setToDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [consumptions, setConsumptions] = useState<ConsumptionRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [recentTransactionCode, setRecentTransactionCode] = useState<string | null>(null);
   const [articles, setArticles] = useState<ArticleOption[]>([]);
+  const [articlesLoading, setArticlesLoading] = useState(false);
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
   const [form, setForm] = useState({
     reason: "",
@@ -94,6 +99,8 @@ export default function RegistroConsumosPage() {
     notes: "",
     lines: [defaultLine()],
   });
+  const [articlePickerOpen, setArticlePickerOpen] = useState(false);
+  const [articlePickerLineIndex, setArticlePickerLineIndex] = useState<number | null>(null);
 
   const quantityFormatter = useMemo(
     () =>
@@ -110,6 +117,7 @@ export default function RegistroConsumosPage() {
     const to = options?.to ?? toDate;
     setLoading(true);
     setError(null);
+    setHasSearched(true);
     try {
       const url = new URL("/api/inventario/consumos", window.location.origin);
       if (article.trim().length > 0) url.searchParams.set("article", article.trim());
@@ -129,6 +137,7 @@ export default function RegistroConsumosPage() {
   }
 
   async function loadArticles() {
+    setArticlesLoading(true);
     try {
       const url = new URL("/api/articulos", window.location.origin);
       url.searchParams.set("unit", "RETAIL");
@@ -148,6 +157,8 @@ export default function RegistroConsumosPage() {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "No se pudieron cargar los artículos";
       toast({ variant: "warning", title: "Artículos", description: message });
+    } finally {
+      setArticlesLoading(false);
     }
   }
 
@@ -167,7 +178,6 @@ export default function RegistroConsumosPage() {
   }
 
   useEffect(() => {
-    loadConsumptions();
     loadArticles();
     loadWarehouses();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -222,6 +232,25 @@ export default function RegistroConsumosPage() {
     }));
   }
 
+  function openArticlePicker(lineIndex: number) {
+    if (!articles.length && !articlesLoading) {
+      void loadArticles();
+    }
+    setArticlePickerLineIndex(lineIndex);
+    setArticlePickerOpen(true);
+  }
+
+  function closeArticlePicker() {
+    setArticlePickerOpen(false);
+    setArticlePickerLineIndex(null);
+  }
+
+  function handleArticlePicked(articleCode: string) {
+    if (articlePickerLineIndex == null) return;
+    updateLine(articlePickerLineIndex, { article_code: articleCode });
+    closeArticlePicker();
+  }
+
   function validateForm(): string | null {
     if (!form.reason.trim()) return "Captura el motivo del consumo";
     if (!form.authorized_by.trim()) return "Captura la persona que autoriza";
@@ -264,10 +293,11 @@ export default function RegistroConsumosPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      const data = (await response.json().catch(() => null)) as { message?: string; transaction_code?: string } | null;
       if (!response.ok) {
-        const data = await response.json().catch(() => null);
         throw new Error(data?.message || "No se pudo registrar el consumo");
       }
+      if (data?.transaction_code) setRecentTransactionCode(data.transaction_code);
       toast({ variant: "success", title: "Consumo registrado", description: "El movimiento se guardó correctamente" });
       setModalOpen(false);
       resetForm();
@@ -279,6 +309,17 @@ export default function RegistroConsumosPage() {
       setSaving(false);
     }
   }
+
+  const totalsByUnit = useMemo(
+    () =>
+      form.lines.reduce<{ storage: number; retail: number }>((acc, line) => {
+        const numericQuantity = Number(line.quantity.replace(/,/g, ".")) || 0;
+        if (line.unit === "STORAGE") acc.storage += numericQuantity;
+        else acc.retail += numericQuantity;
+        return acc;
+      }, { storage: 0, retail: 0 }),
+    [form.lines]
+  );
 
   return (
     <section className="space-y-10 pb-16">
@@ -301,10 +342,6 @@ export default function RegistroConsumosPage() {
             </div>
           </div>
           <div className="flex items-start gap-2">
-            <Button type="button" variant="outline" onClick={() => loadConsumptions()} className="h-11 rounded-2xl px-4">
-              <RefreshCcw className="mr-2 h-4 w-4" />
-              Refrescar
-            </Button>
             <Button
               type="button"
               onClick={() => {
@@ -318,7 +355,7 @@ export default function RegistroConsumosPage() {
             </Button>
           </div>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-5">
           <div className="space-y-1 md:col-span-2">
             <Label className="text-xs uppercase text-muted-foreground">Artículo</Label>
             <Input
@@ -336,18 +373,21 @@ export default function RegistroConsumosPage() {
             <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
             <DatePicker value={toDate} onChange={setToDate} className="rounded-2xl" />
           </div>
-          <div className="flex items-end gap-2 md:col-span-4">
+          <div className="flex h-full items-end justify-end gap-2 md:col-span-1">
             <Button type="button" onClick={() => loadConsumptions()} disabled={loading} className="h-10 rounded-2xl px-4">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} Buscar
             </Button>
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               onClick={() => {
                 setArticleFilter("");
-                setFromDate("");
-                setToDate("");
-                loadConsumptions({ article: "", from: "", to: "" });
+                const today = new Date().toISOString().slice(0, 10);
+                setFromDate(today);
+                setToDate(today);
+                setConsumptions([]);
+                setError(null);
+                setHasSearched(false);
               }}
               className="h-10 rounded-2xl px-4"
             >
@@ -357,14 +397,30 @@ export default function RegistroConsumosPage() {
         </div>
       </header>
 
+      {recentTransactionCode ? (
+        <RecentInventoryTransactionBanner
+          code={recentTransactionCode}
+          message="Consulta el detalle del consumo o genera el formato imprimible desde aquí."
+          onDismiss={() => setRecentTransactionCode(null)}
+        />
+      ) : null}
+
       <Card className="rounded-3xl border bg-background/95 shadow-sm">
         <CardHeader>
           <CardTitle className="text-xl font-semibold">Historial de consumos</CardTitle>
-          <CardDescription>{loading ? "Consultando información..." : `Total de registros: ${filtered.length}`}</CardDescription>
+          <CardDescription>
+            {loading
+              ? "Consultando información..."
+              : hasSearched
+                ? `Total de registros: ${filtered.length}`
+                : "Aplica filtros de fecha y ejecuta una búsqueda para ver resultados."}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
-          {!loading && filtered.length === 0 ? (
+          {!hasSearched ? (
+            <p className="text-sm text-muted-foreground">Selecciona un rango de fechas y haz clic en Buscar para consultar el historial.</p>
+          ) : !loading && filtered.length === 0 ? (
             <p className="text-sm text-muted-foreground">No hay consumos que coincidan con los filtros seleccionados.</p>
           ) : (
             <div className="overflow-x-auto">
@@ -432,7 +488,7 @@ export default function RegistroConsumosPage() {
         }}
         title="Nuevo consumo"
         description="Registra salidas de inventario por mermas, preparación o ajustes autorizados."
-        contentClassName="max-w-3xl"
+        contentClassName="max-w-6xl"
       >
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid gap-4 md:grid-cols-2">
@@ -496,83 +552,115 @@ export default function RegistroConsumosPage() {
             </div>
           </div>
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">Artículos consumidos</h3>
-              <Button type="button" variant="outline" onClick={addLine} className="rounded-2xl px-3 text-xs">
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-col">
+                <h3 className="text-sm font-semibold text-foreground">Artículos consumidos</h3>
+                <p className="text-xs text-muted-foreground">Gestiona todas las líneas desde una sola grilla editable.</p>
+              </div>
+              <div className="ml-auto text-xs text-muted-foreground">
+                {form.lines.length} líneas capturadas
+              </div>
+              <Button type="button" variant="outline" onClick={addLine} className="rounded-2xl px-4 text-xs">
                 <Plus className="mr-2 h-4 w-4" />
-                Agregar artículo
+                Agregar fila
               </Button>
             </div>
-            <div className="space-y-4">
-              {form.lines.map((line, index) => {
-                const currentArticle = articles.find((article) => article.article_code === line.article_code);
-                const storageUnit = currentArticle?.storage_unit || "Unidad almacén";
-                const retailUnit = currentArticle?.retail_unit || "Unidad detalle";
-                return (
-                  <div key={index} className="rounded-2xl border border-dashed border-muted p-4">
-                    <div className="grid gap-3 md:grid-cols-4">
-                      <div className="space-y-1 md:col-span-2">
-                        <Label className="text-xs uppercase text-muted-foreground">Artículo</Label>
-                        <select
-                          value={line.article_code}
-                          onChange={(event) => updateLine(index, { article_code: event.target.value })}
-                          className="h-10 w-full rounded-2xl border border-muted bg-background/90 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                        >
-                          <option value="">Selecciona un artículo</option>
-                          {articles.map((article) => (
-                            <option key={article.article_code} value={article.article_code}>
-                              {article.article_code} — {article.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs uppercase text-muted-foreground">Cantidad</Label>
-                        <Input
-                          value={line.quantity}
-                          onChange={(event) => updateLine(index, { quantity: sanitizeNumericInput(event.target.value) })}
-                          placeholder="0"
-                          className="rounded-2xl"
-                        />
-                        <p className="text-xs text-muted-foreground">{retailUnit}</p>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs uppercase text-muted-foreground">Unidad</Label>
-                        <select
-                          value={line.unit}
-                          onChange={(event) => updateLine(index, { unit: event.target.value as "STORAGE" | "RETAIL" })}
-                          className="h-10 w-full rounded-2xl border border-muted bg-background/90 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                        >
-                          {UNIT_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="text-xs text-muted-foreground">{line.unit === "STORAGE" ? storageUnit : retailUnit}</p>
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between gap-3">
-                      <div className="flex-1">
-                        <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
-                        <Input
-                          value={line.notes || ""}
-                          onChange={(event) => updateLine(index, { notes: event.target.value })}
-                          placeholder="Comentarios para esta línea"
-                          className="rounded-2xl"
-                        />
-                      </div>
-                      {form.lines.length > 1 && (
-                        <Button type="button" variant="ghost" onClick={() => removeLine(index)} className="mt-6 h-10 rounded-2xl px-3 text-destructive">
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Quitar
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="overflow-x-auto rounded-2xl border border-dashed border-muted">
+              <table className="min-w-[920px] w-full table-auto text-sm text-foreground">
+                <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 text-left">#</th>
+                    <th className="px-3 py-2 text-left">Artículo</th>
+                    <th className="px-3 py-2 text-left">Unidad</th>
+                    <th className="px-3 py-2 text-right">Cantidad</th>
+                    <th className="px-3 py-2 text-left">Notas</th>
+                    <th className="px-3 py-2 text-right" aria-label="Acciones" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-muted/70">
+                  {form.lines.map((line, index) => {
+                    const currentArticle = articles.find((article) => article.article_code === line.article_code);
+                    const storageUnit = currentArticle?.storage_unit || "Unidad almacén";
+                    const retailUnit = currentArticle?.retail_unit || "Unidad detalle";
+                    return (
+                      <tr key={`consumption-${index}`} className="align-top">
+                        <td className="px-3 py-3 text-xs text-muted-foreground">{index + 1}</td>
+                        <td className="px-3 py-3">
+                          <div className="space-y-1">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="flex h-10 w-full items-center justify-between rounded-2xl px-3 text-left font-normal"
+                              onClick={() => openArticlePicker(index)}
+                            >
+                              <span className="truncate">
+                                {currentArticle ? `${line.article_code} — ${currentArticle.name}` : "Buscar artículo"}
+                              </span>
+                              <Search className="ml-2 h-4 w-4 text-muted-foreground" />
+                            </Button>
+                            <p className="text-xs text-muted-foreground">
+                              {currentArticle
+                                ? `Detalle: ${currentArticle.retail_unit || "N/D"} · Almacén: ${currentArticle.storage_unit || "N/D"}`
+                                : "Abre el buscador para filtrar por código o nombre"}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <select
+                            value={line.unit}
+                            onChange={(event) => updateLine(index, { unit: event.target.value as "STORAGE" | "RETAIL" })}
+                            className="h-10 w-full rounded-2xl border border-muted bg-background/95 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          >
+                            {UNIT_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {line.unit === "STORAGE" ? storageUnit : retailUnit}
+                          </p>
+                        </td>
+                        <td className="px-3 py-3">
+                          <Input
+                            value={line.quantity}
+                            onChange={(event) => updateLine(index, { quantity: sanitizeNumericInput(event.target.value) })}
+                            placeholder="0"
+                            className="rounded-2xl text-right"
+                          />
+                        </td>
+                        <td className="px-3 py-3">
+                          <Input
+                            value={line.notes || ""}
+                            onChange={(event) => updateLine(index, { notes: event.target.value })}
+                            placeholder="Comentarios para esta línea"
+                            className="rounded-2xl"
+                          />
+                        </td>
+                        <td className="px-3 py-3 text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            disabled={form.lines.length === 1}
+                            onClick={() => removeLine(index)}
+                            className="rounded-2xl px-3 text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="rounded-2xl bg-muted/30 p-4 text-xs text-muted-foreground">
+              <p className="font-semibold text-foreground">Totales en vivo</p>
+              <p>Líneas: {form.lines.length}</p>
+              <p>
+                Suma en unidades de almacén: {quantityFormatter.format(totalsByUnit.storage)} | Detalle: {quantityFormatter.format(totalsByUnit.retail)}
+              </p>
             </div>
           </div>
 
@@ -595,6 +683,17 @@ export default function RegistroConsumosPage() {
           </div>
         </form>
       </Modal>
+      <ArticleSearchModal
+        open={articlePickerOpen}
+        onClose={closeArticlePicker}
+        articles={articles}
+        loading={articlesLoading}
+        onSelect={handleArticlePicked}
+        selectedCode={articlePickerLineIndex != null ? form.lines[articlePickerLineIndex]?.article_code : null}
+        onReload={() => void loadArticles()}
+        title="Seleccionar artículo"
+        description="Filtra el catálogo y asigna el artículo consumido a la línea actual."
+      />
     </section>
   );
 }

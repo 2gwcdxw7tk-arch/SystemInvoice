@@ -63,6 +63,11 @@ function nextCandidate(definition: SequenceDefinitionRecord, currentValue: bigin
 export class SequenceService {
   constructor(private readonly repository: ISequenceRepository = new SequenceRepository()) {}
 
+  private getGlobalCounterScope(): { scopeType: SequenceCounterScope; scopeKey: string } {
+    // Compartimos contador por definición para evitar reinicios por caja o tipo de movimiento.
+    return { scopeType: "GLOBAL", scopeKey: "" };
+  }
+
   async listDefinitions(scope?: SequenceScope): Promise<SequenceDefinitionView[]> {
     const definitions = await this.repository.listDefinitions(scope ? { scope } : {});
     const views = await Promise.all(
@@ -161,9 +166,7 @@ export class SequenceService {
       throw new Error("La secuencia asignada a la caja no es válida para facturación");
     }
 
-    const scopeType: SequenceCounterScope = "CASH_REGISTER";
-    const scopeKey = String(register.id);
-
+    const { scopeType, scopeKey } = this.getGlobalCounterScope();
     const nextValue = await this.repository.incrementCounter(definition, scopeType, scopeKey);
     const display = formatSequence(definition, nextValue);
 
@@ -180,7 +183,8 @@ export class SequenceService {
     if (!definition) {
       return null;
     }
-    const currentValue = await this.repository.getCounterValue(definition.id, "CASH_REGISTER", String(register.id));
+    const { scopeType, scopeKey } = this.getGlobalCounterScope();
+    const currentValue = await this.repository.getCounterValue(definition.id, scopeType, scopeKey);
     return formatSequence(definition, nextCandidate(definition, currentValue));
   }
 
@@ -198,7 +202,8 @@ export class SequenceService {
       if (assignment?.sequenceDefinitionId) {
         const definition = await this.repository.getDefinitionById(assignment.sequenceDefinitionId);
         if (definition) {
-          const currentValue = await this.repository.getCounterValue(definition.id, "INVENTORY_TYPE", descriptor.code);
+          const { scopeType, scopeKey } = this.getGlobalCounterScope();
+          const currentValue = await this.repository.getCounterValue(definition.id, scopeType, scopeKey);
           preview = formatSequence(definition, nextCandidate(definition, currentValue));
         }
       }
@@ -246,7 +251,8 @@ export class SequenceService {
     if (!definition || definition.scope !== "INVENTORY") {
       throw new Error("La secuencia asignada no es válida para inventario");
     }
-    const nextValue = await this.repository.incrementCounter(definition, "INVENTORY_TYPE", descriptor.code);
+    const { scopeType, scopeKey } = this.getGlobalCounterScope();
+    const nextValue = await this.repository.incrementCounter(definition, scopeType, scopeKey);
     return formatSequence(definition, nextValue);
   }
 }
