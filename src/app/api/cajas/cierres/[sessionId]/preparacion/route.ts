@@ -53,6 +53,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ses
           reportedTotalAmount: report.reportedTotalAmount,
           differenceTotalAmount: report.differenceTotalAmount,
           totalInvoices: report.totalInvoices,
+          creditTotals: report.creditTotals ?? null,
           payments: report.payments.map((p) => ({
             method: p.method,
             expectedAmount: p.expectedAmount,

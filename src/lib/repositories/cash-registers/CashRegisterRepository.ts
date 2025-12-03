@@ -1,4 +1,5 @@
 import { PrismaClient, prisma } from "@/lib/db/prisma";
+import { env } from "@/lib/env";
 import { Prisma } from "@prisma/client"; // Prisma namespace for runtime error detection
 import type { Decimal, InputJsonValue } from "@prisma/client/runtime/library";
 import { buildClosureSummary } from "@/lib/services/cash-registers/summary";
@@ -6,6 +7,7 @@ import {
   CashRegisterAssignment,
   CashRegisterAssignmentGroup,
   CashRegisterClosureSummary,
+  CashRegisterCreditTotals,
   CashRegisterRecord,
   CashRegisterSessionRecord,
   CreateCashRegisterInput,
@@ -266,6 +268,10 @@ function normalizeCode(value: string): string {
   return value.trim().toUpperCase();
 }
 
+function roundCurrency(value: number): number {
+  return Number(value.toFixed(2));
+}
+
 function normalizeSessionId(value: number | string): bigint {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -296,6 +302,48 @@ async function findCustomerIdByCode(tx: Prisma.TransactionClient, code: string):
   }
 
   return BigInt(customer.id);
+}
+
+async function resolveCreditTotals(
+  client: PrismaClientOrTransaction,
+  sessionId: bigint
+): Promise<CashRegisterCreditTotals | null> {
+  if (!env.features.retailModeEnabled) {
+    return null;
+  }
+  const documents = await client.customer_documents.findMany({
+    where: {
+      document_type: "INVOICE",
+      balance_amount: { gt: 0 },
+      related_invoice_id: { not: null },
+      invoices: {
+        cash_register_session_id: sessionId,
+      },
+    },
+    select: {
+      original_amount: true,
+      balance_amount: true,
+      currency_code: true,
+    },
+  });
+
+  if (documents.length === 0) {
+    return null;
+  }
+
+  const originalAmount = documents.reduce((acc, doc) => acc + Number(doc.original_amount ?? 0), 0);
+  const pendingAmount = documents.reduce((acc, doc) => acc + Number(doc.balance_amount ?? 0), 0);
+  const currencyCodes = new Set(
+    documents.map((doc) => doc.currency_code?.trim().toUpperCase() || env.currency.local.code)
+  );
+  const [resolvedCurrency] = Array.from(currencyCodes);
+
+  return {
+    invoiceCount: documents.length,
+    originalAmount: roundCurrency(originalAmount),
+    pendingAmount: roundCurrency(pendingAmount),
+    currencyCode: resolvedCurrency || env.currency.local.code,
+  } satisfies CashRegisterCreditTotals;
 }
 
 function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterRecord {
@@ -1543,6 +1591,10 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           where: { cash_register_session_id: sessionToClose.id },
         });
 
+        const sessionPrimaryId =
+          typeof sessionToClose.id === "bigint" ? sessionToClose.id : BigInt(sessionToClose.id);
+        const creditTotals = await resolveCreditTotals(tx, sessionPrimaryId);
+
         const summary = buildClosureSummary({
           session: mappedSession,
           closingUserId: adminUserId,
@@ -1552,6 +1604,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           expectedPayments,
           reportedPayments: payments,
           totalInvoices,
+          creditTotals,
         });
 
         await tx.cash_register_sessions.update({
@@ -1641,7 +1694,9 @@ export class CashRegisterRepository implements ICashRegisterRepository {
       where: { cash_register_session_id: normalizedId },
     });
 
-    return { session, payments, totalInvoices };
+    const creditTotals = await resolveCreditTotals(this.prisma, normalizedId);
+
+    return { session, payments, totalInvoices, creditTotals };
   }
 
   async updateSessionInvoiceSequenceRange(sessionId: number | string, invoiceLabel: string): Promise<void> {

@@ -6,6 +6,13 @@ import { cashRegisterService } from "@/lib/services/CashRegisterService";
 import { adminUserService } from "@/lib/services/AdminUserService";
 import type { CashRegisterClosureSummary } from "@/lib/services/cash-registers/types";
 
+const creditTotalsSchema = z.object({
+  invoiceCount: z.number(),
+  originalAmount: z.number(),
+  pendingAmount: z.number(),
+  currencyCode: z.string(),
+});
+
 const responseSchema = z.object({
   success: z.literal(true),
   activeSession: z
@@ -53,6 +60,7 @@ const responseSchema = z.object({
           expectedAmount: z.number().nullable(),
           reportedAmount: z.number().nullable(),
           differenceAmount: z.number().nullable(),
+          creditTotals: creditTotalsSchema.nullable().optional(),
         })
         .nullable()
         .optional(),
@@ -118,6 +126,7 @@ function extractSessionTotals(session: {
   expectedAmount: number | null;
   reportedAmount: number | null;
   differenceAmount: number | null;
+  creditTotals: z.infer<typeof creditTotalsSchema> | null;
 } | null {
   if (session.totalsSnapshot && typeof session.totalsSnapshot === "object") {
     const snapshot = session.totalsSnapshot as Partial<CashRegisterClosureSummary>;
@@ -143,6 +152,10 @@ function extractSessionTotals(session: {
       expectedAmount,
       reportedAmount,
       differenceAmount,
+      creditTotals:
+        snapshot.creditTotals && typeof snapshot.creditTotals === "object"
+          ? (snapshot.creditTotals as z.infer<typeof creditTotalsSchema>)
+          : null,
     };
   }
 
@@ -152,6 +165,7 @@ function extractSessionTotals(session: {
       expectedAmount: null,
       reportedAmount: session.closingAmount,
       differenceAmount: null,
+      creditTotals: null,
     };
   }
 

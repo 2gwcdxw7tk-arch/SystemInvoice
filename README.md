@@ -168,6 +168,7 @@ Si necesitas recrear estos objetos en un entorno limpio, basta con volver a ejec
 | `NEXT_APP_URL` | URL base usada en redirecciones, enlaces absolutos y correos | `http://localhost:3000` |
 > Importante: esta URL también se usa para generar los enlaces de reportes de caja (apertura/cierre). Configúrala con el dominio público para evitar respuestas `https://0.0.0.0`. 
 | `NEXT_PUBLIC_ES_RESTAURANTE` | Activa flujos exclusivos de restaurantes (mesas, meseros, facturación con pedido). Usa un valor falsy (`false`, `0`, `no`, `off`) para habilitar el modo retail con CxC; valores truthy (`true`, `1`, `yes`, `on`) mantienen el modo restaurante. | `true` |
+> Consulta `docs/next-public-es-restaurante.md` para ver la matriz completa de dependencias entre modos restaurante y retail.
 | `LICENSE_MAX_CASH_REGISTERS` | Número máximo de cajas activas/licenciadas. Usa `0` o deja vacío para operar sin límite. | `5` |
 | `NEXT_PUBLIC_LOCAL_CURRENCY_CODE` | Código ISO de la moneda principal | `MXN` |
 | `NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL` | Símbolo de moneda principal | `$` |
@@ -225,7 +226,7 @@ Respuesta exitosa:
 Validaciones clave:
 - `invoice_number` único.
 - El endpoint devuelve `409` si el administrador tiene rol `FACTURADOR` pero no existe una apertura de caja `OPEN` asociada a su usuario.
-- La suma de `payments.amount` debe ser mayor o igual que `total_amount`. Si queda saldo pendiente el endpoint devuelve `409`; se permite excedente para calcular el cambio en el cliente.
+- La suma de `payments.amount` debe ser mayor o igual que `total_amount`, salvo cuando `sale_type === "CREDITO"` (modo retail), caso en el cual se permite registrar la factura con saldo pendiente para que viaje a CxC. Se permite excedente para calcular el cambio en el cliente.
 - `vat_rate` acepta porcentaje decimal (ej. 0.15) generado desde `NEXT_PUBLIC_VAT_RATE` y puede ser 0 si el cliente es exento (checkbox UI).
 - Servicio se calcula en el cliente con `NEXT_PUBLIC_SERVICE_RATE` cuando se activa el toggle "Con cargo". Si el valor es `0` o no está definido, el toggle aparece apagado y el cargo no se considera en los cálculos.
 - `customer_name` y `customer_tax_id` permiten personalizar la identificación fiscal en la factura y ticket.
@@ -246,8 +247,11 @@ Los usuarios con rol `FACTURADOR` deben abrir una caja antes de emitir facturas.
 - `GET /api/cajas/aperturas/{sessionId}/reporte?format=html[&token=JWT]`: construye un reporte de apertura imprimible con los datos de la sesión, responsable y notas capturadas. Disponible para el titular de la caja, supervisores (`cash.report.view`) y administradores. El token opcional se envía al abrir la caja desde la UI para ver el HTML sin reenviar credenciales.
 - `POST /api/cajas/cierres`: cierra la sesión activa capturando conteo físico por método de pago. Calcula diferencias contra los montos de sistema, persiste el resumen en `app.cash_register_sessions` y normaliza el desglose en `app.cash_register_session_payments`.
 - `GET /api/cajas/cierres/{sessionId}/reporte?format=html[&token=JWT]`: genera un reporte imprimible con las ventas, formas de pago, diferencias y detalle de facturas asociadas a la jornada, incluyendo los nombres de apertura y cierre. Cuando se cierra la caja desde la UI se anexa un token temporal para abrir la pestaña de impresión sin depender de la cookie de sesión.
+- Cuando `NEXT_PUBLIC_ES_RESTAURANTE=false`, el reporte de cierre agrega la tarjeta **Crédito enviado a CxC** con el monto total facturado a crédito en la jornada. No se muestra el saldo pendiente, únicamente el acumulado remesado a cuentas por cobrar.
 
 Todos los endpoints respetan `MOCK_DATA`: en modo demo se utiliza almacenamiento en memoria y los cálculos se realizan en estructuras locales.
+
+> Nota: Las facturas retail marcadas como `sale_type = "CREDITO"` no generan registros en `app.invoice_payments` hasta que se reciba un abono real. Los cierres de caja sólo contabilizan efectivo y tarjetas efectivamente cobradas, así que este tipo de facturas aparecerán con saldo pendiente en CxC sin afectar el conteo físico.
 
 ### Endpoint de traspasos (`/api/inventario/traspasos`)
 

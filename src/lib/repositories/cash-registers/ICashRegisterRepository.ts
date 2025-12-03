@@ -2,6 +2,7 @@ import {
   CashRegisterAssignment,
   CashRegisterAssignmentGroup,
   CashRegisterClosureSummary,
+  CashRegisterCreditTotals,
   CashRegisterRecord,
   CashRegisterSessionRecord,
   CreateCashRegisterInput,
@@ -53,6 +54,7 @@ export interface ICashRegisterRepository {
     session: CashRegisterSessionRecord;
     payments: ExpectedPayment[];
     totalInvoices: number;
+    creditTotals?: CashRegisterCreditTotals | null;
   } | null>;
   updateSessionInvoiceSequenceRange(sessionId: number | string, invoiceLabel: string): Promise<void>;
 }

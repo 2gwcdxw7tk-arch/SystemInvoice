@@ -28,6 +28,7 @@ import { Modal } from "@/components/ui/modal";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { formatCurrency } from "@/config/currency";
 import { hasSessionPermission, isSessionAdministrator } from "@/lib/auth/session-roles";
+import { publicFeatures } from "@/lib/features/public";
 import { cn } from "@/lib/utils";
 
 interface CashRegisterAssignmentOption {
@@ -62,6 +63,14 @@ interface CashRegisterSessionTotals {
   expectedAmount: number | null;
   reportedAmount: number | null;
   differenceAmount: number | null;
+  creditTotals?: CashRegisterCreditTotals | null;
+}
+
+interface CashRegisterCreditTotals {
+  invoiceCount: number;
+  originalAmount: number;
+  pendingAmount: number;
+  currencyCode: string;
 }
 
 interface CashRegisterSessionSnapshot {
@@ -136,6 +145,8 @@ const paymentMethodOptions: ComboboxOption<PaymentMethod>[] = [
 ];
 
 const HISTORY_FILTER_ALL = "__ALL__";
+
+const retailModeEnabled = publicFeatures.retailModeEnabled;
 
 type LoadCashSessionResult = {
   activeSession: CashRegisterActiveSession | null;
@@ -225,6 +236,7 @@ export default function CashManagementPage() {
   const [closureExpectedTotal, setClosureExpectedTotal] = useState<number | null>(null);
   const [closureLoading, setClosureLoading] = useState(false);
   const [closureError, setClosureError] = useState<string | null>(null);
+  const [closureCreditTotals, setClosureCreditTotals] = useState<CashRegisterCreditTotals | null>(null);
   // Impresión en modal (apertura/cierre)
   const [printModalOpen, setPrintModalOpen] = useState(false);
   const [printUrl, setPrintUrl] = useState<string | null>(null);
@@ -891,6 +903,7 @@ export default function CashManagementPage() {
       setClosureExpectedTotal(null);
       setClosureError(null);
       setClosureLoading(false);
+      setClosureCreditTotals(null);
       return;
     }
     const sessionId = closingForm.targetSessionId ?? cashState.activeSession?.id ?? null;
@@ -909,12 +922,14 @@ export default function CashManagementPage() {
         if (!aborted) {
           setClosureExpectedTotal(Number(total.toFixed(2)));
           setClosureError(null);
+          setClosureCreditTotals(data.preview?.creditTotals ?? null);
         }
       } catch (error) {
         if (!aborted) {
           const message = error instanceof Error ? error.message : "No se pudo calcular el total esperado del cierre";
           setClosureExpectedTotal(null);
           setClosureError(message);
+          setClosureCreditTotals(null);
         }
       } finally {
         if (!aborted) setClosureLoading(false);
@@ -1360,6 +1375,7 @@ export default function CashManagementPage() {
                 })();
                 const expectedAmount = snapshot.totals?.expectedAmount ?? null;
                 const reportedAmount = snapshot.totals?.reportedAmount ?? null;
+                const creditTotals = retailModeEnabled ? snapshot.totals?.creditTotals ?? null : null;
 
                 return (
                   <div key={snapshot.id} className="space-y-4 rounded-2xl border border-muted-foreground/20 bg-background/95 p-5">
@@ -1386,6 +1402,11 @@ export default function CashManagementPage() {
                         {differenceAbs != null && differenceAbs > 0 ? (
                           <p className={`text-xs ${differenceTone}`}>
                             Diferencia total: {formatCurrency(differenceAbs, { currency: defaultCurrency })}
+                          </p>
+                        ) : null}
+                        {creditTotals ? (
+                          <p className="text-xs text-sky-700">
+                            Crédito: {creditTotals.invoiceCount} {creditTotals.invoiceCount === 1 ? "documento" : "documentos"} • {formatCurrency(creditTotals.originalAmount, { currency: creditTotals.currencyCode })} • saldo {formatCurrency(creditTotals.pendingAmount, { currency: creditTotals.currencyCode })}
                           </p>
                         ) : null}
                       </div>
@@ -1425,6 +1446,22 @@ export default function CashManagementPage() {
                               ? formatCurrency(differenceAmountRaw, { currency: defaultCurrency })
                               : "Sin registro"}
                           </dd>
+                        </div>
+                      </dl>
+                    ) : null}
+                    {retailModeEnabled && creditTotals ? (
+                      <dl className="grid gap-3 rounded-2xl border border-sky-500/30 bg-sky-500/10 p-3 text-sm text-sky-900 sm:grid-cols-3">
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide text-sky-900/70">Documentos crédito</dt>
+                          <dd className="font-semibold text-foreground">{creditTotals.invoiceCount}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide text-sky-900/70">Monto registrado</dt>
+                          <dd className="font-semibold text-foreground">{formatCurrency(creditTotals.originalAmount, { currency: creditTotals.currencyCode })}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide text-sky-900/70">Saldo pendiente</dt>
+                          <dd className="font-semibold text-foreground">{formatCurrency(creditTotals.pendingAmount, { currency: creditTotals.currencyCode })}</dd>
                         </div>
                       </dl>
                     ) : null}
@@ -1820,6 +1857,20 @@ export default function CashManagementPage() {
                     <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Total esperado</span><span className="font-semibold">{formatCurrency(closureExpectedTotal ?? 0, { currency: "local" })}</span></div>
                     <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Total reportado</span><span className="font-semibold">{formatCurrency((() => { const s = closingForm.payments.reduce((acc, p) => acc + (Number((p.amount||"").replace(/,/g, ".")) || 0), 0); return Number(s.toFixed(2)); })(), { currency: "local" })}</span></div>
                     <div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">Diferencia</span><span className={cn("font-semibold", (() => { const expected = closureExpectedTotal ?? 0; const reported = closingForm.payments.reduce((acc, p) => acc + (Number((p.amount||"").replace(/,/g, ".")) || 0), 0); const diff = Number((reported - expected).toFixed(2)); return diff === 0 ? "text-muted-foreground" : diff > 0 ? "text-emerald-600" : "text-destructive"; })())}>{formatCurrency((() => { const expected = closureExpectedTotal ?? 0; const reported = closingForm.payments.reduce((acc, p) => acc + (Number((p.amount||"").replace(/,/g, ".")) || 0), 0); return Number((reported - expected).toFixed(2)); })(), { currency: "local" })}</span></div>
+                    {retailModeEnabled && closureCreditTotals ? (
+                      <div className="rounded-2xl border border-sky-500/30 bg-sky-500/10 p-3 text-xs text-sky-800">
+                        <p className="text-[11px] uppercase tracking-wide text-sky-800/80">Facturación a crédito</p>
+                        <p className="text-sm font-semibold text-foreground">
+                          {closureCreditTotals.invoiceCount} {closureCreditTotals.invoiceCount === 1 ? "documento" : "documentos"}
+                        </p>
+                        <p className="text-xs text-sky-800/80">
+                          Registrado: <span className="font-semibold text-foreground">{formatCurrency(closureCreditTotals.originalAmount, { currency: closureCreditTotals.currencyCode })}</span>
+                        </p>
+                        <p className="text-xs text-sky-800/80">
+                          Saldo pendiente: <span className="font-semibold text-foreground">{formatCurrency(closureCreditTotals.pendingAmount, { currency: closureCreditTotals.currencyCode })}</span>
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </div>

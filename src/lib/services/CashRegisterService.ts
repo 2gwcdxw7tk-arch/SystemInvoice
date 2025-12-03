@@ -934,6 +934,7 @@ export class CashRegisterService {
         expectedPayments,
         reportedPayments: normalizedPayments,
         totalInvoices: invoices.length,
+        creditTotals: null,
       });
 
       const updatedSession: CashRegisterSessionRecord = {
@@ -971,6 +972,7 @@ export class CashRegisterService {
     if (session.totalsSnapshot && typeof session.totalsSnapshot === "object") {
       const snapshot = session.totalsSnapshot as Partial<CashRegisterClosureSummary>;
       if (snapshot.payments && snapshot.payments.length > 0) {
+        const creditTotals = env.features.retailModeEnabled ? snapshot.creditTotals ?? null : null;
         const base: CashRegisterReport = {
           sessionId: snapshot.sessionId ?? session.id,
           cashRegister: snapshot.cashRegister ?? session.cashRegister,
@@ -986,6 +988,7 @@ export class CashRegisterService {
           differenceTotalAmount: snapshot.differenceTotalAmount ?? 0,
           totalInvoices: snapshot.totalInvoices ?? 0,
           payments: snapshot.payments,
+          creditTotals,
           openingDenominations: session.openingDenominations ?? null,
           closingDenominations: session.closingDenominations ?? null,
         } satisfies CashRegisterReport;
@@ -1027,6 +1030,7 @@ export class CashRegisterService {
           txCount: item.txCount,
         })),
         totalInvoices: invoices.length,
+        creditTotals: null,
       });
       return this.sanitizeReport({
         ...built,
@@ -1044,6 +1048,7 @@ export class CashRegisterService {
       return null;
     }
 
+    const creditTotals = env.features.retailModeEnabled ? result.creditTotals ?? null : null;
     const summary = buildClosureSummary({
       session: result.session,
       closingUserId: result.session.closingUserId ?? result.session.adminUserId,
@@ -1057,6 +1062,7 @@ export class CashRegisterService {
         txCount: payment.txCount,
       })),
       totalInvoices: result.totalInvoices,
+      creditTotals,
     });
     return this.sanitizeReport({
       ...summary,

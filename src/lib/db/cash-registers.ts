@@ -80,6 +80,13 @@ export type CashRegisterPaymentBreakdown = {
   transactionCount: number;
 };
 
+export type CashRegisterCreditTotals = {
+  invoiceCount: number;
+  originalAmount: number;
+  pendingAmount: number;
+  currencyCode: string;
+};
+
 export type CashRegisterClosureSummary = {
   sessionId: number;
   cashRegister: CashRegisterAssignment;
@@ -95,6 +102,7 @@ export type CashRegisterClosureSummary = {
   differenceTotalAmount: number;
   totalInvoices: number;
   payments: CashRegisterPaymentBreakdown[];
+  creditTotals?: CashRegisterCreditTotals | null;
 };
 
 export type CashRegisterReport = CashRegisterClosureSummary & {

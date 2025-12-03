@@ -4,6 +4,7 @@ import { formatCurrency } from "@/config/currency";
 import { SESSION_COOKIE_NAME, parseSessionCookie, verifyReportAccessToken } from "@/lib/auth/session";
 import { adminUserService } from "@/lib/services/AdminUserService";
 import { cashRegisterService, type CashRegisterReport } from "@/lib/services/CashRegisterService";
+import { env } from "@/lib/env";
 
 const dateFormatter = new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" });
 
@@ -81,6 +82,9 @@ function buildHtml(params: {
   const sessionIdLabel = typeof report.sessionIdRaw === "string" && report.sessionIdRaw.trim().length > 0
     ? report.sessionIdRaw.trim()
     : String(report.sessionId);
+  const showCreditTotals = env.features.retailModeEnabled && !!report.creditTotals;
+  const creditTotals = showCreditTotals ? report.creditTotals : null;
+  const creditCurrency = creditTotals?.currencyCode || "local";
 
   const paymentsRows = report.payments.length > 0
     ? report.payments
@@ -148,6 +152,20 @@ function buildHtml(params: {
       </section>`;
     }).join("");
   }
+
+  const creditSection = showCreditTotals
+    ? `
+      <section>
+        <h2 style="font-size:18px; font-weight:600; margin:24px 0 12px; color:#0f172a;">Crédito enviado a CxC</h2>
+        <div class="summary-grid">
+          <div class="summary-card">
+            <p class="summary-label">Monto total</p>
+            <p class="summary-highlight">${escapeHtml(formatCurrency(creditTotals!.originalAmount, { currency: creditCurrency }))}</p>
+            <p class="summary-meta">Incluye todas las facturas con venta a crédito de la jornada.</p>
+          </div>
+        </div>
+      </section>`
+    : "";
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -248,6 +266,8 @@ function buildHtml(params: {
           </div>
         </div>
       </section>
+
+      ${creditSection}
 
       <section>
         <h2 style="font-size:18px; font-weight:600; margin:0 0 12px; color:#0f172a;">Responsables</h2>

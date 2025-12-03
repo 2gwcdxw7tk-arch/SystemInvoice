@@ -1,4 +1,11 @@
-import { CashRegisterClosureSummary, CashRegisterPaymentBreakdown, CashRegisterSessionRecord, ExpectedPayment, ReportedPayment } from "./types";
+import {
+  CashRegisterClosureSummary,
+  CashRegisterCreditTotals,
+  CashRegisterPaymentBreakdown,
+  CashRegisterSessionRecord,
+  ExpectedPayment,
+  ReportedPayment,
+} from "./types";
 
 function roundCurrency(value: number): number {
   return Number(value.toFixed(2));
@@ -13,6 +20,7 @@ export function buildClosureSummary(params: {
   expectedPayments: ExpectedPayment[];
   reportedPayments: ReportedPayment[];
   totalInvoices: number;
+  creditTotals?: CashRegisterCreditTotals | null;
 }): CashRegisterClosureSummary {
   const expectedMap = new Map<string, { amount: number; txCount: number }>();
   for (const payment of params.expectedPayments) {
@@ -69,5 +77,6 @@ export function buildClosureSummary(params: {
     differenceTotalAmount: roundCurrency(reportedTotal - expectedTotal),
     totalInvoices: params.totalInvoices,
     payments: breakdown,
+    creditTotals: params.creditTotals ?? null,
   };
 }

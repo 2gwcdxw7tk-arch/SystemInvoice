@@ -3508,6 +3508,7 @@ function FacturacionWorkspace({
   const changeDue = Math.max(amountReceivedNumber - totalDue, 0);
   const pendingBalance = Math.max(totalDue - amountReceivedNumber, 0);
   const hasPendingBalance = Number(pendingBalance.toFixed(2)) > 0;
+  const allowPendingCreditFlow = retailManualActive && paymentMode === "CREDITO";
 
   // (resaltado de disponibilidad removido)
 
@@ -3667,9 +3668,16 @@ function FacturacionWorkspace({
   const handlePrint = async () => {
     if (!summary) return;
     if (!isDraft && !selectedOrder) return;
-    if (hasPendingBalance) {
+    if (hasPendingBalance && !allowPendingCreditFlow) {
       toast({ variant: "warning", title: "Pago incompleto", description: "Registra el saldo pendiente antes de imprimir el ticket." });
       return;
+    }
+    if (hasPendingBalance && allowPendingCreditFlow) {
+      toast({
+        variant: "info",
+        title: "Factura a crédito",
+        description: "Se registrará con saldo pendiente en CxC; no olvides registrar los pagos cuando se reciban.",
+      });
     }
     const manualFlowActive = isDraft;
     const invoiceItems = itemsForSummary;
@@ -4581,7 +4589,7 @@ function FacturacionWorkspace({
                 type="button"
                 className="w-full gap-2 rounded-2xl sm:flex-1"
                 onClick={handlePrint}
-                disabled={!summary || itemsForSummary.length === 0 || hasPendingBalance || (mustHaveOpenCashSession && !cashSessionState.activeSession)}
+                disabled={!summary || itemsForSummary.length === 0 || (hasPendingBalance && !allowPendingCreditFlow) || (mustHaveOpenCashSession && !cashSessionState.activeSession)}
               >
                 <Printer className="h-4 w-4" /> Imprimir ticket
               </Button>
