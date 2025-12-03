@@ -99,6 +99,7 @@ Todas las rutas respetan la bandera `MOCK_DATA` y delegan en los servicios del d
 Antes de ejecutar cualquier handler se valida que la sesión posea los permisos CxC necesarios mediante `requireCxCPermissions` (`src/lib/auth/cxc-access.ts`), garantizando que solo roles autorizados puedan administrar cartera.
 
 - La vista **Cuentas por Cobrar → Documentos** permite registrar documentos manuales (facturas espejo, notas, recibos) desde la UI. El formulario calcula automáticamente el vencimiento con base en la condición de pago, valida importes y sincroniza el saldo restante.
+- El listado de documentos ahora incluye filtros estructurados por cliente, tipo de documento y rango de emisión que también se reflejan en la URL. Desde el catálogo de clientes se añadió un atajo “Ver documentos” que abre la vista con el cliente ya preseleccionado.
 
 #### Reportes CxC
 
@@ -166,7 +167,7 @@ Si necesitas recrear estos objetos en un entorno limpio, basta con volver a ejec
 | `NEXT_PUBLIC_CLIENT_LOGO_URL` | Ruta absoluta o relativa del logotipo mostrado en login y barra superior | `/logos/client.svg` |
 | `NEXT_APP_URL` | URL base usada en redirecciones, enlaces absolutos y correos | `http://localhost:3000` |
 > Importante: esta URL también se usa para generar los enlaces de reportes de caja (apertura/cierre). Configúrala con el dominio público para evitar respuestas `https://0.0.0.0`. 
-| `NEXT_PUBLIC_ES_RESTAURANTE` | Activa flujos exclusivos de restaurantes (mesas, meseros, facturación con pedido). Usa `false` para habilitar el modo retail con CxC. | `true` |
+| `NEXT_PUBLIC_ES_RESTAURANTE` | Activa flujos exclusivos de restaurantes (mesas, meseros, facturación con pedido). Usa un valor falsy (`false`, `0`, `no`, `off`) para habilitar el modo retail con CxC; valores truthy (`true`, `1`, `yes`, `on`) mantienen el modo restaurante. | `true` |
 | `LICENSE_MAX_CASH_REGISTERS` | Número máximo de cajas activas/licenciadas. Usa `0` o deja vacío para operar sin límite. | `5` |
 | `NEXT_PUBLIC_LOCAL_CURRENCY_CODE` | Código ISO de la moneda principal | `MXN` |
 | `NEXT_PUBLIC_LOCAL_CURRENCY_SYMBOL` | Símbolo de moneda principal | `$` |

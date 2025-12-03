@@ -43,13 +43,7 @@ type TransferLineForm = {
   article_code: string;
   quantity: string;
   unit: "STORAGE" | "RETAIL";
-  notes?: string;
 };
-
-const UNIT_OPTIONS: Array<{ value: "STORAGE" | "RETAIL"; label: string }> = [
-  { value: "STORAGE", label: "Unidad almacén" },
-  { value: "RETAIL", label: "Unidad detalle" },
-];
 
 function defaultLine(articleCode?: string): TransferLineForm {
   return {
@@ -297,7 +291,6 @@ export default function TraspasosPage() {
           article_code: line.article_code,
           quantity: Number(line.quantity.toString().replace(/,/g, ".")),
           unit: line.unit,
-          notes: line.notes?.trim() || undefined,
         })),
       };
       const response = await fetch("/api/inventario/traspasos", {
@@ -321,17 +314,6 @@ export default function TraspasosPage() {
       setSaving(false);
     }
   }
-
-  const totalsByUnit = useMemo(
-    () =>
-      form.lines.reduce<{ storage: number; retail: number }>((acc, line) => {
-        const numericQuantity = Number(line.quantity.toString().replace(/,/g, ".")) || 0;
-        if (line.unit === "STORAGE") acc.storage += numericQuantity;
-        else acc.retail += numericQuantity;
-        return acc;
-      }, { storage: 0, retail: 0 }),
-    [form.lines]
-  );
 
   return (
     <section className="space-y-10 pb-16">
@@ -579,23 +561,13 @@ export default function TraspasosPage() {
                 ))}
               </select>
             </div>
-            <div className="space-y-1 md:col-span-2">
-              <Label className="text-xs uppercase text-muted-foreground">Notas</Label>
-              <textarea
-                value={form.notes}
-                onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
-                rows={3}
-                className="w-full rounded-2xl border border-muted bg-background/90 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                placeholder="Comentarios adicionales"
-              />
-            </div>
           </div>
 
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-foreground">Detalle del traspaso</h3>
-                <p className="text-xs text-muted-foreground">Selecciona artículos, unidad y notas desde una misma grilla.</p>
+                <p className="text-xs text-muted-foreground">Captura artículos y cantidades desde una grilla similar a compras.</p>
               </div>
               <div className="ml-auto text-xs text-muted-foreground">{form.lines.length} líneas</div>
               <Button type="button" variant="outline" onClick={addLine} className="rounded-2xl px-4 text-xs">
@@ -604,15 +576,14 @@ export default function TraspasosPage() {
               </Button>
             </div>
             <div className="overflow-x-auto rounded-2xl border border-dashed border-muted">
-              <table className="min-w-[920px] w-full table-auto text-sm text-foreground">
+              <table className="w-full min-w-[960px] table-auto text-sm text-foreground">
                 <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-2 text-left">#</th>
-                    <th className="px-3 py-2 text-left">Artículo</th>
-                    <th className="px-3 py-2 text-left">Unidad</th>
-                    <th className="px-3 py-2 text-right">Cantidad</th>
-                    <th className="px-3 py-2 text-left">Notas</th>
-                    <th className="px-3 py-2 text-right" aria-label="Acciones" />
+                    <th className="w-10 px-3 py-2 text-left">#</th>
+                    <th className="w-[45%] px-3 py-2 text-left">Artículo</th>
+                    <th className="w-[30%] px-3 py-2 text-left">Unidad</th>
+                    <th className="w-[15%] px-3 py-2 text-right">Cantidad</th>
+                    <th className="w-14 px-3 py-2 text-right" aria-label="Acciones" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-muted/70">
@@ -620,6 +591,10 @@ export default function TraspasosPage() {
                     const currentArticle = articles.find((article) => article.article_code === line.article_code);
                     const storageUnit = currentArticle?.storage_unit || "Unidad almacén";
                     const retailUnit = currentArticle?.retail_unit || "Unidad detalle";
+                    const unitOptions = [
+                      { value: "STORAGE" as const, label: `${storageUnit} — Unidad almacén` },
+                      { value: "RETAIL" as const, label: `${retailUnit} — Unidad detalle` },
+                    ];
                     return (
                       <tr key={`transfer-${index}`} className="align-top">
                         <td className="px-3 py-3 text-xs text-muted-foreground">{index + 1}</td>
@@ -635,9 +610,6 @@ export default function TraspasosPage() {
                             </span>
                             <Search className="ml-2 h-4 w-4 text-muted-foreground" />
                           </Button>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {currentArticle ? `${currentArticle.storage_unit || "N/D"} · ${currentArticle.retail_unit || "N/D"}` : "Filtra por código o nombre"}
-                          </p>
                         </td>
                         <td className="px-3 py-3">
                           <select
@@ -645,13 +617,12 @@ export default function TraspasosPage() {
                             onChange={(event) => updateLine(index, { unit: event.target.value as "STORAGE" | "RETAIL" })}
                             className="h-10 w-full rounded-2xl border border-muted bg-background/95 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                           >
-                            {UNIT_OPTIONS.map((option) => (
+                            {unitOptions.map((option) => (
                               <option key={option.value} value={option.value}>
                                 {option.label}
                               </option>
                             ))}
                           </select>
-                          <p className="mt-1 text-xs text-muted-foreground">{line.unit === "STORAGE" ? storageUnit : retailUnit}</p>
                         </td>
                         <td className="px-3 py-3">
                           <Input
@@ -660,15 +631,7 @@ export default function TraspasosPage() {
                             type="number"
                             min="0"
                             step="0.01"
-                            className="rounded-2xl text-right"
-                          />
-                        </td>
-                        <td className="px-3 py-3">
-                          <Input
-                            value={line.notes ?? ""}
-                            onChange={(event) => updateLine(index, { notes: event.target.value })}
-                            placeholder="Detalle adicional"
-                            className="rounded-2xl"
+                            className="w-28 rounded-2xl text-right"
                           />
                         </td>
                         <td className="px-3 py-3 text-right">
@@ -688,13 +651,16 @@ export default function TraspasosPage() {
                 </tbody>
               </table>
             </div>
-            <div className="rounded-2xl bg-muted/30 p-4 text-xs text-muted-foreground">
-              <p className="font-semibold text-foreground">Totales en vivo</p>
-              <p>Líneas: {form.lines.length}</p>
-              <p>
-                Suma unidades almacén: {totalsByUnit.storage.toLocaleString("es-MX", { maximumFractionDigits: 3 })} | Detalle: {totalsByUnit.retail.toLocaleString("es-MX", { maximumFractionDigits: 3 })}
-              </p>
-            </div>
+          </div>
+
+          <div className="space-y-2 border-t pt-4">
+            <Label className="text-xs uppercase text-muted-foreground">Notas del movimiento</Label>
+            <textarea
+              value={form.notes}
+              onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
+              placeholder="Comentarios adicionales"
+              className="min-h-[80px] w-full rounded-2xl border border-muted bg-background/95 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            />
           </div>
 
           <div className="flex items-center justify-end gap-3">

@@ -69,6 +69,15 @@ const parseBoolean = (value: string | null): boolean => {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 };
 
+const parseDateParam = (value: string | null): string | undefined => {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+};
+
 export async function GET(request: NextRequest) {
   const access = await requireCxCPermissions(request, {
     anyOf: viewPermissions,
@@ -87,6 +96,8 @@ export async function GET(request: NextRequest) {
   const orderBy = params.get("orderBy");
   const orderDirection = params.get("orderDirection")?.toLowerCase() === "asc" ? "asc" : "desc";
   const limit = params.get("limit") ? Number(params.get("limit")) : undefined;
+  const documentDateFrom = parseDateParam(params.get("dateFrom"));
+  const documentDateTo = parseDateParam(params.get("dateTo"));
 
   const types = typesParam
     ? typesParam
@@ -111,6 +122,8 @@ export async function GET(request: NextRequest) {
       search,
       types,
       status,
+      documentDateFrom,
+      documentDateTo,
       orderBy: orderByField,
       orderDirection,
       limit,

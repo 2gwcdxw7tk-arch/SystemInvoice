@@ -75,6 +75,16 @@ export class CustomerDocumentService {
     if (env.useMockData) {
       const includeSettled = Boolean(options.includeSettled);
       const search = options.search?.trim().toLowerCase();
+      const normalizeFilterDate = (value?: string | Date): string | null => {
+        if (!value) return null;
+        try {
+          return toCentralClosedDate(value).toISOString().slice(0, 10);
+        } catch {
+          return null;
+        }
+      };
+      const documentDateFrom = normalizeFilterDate(options.documentDateFrom);
+      const documentDateTo = normalizeFilterDate(options.documentDateTo);
       const filtered = mockCxcStore.documents.filter((doc) => {
         if (typeof options.customerId === "number" && doc.customerId !== options.customerId) {
             return false;
@@ -87,6 +97,12 @@ export class CustomerDocumentService {
         }
         if (options.status && options.status.length > 0 && !options.status.includes(doc.status)) {
             return false;
+        }
+        if (documentDateFrom && doc.documentDate < documentDateFrom) {
+          return false;
+        }
+        if (documentDateTo && doc.documentDate > documentDateTo) {
+          return false;
         }
         if (search) {
           const haystack = `${doc.documentNumber} ${doc.reference ?? ""} ${doc.notes ?? ""}`.toLowerCase();

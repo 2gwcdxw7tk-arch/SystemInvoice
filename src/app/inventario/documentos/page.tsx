@@ -222,37 +222,29 @@ export default function DocumentosInventarioPage() {
     <>
       <section className="space-y-8 pb-16">
         <header className="space-y-4">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="space-y-3">
-              <Button type="button" variant="outline" size="sm" className="w-fit rounded-2xl px-3" asChild>
-                <Link href="/inventario" aria-label="Volver al menú de inventario" className="flex items-center gap-2 text-sm font-semibold">
-                  <ArrowLeft className="h-4 w-4" />
-                  Volver
-                </Link>
-              </Button>
-              <div className="space-y-2">
-                <h1 className="text-3xl font-semibold tracking-tight text-foreground">Documentos de inventario</h1>
-                <p className="text-sm text-muted-foreground">Aplica filtros (por fecha, tipo o almacén) y abre el detalle con doble clic en cualquier folio.</p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-start gap-2">
-              <Button type="button" onClick={() => handlePrint(activeFolio)} disabled={!activeFolio} className="h-11 rounded-2xl px-4">
-                <Printer className="mr-2 h-4 w-4" />
-                Imprimir folio
-              </Button>
+          <div className="space-y-3">
+            <Button type="button" variant="outline" size="sm" className="w-fit rounded-2xl px-3" asChild>
+              <Link href="/inventario" aria-label="Volver al menú de inventario" className="flex items-center gap-2 text-sm font-semibold">
+                <ArrowLeft className="h-4 w-4" />
+                Volver
+              </Link>
+            </Button>
+            <div className="space-y-2">
+              <h1 className="text-3xl font-semibold tracking-tight text-foreground">Documentos de inventario</h1>
+              <p className="text-sm text-muted-foreground">Aplica filtros (por fecha, tipo o almacén) y abre el detalle con doble clic en cualquier folio.</p>
             </div>
           </div>
-          <div className="grid gap-3 md:grid-cols-6">
-            <div className="md:col-span-2 space-y-1">
+          <div className="flex flex-wrap gap-3 md:flex-nowrap md:items-end">
+            <div className="flex min-w-[240px] flex-1 flex-col gap-1">
               <Label className="text-xs uppercase text-muted-foreground">Buscar</Label>
               <Input value={filters.search} onChange={(event) => setFilters((prev) => ({ ...prev, search: event.target.value }))} placeholder="Folio, referencia o proveedor" className="rounded-2xl" />
             </div>
-            <div className="space-y-1">
+            <div className="flex min-w-[180px] flex-col gap-1">
               <Label className="text-xs uppercase text-muted-foreground">Tipo</Label>
               <select
                 value={filters.type}
                 onChange={(event) => setFilters((prev) => ({ ...prev, type: event.target.value }))}
-                className="h-10 w-full rounded-2xl border border-muted bg-background/90 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                className="h-10 rounded-2xl border border-muted bg-background/90 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
                 {TRANSACTION_TYPE_OPTIONS.map((option) => (
                   <option key={option.value || "all"} value={option.value}>
@@ -261,12 +253,12 @@ export default function DocumentosInventarioPage() {
                 ))}
               </select>
             </div>
-            <div className="space-y-1">
+            <div className="flex min-w-[200px] flex-col gap-1">
               <Label className="text-xs uppercase text-muted-foreground">Almacén</Label>
               <select
                 value={filters.warehouse}
                 onChange={(event) => setFilters((prev) => ({ ...prev, warehouse: event.target.value }))}
-                className="h-10 w-full rounded-2xl border border-muted bg-background/90 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                className="h-10 rounded-2xl border border-muted bg-background/90 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
                 <option value="">Todos</option>
                 {warehouses.map((warehouse) => (
@@ -276,25 +268,20 @@ export default function DocumentosInventarioPage() {
                 ))}
               </select>
             </div>
-            <div className="space-y-1">
+            <div className="flex min-w-[160px] flex-col gap-1">
               <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
               <DatePicker value={filters.from} onChange={(value) => setFilters((prev) => ({ ...prev, from: value }))} className="rounded-2xl" />
             </div>
-            <div className="space-y-1">
+            <div className="flex min-w-[160px] flex-col gap-1">
               <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
               <DatePicker value={filters.to} onChange={(value) => setFilters((prev) => ({ ...prev, to: value }))} className="rounded-2xl" />
             </div>
-            <div className="flex items-end justify-end gap-2">
+            <div className="ml-auto flex items-end gap-2">
               <Button type="button" onClick={handleSearch} disabled={listLoading} className="h-10 rounded-2xl px-4">
                 {listLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                 Buscar
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleClearFilters}
-                className="h-10 rounded-2xl px-4"
-              >
+              <Button type="button" variant="outline" onClick={handleClearFilters} className="h-10 rounded-2xl px-4">
                 Limpiar
               </Button>
             </div>
@@ -393,14 +380,6 @@ export default function DocumentosInventarioPage() {
               <Printer className="mr-2 h-4 w-4" />
               Imprimir
             </Button>
-            {activeFolio ? (
-              <Button type="button" variant="ghost" size="sm" className="rounded-2xl" asChild>
-                <a href={`/api/inventario/documentos/${encodeURIComponent(activeFolio)}`} target="_blank" rel="noreferrer" className="flex items-center gap-2">
-                  <ExternalLink className="h-4 w-4" />
-                  Abrir JSON
-                </a>
-              </Button>
-            ) : null}
           </div>
           {detailLoading ? (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">

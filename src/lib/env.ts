@@ -3,12 +3,20 @@ import "server-only";
 import { z } from "zod";
 
 const truthy = new Set(["1", "true", "yes", "on"]);
+const falsy = new Set(["0", "false", "no", "off"]);
 
 const parseBooleanFlag = (input: string | undefined, defaultValue: boolean) => {
   if (typeof input !== "string" || input.trim().length === 0) {
     return defaultValue;
   }
-  return truthy.has(input.trim().toLowerCase());
+  const normalized = input.trim().toLowerCase();
+  if (truthy.has(normalized)) {
+    return true;
+  }
+  if (falsy.has(normalized)) {
+    return false;
+  }
+  return defaultValue;
 };
 
 const parsePositiveInteger = (input: string | undefined) => {

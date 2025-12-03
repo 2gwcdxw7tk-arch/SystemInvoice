@@ -77,6 +77,27 @@ describe('API CxC – Documentos (mock mode)', () => {
     expect(body.items.every((doc: any) => doc.customerId === 2 && doc.documentType === 'INVOICE')).toBe(true);
   });
 
+  it('filtra documentos por rango de fechas', async () => {
+    const legacyId = mockCxcStore.sequences.document++;
+    mockCxcStore.documents.push({
+      ...mockCxcStore.documents[0],
+      id: legacyId,
+      documentNumber: `INV-OLD-${legacyId}`,
+      documentDate: '2024-01-05',
+      dueDate: '2024-01-20',
+      createdAt: '2024-01-05T00:00:00.000Z',
+      updatedAt: '2024-01-05T00:00:00.000Z',
+    });
+
+    const response = await DocumentsGET(
+      buildRequest('http://localhost/api/cxc/documentos?dateFrom=2024-01-01&dateTo=2024-01-10'),
+    );
+    expect(response.status).toBe(200);
+    const body: any = await response.json();
+    expect(body.items.length).toBeGreaterThan(0);
+    expect(body.items.every((doc: any) => doc.documentDate >= '2024-01-01' && doc.documentDate <= '2024-01-10')).toBe(true);
+  });
+
   it('crea un documento y calcula la fecha de vencimiento según la condición de pago', async () => {
     const response = await DocumentsPOST(
       buildRequest('http://localhost/api/cxc/documentos', {

@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { prisma } from "@/lib/db/prisma";
 import type { CustomerDocumentDTO, CustomerDocumentStatus, CustomerDocumentType } from "@/lib/types/cxc";
+import { toCentralClosedDate, toCentralEndOfDay } from "@/lib/utils/date";
 import { bigIntToNumber, dateOnlyToIso, dateTimeToIso, decimalToNumber, jsonToRecord } from "./mappers";
 
 type DocumentRow = Prisma.customer_documentsGetPayload<{
@@ -17,6 +18,8 @@ export type ListCustomerDocumentOptions = {
   types?: CustomerDocumentType[];
   includeSettled?: boolean;
   search?: string;
+  documentDateFrom?: string | Date;
+  documentDateTo?: string | Date;
   limit?: number;
   offset?: number;
   orderBy?: "documentDate" | "dueDate" | "createdAt";
@@ -136,6 +139,17 @@ export class CustomerDocumentRepository {
         { reference: { contains: query, mode: "insensitive" } },
         { notes: { contains: query, mode: "insensitive" } },
       ];
+    }
+
+    if (options.documentDateFrom || options.documentDateTo) {
+      const dateFilter: Prisma.DateTimeFilter = {};
+      if (options.documentDateFrom) {
+        dateFilter.gte = toCentralClosedDate(options.documentDateFrom);
+      }
+      if (options.documentDateTo) {
+        dateFilter.lte = toCentralEndOfDay(options.documentDateTo);
+      }
+      where.document_date = dateFilter;
     }
 
     const limit = options.limit && options.limit > 0 ? options.limit : undefined;

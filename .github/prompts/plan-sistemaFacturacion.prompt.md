@@ -12,7 +12,7 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
  - Reportes con salida HTML (`format=html`) y UI de impresión en modal (iframe) para `/reportes` y `/caja` (aperturas/cierres).
 
 ## Variables de entorno clave
-- `NEXT_PUBLIC_ES_RESTAURANTE`: bandera maestra para habilitar/ocultar Mesas, Meseros y facturación con pedido. Expone `env.features.isRestaurant` (true = restaurante, false = modo retail con CxC).
+- `NEXT_PUBLIC_ES_RESTAURANTE`: bandera maestra para habilitar/ocultar Mesas, Meseros y facturación con pedido. Expone `env.features.isRestaurant` (true = restaurante, false = modo retail con CxC) y acepta equivalentes truthy (`true|1|yes|on`) o falsy (`false|0|no|off`) para sincronizar servidor y cliente.
 - `LICENSE_MAX_CASH_REGISTERS`: límite licenciado de cajas activas y sesiones simultáneas (`0` o vacío = ilimitado). Disponible vía `env.licenses.maxCashRegisters`.
 - Permisos base de CxC (solo visibles cuando `NEXT_PUBLIC_ES_RESTAURANTE=false`): `menu.cxc.view`, `customers.manage`, `payment-terms.manage`, `customer.documents.manage`, `customer.documents.apply`, `customer.credit.manage`, `customer.collections.manage`, `customer.disputes.manage`. Los seeds asignan este paquete al rol `ADMINISTRADOR` y el middleware exige `menu.cxc.view` para `/cuentas-por-cobrar`.
 
@@ -29,7 +29,7 @@ Migrar y operar todos los módulos sobre Prisma con patrón Repositorio + Servic
 - Consecutivos: `SequenceService` con repositorio Prisma, UI en `/preferencias` (tab **Consecutivos**), endpoints `/api/preferencias/consecutivos`, `/api/preferencias/consecutivos/cajas` e `/api/preferencias/consecutivos/inventario`, y pruebas en `tests/api/preferencias.consecutivos.test.ts`. Los folios `INVOICE` compartidos por varias cajas y los folios `INVENTORY` asignados a varios tipos comparten un contador global para evitar reinicios por flujo.
 - Fundamentos CxC: migración `20251128101500_cxc_core_tables` agrega tablas `payment_terms`, `customers`, `customer_documents`, `customer_document_applications`, `customer_credit_lines`, `collection_logs`, `customer_disputes` y enlaza `invoices` con `customer_id/payment_term_id/due_date`.
 - API CxC inicial: `/api/preferencias/terminos-pago`, `/api/cxc/clientes`, `/api/cxc/documentos` y `/api/cxc/documentos/aplicaciones` reutilizan `PaymentTermService`, `CustomerService`, `CustomerDocumentService` y `CustomerDocumentApplicationService`, más `requireCxCPermissions` para permisos; soportan `MOCK_DATA`.
-- UI CxC Documentos: modal controlado para altas manuales (facturas, recibos, notas) en `/cuentas-por-cobrar` que carga catálogos bajo demanda, calcula vencimiento con la condición de pago y sincroniza saldo ↔ monto original.
+- UI CxC Documentos: modal controlado para altas manuales (facturas, recibos, notas) en `/cuentas-por-cobrar` que carga catálogos bajo demanda, calcula vencimiento con la condición de pago y sincroniza saldo ↔ monto original. El listado debe exponer filtros de cliente/tipo/rango de emisión alineados con los parámetros `customerId`, `documentType`, `dateFrom` y `dateTo` para soportar accesos directos desde el catálogo de clientes.
 - Documentación actualizada (`README.md`, `.github/copilot-instructions.md`, `docs/propuesta-arquitectura-mejoras.md`).
 - Los nuevos handlers CxC deben importar `requireCxCPermissions` y sólo invocar métodos de servicio (nunca repositorios) para mantener paridad entre DB y modo mock.
 

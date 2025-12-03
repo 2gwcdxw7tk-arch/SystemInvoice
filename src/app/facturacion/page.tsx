@@ -2080,6 +2080,7 @@ function FacturacionWorkspace({
   const paymentTermsRequestedRef = useRef(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [paymentMode, setPaymentMode] = useState<"CONTADO" | "CREDITO">("CONTADO");
+  const [paymentModeEdited, setPaymentModeEdited] = useState(false);
   const [selectedPaymentTermCode, setSelectedPaymentTermCode] = useState<string>("");
   const [customerCodeInput, setCustomerCodeInput] = useState("");
   const [customerNameInput, setCustomerNameInput] = useState("");
@@ -2208,6 +2209,7 @@ function FacturacionWorkspace({
       lastSelectedCustomerIdRef.current = currentId;
       setCustomerNameEdited(false);
       setCustomerTaxIdEdited(false);
+      setPaymentModeEdited(false);
     }
   }, [selectedCustomerId]);
 
@@ -2230,6 +2232,7 @@ function FacturacionWorkspace({
       }
       if (paymentMode !== "CONTADO") {
         setPaymentMode("CONTADO");
+        setPaymentModeEdited(false);
       }
       if (selectedPaymentTermCode !== defaultCashTermCode) {
         setSelectedPaymentTermCode(defaultCashTermCode);
@@ -2319,10 +2322,17 @@ function FacturacionWorkspace({
     if (!retailManualActive) {
       return;
     }
-    if ((!allowCreditForCustomer || paymentTerms.length === 0) && paymentMode === "CREDITO") {
-      setPaymentMode("CONTADO");
+    if (!allowCreditForCustomer || paymentTerms.length === 0) {
+      if (paymentMode !== "CONTADO") {
+        setPaymentMode("CONTADO");
+        setPaymentModeEdited(false);
+      }
+      return;
     }
-  }, [allowCreditForCustomer, paymentMode, paymentTerms.length, retailManualActive]);
+    if (!paymentModeEdited && paymentMode !== "CREDITO") {
+      setPaymentMode("CREDITO");
+    }
+  }, [allowCreditForCustomer, paymentMode, paymentModeEdited, paymentTerms.length, retailManualActive]);
 
   useEffect(() => {
     if (!retailManualActive) {
@@ -3528,6 +3538,7 @@ function FacturacionWorkspace({
     if (retailManualFlow) {
       setSelectedCustomerId(retailCustomers.length > 0 ? retailCustomers[0].id : null);
       setPaymentMode("CONTADO");
+      setPaymentModeEdited(false);
       setSelectedPaymentTermCode(defaultCashTermCode);
     }
   }, [defaultCashTermCode, defaultPriceListCode, mode, priceLists, retailManualFlow, retailCustomers, serviceRate, vatRate]);
@@ -3564,7 +3575,8 @@ function FacturacionWorkspace({
       });
       return { id: null, invoiceNumber: null };
     }
-    if (hasPendingBalance) {
+    const allowRetailCreditBalance = retailManualActive && paymentMode === "CREDITO";
+    if (hasPendingBalance && !allowRetailCreditBalance) {
       toast({ variant: "warning", title: "Pago incompleto", description: "Registra los pagos pendientes antes de guardar la factura." });
       return { id: null, invoiceNumber: null };
     }
@@ -3577,7 +3589,6 @@ function FacturacionWorkspace({
       : selectedOrder!.waiterCode ?? selectedOrder!.waiter ?? null;
 
     const payload = {
-      invoice_number: `F-${Date.now()}`,
       invoice_date: invoiceDate,
       table_code: normalizedTableCode,
       waiter_code: normalizedWaiter,
@@ -3705,11 +3716,12 @@ function FacturacionWorkspace({
         ? `Consecutivo: ${result.invoiceNumber}`
         : "Consecutivo: ______________________";
     const dateLine = `Fecha: ${formattedDate}`;
-    const manualReference = invoiceLabel?.trim() ?? "";
-    const orderReference = orderSnapshot?.orderCode?.trim() ?? "";
-    const referenceValue = manualFlowActive ? manualReference : orderReference || manualReference;
-    const referenceLine =
-      referenceValue && referenceValue.length > 0 ? `Referencia: ${referenceValue}` : "Referencia: ______________________";
+    const paymentConditionLine = manualFlowActive
+      ? (paymentMode === "CREDITO"
+          ? `Condición: Crédito${selectedPaymentTerm ? ` • ${selectedPaymentTerm.name}` : selectedPaymentTermTotalDays ? ` • ${selectedPaymentTermTotalDays} días` : ""}`
+          : "Condición: Contado")
+      : null;
+    const dueDateLine = manualFlowActive && paymentMode === "CREDITO" ? `Vence: ${retailDueDateLabel}` : null;
     const mesaLine = !manualFlowActive && orderSnapshot?.tableLabel
       ? `Mesa: ${orderSnapshot.tableLabel}`
       : null;
@@ -3748,7 +3760,8 @@ function FacturacionWorkspace({
       `<p class="muted">${escapeHtml(consecutiveValue)}</p>`,
       `<p class="muted">${escapeHtml(dateLine)}</p>`,
       `<p class="muted">${escapeHtml(responsibleLine)}</p>`,
-      `<p class="muted">${escapeHtml(referenceLine)}</p>`,
+      paymentConditionLine ? `<p class="muted">${escapeHtml(paymentConditionLine)}</p>` : "",
+      dueDateLine ? `<p class="muted">${escapeHtml(dueDateLine)}</p>` : "",
       mesaLine ? `<p class="muted">${escapeHtml(mesaLine)}</p>` : "",
       waiterLine ? `<p class="muted">${escapeHtml(waiterLine)}</p>` : "",
       `<p class="muted">${escapeHtml(cashLineText)}</p>`,
@@ -4166,7 +4179,10 @@ function FacturacionWorkspace({
                     type="button"
                     variant={paymentMode === "CONTADO" ? "default" : "outline"}
                     className="rounded-2xl"
-                    onClick={() => setPaymentMode("CONTADO")}
+                    onClick={() => {
+                      setPaymentMode("CONTADO");
+                      setPaymentModeEdited(true);
+                    }}
                   >
                     Contado
                   </Button>
@@ -4175,7 +4191,10 @@ function FacturacionWorkspace({
                     variant={paymentMode === "CREDITO" ? "default" : "outline"}
                     className="rounded-2xl"
                     disabled={!allowCreditForCustomer || paymentTerms.length === 0}
-                    onClick={() => setPaymentMode("CREDITO")}
+                    onClick={() => {
+                      setPaymentMode("CREDITO");
+                      setPaymentModeEdited(true);
+                    }}
                   >
                     Crédito
                   </Button>

@@ -247,6 +247,7 @@ export default function AccountsReceivablePage(): JSX.Element {
       content = (
         <CustomersCrudPage
           canManageCustomers={canManageCustomers}
+          canViewDocuments={canViewDocuments}
           hasAccess={hasAccess}
         />
       );
@@ -492,6 +493,74 @@ const DOCUMENT_TYPE_OPTIONS: Array<ComboboxOption<CustomerDocumentType>> = DOCUM
   label: DOCUMENT_TYPE_LABELS[value] ?? value,
 }));
 
+type FilterDocumentType = "ALL" | CustomerDocumentType;
+type DocumentFilterState = {
+  customerId: number | null;
+  documentType: FilterDocumentType;
+  dateFrom: string | null;
+  dateTo: string | null;
+};
+type DocumentStatusFilter = "ALL" | CustomerDocumentStatus;
+type SearchParamsLike = Pick<URLSearchParams, "get">;
+
+const DOCUMENT_FILTER_DEFAULTS: DocumentFilterState = {
+  customerId: null,
+  documentType: "ALL",
+  dateFrom: null,
+  dateTo: null,
+};
+
+const parseNumericParam = (value: string | null): number | null => {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const parseDateParam = (value: string | null): string | null => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+};
+
+const parseDocumentTypeFilter = (value: string | null): FilterDocumentType => {
+  if (!value) return "ALL";
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "ALL") {
+    return "ALL";
+  }
+  return DOCUMENT_TYPE_VALUES.includes(normalized as CustomerDocumentType)
+    ? (normalized as CustomerDocumentType)
+    : "ALL";
+};
+
+const parseDocumentFiltersFromParams = (params: SearchParamsLike): DocumentFilterState => ({
+  ...DOCUMENT_FILTER_DEFAULTS,
+  customerId: parseNumericParam(params.get("customerId")),
+  documentType: parseDocumentTypeFilter(params.get("documentType")),
+  dateFrom: parseDateParam(params.get("dateFrom")),
+  dateTo: parseDateParam(params.get("dateTo")),
+});
+
+const parseStatusFilterFromParams = (params: SearchParamsLike): DocumentStatusFilter => {
+  const raw = params.get("status");
+  if (!raw) return "PENDIENTE";
+  const normalized = raw.trim().toUpperCase();
+  if (normalized === "ALL") {
+    return "ALL";
+  }
+  return DOCUMENT_STATUS_VALUES.includes(normalized as CustomerDocumentStatus)
+    ? (normalized as CustomerDocumentStatus)
+    : "PENDIENTE";
+};
+
+const areDocumentFiltersEqual = (a: DocumentFilterState, b: DocumentFilterState): boolean =>
+  a.customerId === b.customerId && a.documentType === b.documentType && a.dateFrom === b.dateFrom && a.dateTo === b.dateTo;
+
+const DOCUMENT_TYPE_FILTER_OPTIONS: Array<ComboboxOption<FilterDocumentType>> = [
+  { value: "ALL", label: "Todos los tipos" },
+  ...DOCUMENT_TYPE_VALUES.map((value) => ({ value, label: DOCUMENT_TYPE_LABELS[value] ?? value })),
+];
+
 type DocumentPaymentTerm = {
   id: number | null;
   code: string;
@@ -687,10 +756,11 @@ const emptyCustomerForm = (): CustomerFormState => ({
 
 type CustomersCrudPageProps = {
   canManageCustomers: boolean;
+  canViewDocuments: boolean;
   hasAccess: boolean;
 };
 
-function CustomersCrudPage({ canManageCustomers, hasAccess }: CustomersCrudPageProps): JSX.Element {
+function CustomersCrudPage({ canManageCustomers, canViewDocuments, hasAccess }: CustomersCrudPageProps): JSX.Element {
   const { toast } = useToast();
 
   const [customers, setCustomers] = useState<CustomerDTO[]>([]);
@@ -1100,6 +1170,20 @@ function CustomersCrudPage({ canManageCustomers, hasAccess }: CustomersCrudPageP
                             <div className="font-semibold text-foreground">{customer.code} • {customer.name}</div>
                             <div className="text-xs text-muted-foreground">Comercial: {customer.tradeName ?? "Sin registro"}</div>
                             <div className="text-xs text-muted-foreground">RUC/NIT: {customer.taxId ?? "Sin registro"}</div>
+                            {canViewDocuments ? (
+                              <div className="mt-2">
+                                <Button type="button" variant="ghost" className="rounded-2xl px-3 py-1 text-xs font-medium" asChild>
+                                  <Link
+                                    href={{
+                                      pathname: "/cuentas-por-cobrar",
+                                      query: { mode: "documentos", customerId: customer.id },
+                                    }}
+                                  >
+                                    <FileSpreadsheet className="mr-1 h-3 w-3" /> Ver documentos
+                                  </Link>
+                                </Button>
+                              </div>
+                            ) : null}
                           </td>
                           <td className="px-3 py-3 text-xs text-muted-foreground">
                             <div>Email: {customer.email ?? "Sin registro"}</div>
@@ -1383,10 +1467,14 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
   const searchParams = useSearchParams();
   const router = useRouter();
 
+  const [filterDraft, setFilterDraft] = useState<DocumentFilterState>(() => parseDocumentFiltersFromParams(searchParams));
+  const [activeFilters, setActiveFilters] = useState<DocumentFilterState>(() => parseDocumentFiltersFromParams(searchParams));
+  const [filterCustomers, setFilterCustomers] = useState<ComboboxOption<string>[]>([]);
+  const [filterCustomersLoading, setFilterCustomersLoading] = useState(false);
   const [documents, setDocuments] = useState<CustomerDocumentEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<"ALL" | CustomerDocumentStatus>("PENDIENTE");
+  const [statusFilter, setStatusFilter] = useState<DocumentStatusFilter>(() => parseStatusFilterFromParams(searchParams));
   const [search, setSearch] = useState("");
   const [viewState, setViewState] = useState<ViewApplicationsState>(() => createInitialViewState());
   const [applyState, setApplyState] = useState<ApplyModalState>(() => createInitialApplyState());
@@ -1422,6 +1510,58 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
     router.replace(query ? `/cuentas-por-cobrar?${query}` : "/cuentas-por-cobrar", { scroll: false });
   }, [router, searchParams]);
 
+  const syncDocumentsQuery = useCallback(
+    (nextFilters: DocumentFilterState, nextStatus: DocumentStatusFilter) => {
+      const params = new URLSearchParams({ mode: "documentos" });
+      if (nextFilters.customerId) {
+        params.set("customerId", String(nextFilters.customerId));
+      }
+      if (nextFilters.documentType !== "ALL") {
+        params.set("documentType", nextFilters.documentType);
+      }
+      if (nextFilters.dateFrom) {
+        params.set("dateFrom", nextFilters.dateFrom);
+      }
+      if (nextFilters.dateTo) {
+        params.set("dateTo", nextFilters.dateTo);
+      }
+      if (nextStatus !== "PENDIENTE") {
+        params.set("status", nextStatus);
+      }
+      router.replace(`/cuentas-por-cobrar?${params.toString()}`, { scroll: false });
+    },
+    [router],
+  );
+
+  const handleStatusFilterChange = useCallback(
+    (value: DocumentStatusFilter) => {
+      setStatusFilter(value);
+      syncDocumentsQuery(activeFilters, value);
+    },
+    [activeFilters, syncDocumentsQuery],
+  );
+
+  const handleFilterFieldChange = useCallback(<K extends keyof DocumentFilterState>(field: K, value: DocumentFilterState[K]) => {
+    setFilterDraft((prev) => ({ ...prev, [field]: value }));
+  }, []);
+
+  const handleApplyFilters = useCallback(() => {
+    if (filterDraft.dateFrom && filterDraft.dateTo && filterDraft.dateFrom > filterDraft.dateTo) {
+      toast({ variant: "warning", title: "Documentos", description: "La fecha inicial no puede ser mayor a la final." });
+      return;
+    }
+    const nextFilters: DocumentFilterState = { ...filterDraft };
+    setActiveFilters(nextFilters);
+    syncDocumentsQuery(nextFilters, statusFilter);
+  }, [filterDraft, statusFilter, syncDocumentsQuery, toast]);
+
+  const handleClearFilters = useCallback(() => {
+    const nextFilters: DocumentFilterState = { ...DOCUMENT_FILTER_DEFAULTS };
+    setFilterDraft(nextFilters);
+    setActiveFilters(nextFilters);
+    syncDocumentsQuery(nextFilters, statusFilter);
+  }, [statusFilter, syncDocumentsQuery]);
+
   const loadDocuments = useCallback(async () => {
     if (!hasAccess || !canViewDocuments) {
       setDocuments([]);
@@ -1431,10 +1571,27 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
     setLoading(true);
     try {
       const query = new URLSearchParams({
-        includeSettled: "false",
+        includeSettled: statusFilter === "PENDIENTE" ? "false" : "true",
         orderBy: "documentDate",
         limit: "200",
       });
+      if (statusFilter === "PENDIENTE") {
+        query.set("status", "PENDIENTE,BORRADOR");
+      } else if (statusFilter !== "ALL") {
+        query.set("status", statusFilter);
+      }
+      if (activeFilters.customerId) {
+        query.set("customerId", String(activeFilters.customerId));
+      }
+      if (activeFilters.documentType !== "ALL") {
+        query.set("types", activeFilters.documentType);
+      }
+      if (activeFilters.dateFrom) {
+        query.set("dateFrom", activeFilters.dateFrom);
+      }
+      if (activeFilters.dateTo) {
+        query.set("dateTo", activeFilters.dateTo);
+      }
       const response = await fetch(`/api/cxc/documentos?${query.toString()}`, {
         cache: "no-store",
         credentials: "include",
@@ -1463,7 +1620,7 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
     } finally {
       setLoading(false);
     }
-  }, [canViewDocuments, hasAccess, toast]);
+  }, [activeFilters, canViewDocuments, hasAccess, statusFilter, toast]);
 
   const loadCreateDocumentCatalogs = useCallback(async () => {
     const tasks: Promise<void>[] = [];
@@ -1533,6 +1690,43 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
       toast({ variant: "error", title: "Documentos", description: errors.join(" · ") });
     }
   }, [toast]);
+
+  const loadFilterCustomers = useCallback(async () => {
+    if (!hasAccess || !canViewDocuments) {
+      setFilterCustomers([]);
+      return;
+    }
+    setFilterCustomersLoading(true);
+    try {
+      const response = await fetch("/api/cxc/clientes?includeInactive=true&limit=400", {
+        cache: "no-store",
+        credentials: "include",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload?.message ?? "No se pudieron obtener los clientes";
+        throw new Error(message);
+      }
+      const items: unknown[] = Array.isArray(payload?.items) ? payload.items : [];
+      const normalized = items
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+        .map((record) => normalizeCustomerRecord(record as Record<string, unknown>))
+        .filter((item): item is CustomerDTO => item !== null)
+        .sort((a, b) => a.name.localeCompare(b.name, "es"));
+      const options: ComboboxOption<string>[] = normalized.map((customer) => ({
+        value: String(customer.id),
+        label: `${customer.code} • ${customer.name}`,
+        description: customer.paymentTermCode ? `Condición ${customer.paymentTermCode}` : undefined,
+      }));
+      setFilterCustomers(options);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudieron obtener los clientes";
+      toast({ variant: "warning", title: "Documentos", description: message });
+      setFilterCustomers([]);
+    } finally {
+      setFilterCustomersLoading(false);
+    }
+  }, [canViewDocuments, hasAccess, toast]);
 
   const handleOpenCreateDocument = useCallback(() => {
     if (!canManageDocuments) {
@@ -1711,6 +1905,10 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
     void loadDocuments();
   }, [loadDocuments]);
 
+  useEffect(() => {
+    void loadFilterCustomers();
+  }, [loadFilterCustomers]);
+
   const stats = useMemo(() => {
     const total = documents.length;
     const pending = documents.filter((doc) => doc.status === "PENDIENTE");
@@ -1741,6 +1939,8 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
         return haystack.includes(term);
       });
   }, [documents, search, statusFilter]);
+
+  const filtersDirty = useMemo(() => !areDocumentFiltersEqual(filterDraft, activeFilters), [activeFilters, filterDraft]);
 
   const handleRefresh = useCallback(() => {
     void loadDocuments();
@@ -2097,12 +2297,19 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
         search={search}
         onSearchChange={setSearch}
         statusFilter={statusFilter}
-        onStatusChange={setStatusFilter}
+        onStatusChange={handleStatusFilterChange}
         onRetry={loadDocuments}
         onViewApplications={handleOpenApplications}
         onApplyDocument={canApplyDocuments ? handleOpenApplyModal : undefined}
         canApply={canApplyDocuments}
         onCreateDocument={handleOpenCreateDocument}
+        filterDraft={filterDraft}
+        onFilterFieldChange={handleFilterFieldChange}
+        onApplyFilters={handleApplyFilters}
+        onClearFilters={handleClearFilters}
+        filtersDirty={filtersDirty}
+        filterCustomerOptions={filterCustomers}
+        filterCustomersLoading={filterCustomersLoading}
       />
       <CreateDocumentModal
         state={createState}
@@ -3095,6 +3302,13 @@ export function DocumentsPanel({
   onApplyDocument,
   canApply,
   onCreateDocument,
+  filterDraft,
+  onFilterFieldChange,
+  onApplyFilters,
+  onClearFilters,
+  filtersDirty,
+  filterCustomerOptions,
+  filterCustomersLoading,
 }: {
   documents: CustomerDocumentEntry[];
   stats: { total: number; pending: number; pendingAmount: number; overdue: number; overdueAmount: number; collected: number };
@@ -3102,15 +3316,27 @@ export function DocumentsPanel({
   error: string | null;
   search: string;
   onSearchChange: (value: string) => void;
-  statusFilter: "ALL" | CustomerDocumentStatus;
-  onStatusChange: (value: "ALL" | CustomerDocumentStatus) => void;
+  statusFilter: DocumentStatusFilter;
+  onStatusChange: (value: DocumentStatusFilter) => void;
   onRetry: () => void;
   onViewApplications?: (document: CustomerDocumentEntry) => void;
   onApplyDocument?: (document: CustomerDocumentEntry) => void;
   canApply?: boolean;
   onCreateDocument?: () => void;
+  filterDraft: DocumentFilterState;
+  onFilterFieldChange: <K extends keyof DocumentFilterState>(field: K, value: DocumentFilterState[K]) => void;
+  onApplyFilters: () => void;
+  onClearFilters: () => void;
+  filtersDirty: boolean;
+  filterCustomerOptions: ComboboxOption<string>[];
+  filterCustomersLoading: boolean;
 }) {
   const showActions = Boolean(onViewApplications || (canApply && onApplyDocument));
+  const customerFilterOptions = useMemo<ComboboxOption<string>[]>(
+    () => [{ value: "", label: "Todos los clientes" }, ...filterCustomerOptions],
+    [filterCustomerOptions],
+  );
+  const selectedCustomerValue = filterDraft.customerId ? String(filterDraft.customerId) : "";
 
   return (
     <div className="space-y-6">
@@ -3191,6 +3417,59 @@ export function DocumentsPanel({
           </div>
         </CardHeader>
         <CardContent className="space-y-4 pt-4">
+          <div className="space-y-3 rounded-3xl border border-muted/60 bg-muted/10 p-4">
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
+                <Combobox<string>
+                  value={selectedCustomerValue}
+                  onChange={(value) => {
+                    const numeric = value ? Number(value) : NaN;
+                    onFilterFieldChange("customerId", Number.isFinite(numeric) && numeric > 0 ? numeric : null);
+                  }}
+                  options={customerFilterOptions}
+                  placeholder={filterCustomersLoading ? "Cargando clientes" : "Todos los clientes"}
+                  emptyText={filterCustomersLoading ? "Cargando opciones" : "Sin coincidencias"}
+                  disabled={filterCustomersLoading}
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Tipo</Label>
+                <Combobox<FilterDocumentType>
+                  value={filterDraft.documentType}
+                  onChange={(value) => onFilterFieldChange("documentType", (value ?? "ALL") as FilterDocumentType)}
+                  options={DOCUMENT_TYPE_FILTER_OPTIONS}
+                  placeholder="Todos los tipos"
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Desde</Label>
+                <DatePicker
+                  value={filterDraft.dateFrom ?? undefined}
+                  onChange={(value) => onFilterFieldChange("dateFrom", value ?? null)}
+                  className="rounded-2xl"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs uppercase text-muted-foreground">Hasta</Label>
+                <DatePicker
+                  value={filterDraft.dateTo ?? undefined}
+                  onChange={(value) => onFilterFieldChange("dateTo", value ?? null)}
+                  className="rounded-2xl"
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="ghost" className="rounded-2xl" onClick={onClearFilters}>
+                Limpiar
+              </Button>
+              <Button type="button" className="rounded-2xl" onClick={onApplyFilters} disabled={!filtersDirty}>
+                Aplicar filtros
+              </Button>
+            </div>
+          </div>
           {loading ? (
             <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-muted p-6 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Cargando documentos…
