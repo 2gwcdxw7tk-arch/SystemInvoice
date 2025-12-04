@@ -1598,6 +1598,7 @@ type InvoiceDetail = {
 function InvoicesHistory() {
   const { toast } = useToast();
   const session = useSession();
+  const isRestaurantMode = publicFeatures.isRestaurant;
   const canCancel = isSessionAdministrator(session) || hasSessionPermission(session, "invoice.issue");
   const [from, setFrom] = useState<string>(() => new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
   const [to, setTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
@@ -1668,7 +1669,21 @@ function InvoicesHistory() {
     setMutatingId(id);
     try {
       const res = await fetch(`/api/invoices/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "ANULADA" }) });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        let message = "No se pudo anular la factura.";
+        try {
+          const payload = await res.clone().json();
+          if (payload && typeof payload.message === "string") {
+            message = payload.message;
+          }
+        } catch {
+          const fallback = await res.text().catch(() => null);
+          if (fallback) {
+            message = fallback;
+          }
+        }
+        throw new Error(message);
+      }
       toast({ variant: "success", title: "Factura", description: "Factura anulada correctamente." });
       await fetchList();
       if (detailOpen && detail?.id === id) {
@@ -1678,13 +1693,16 @@ function InvoicesHistory() {
       setCancelTarget(null);
     } catch (error) {
       console.error("No se pudo anular la factura", error);
-      toast({ variant: "error", title: "Factura", description: "No se pudo anular la factura." });
+      const description = error instanceof Error ? error.message : "No se pudo anular la factura.";
+      toast({ variant: "error", title: "Factura", description });
     } finally {
       setMutatingId(null);
     }
   }, [canCancel, detail?.id, detailOpen, fetchList, openDetail, toast]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const showServiceColumn = isRestaurantMode;
+  const invoiceListColumns = showServiceColumn ? 11 : 10;
 
   return (
     <section className="space-y-10 pb-16">
@@ -1737,7 +1755,7 @@ function InvoicesHistory() {
                   <th className="px-3 py-2">Cliente</th>
                   <th className="px-3 py-2 text-right">Subtotal</th>
                   <th className="px-3 py-2 text-right">IVA</th>
-                  <th className="px-3 py-2 text-right">Servicio</th>
+                  {showServiceColumn ? <th className="px-3 py-2 text-right">Servicio</th> : null}
                   <th className="px-3 py-2 text-right">Total</th>
                   <th className="px-3 py-2">Estado</th>
                   <th className="px-3 py-2 text-right">Acciones</th>
@@ -1746,7 +1764,7 @@ function InvoicesHistory() {
               <tbody className="divide-y">
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={invoiceListColumns} className="px-3 py-6 text-center text-sm text-muted-foreground">
                       {loading ? "Cargando facturas..." : "No se encontraron facturas con los filtros aplicados."}
                     </td>
                   </tr>
@@ -1762,7 +1780,9 @@ function InvoicesHistory() {
                       <td className="px-3 py-2 text-muted-foreground">{inv.customer_name ?? "—"}</td>
                       <td className="px-3 py-2 text-right">{fmt.format(inv.subtotal)}</td>
                       <td className="px-3 py-2 text-right">{fmt.format(inv.vat_amount)}</td>
-                      <td className="px-3 py-2 text-right">{fmt.format(inv.service_charge)}</td>
+                      {showServiceColumn ? (
+                        <td className="px-3 py-2 text-right">{fmt.format(inv.service_charge)}</td>
+                      ) : null}
                       <td className="px-3 py-2 text-right font-semibold">{fmt.format(inv.total_amount)}</td>
                       <td className="px-3 py-2">
                         <span className={cn("inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold",
@@ -1854,8 +1874,10 @@ function InvoicesHistory() {
             <TotalsSummary
               items={[
                 { label: "Subtotal", amount: detail.subtotal, currency: detail.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO" },
+                ...(isRestaurantMode
+                  ? [{ label: "Servicio", amount: detail.service_charge, currency: detail.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO" }]
+                  : []),
                 { label: "IVA", amount: detail.vat_amount, currency: detail.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO" },
-                { label: "Servicio", amount: detail.service_charge, currency: detail.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO" },
                 { label: "Total", amount: detail.total_amount, currency: detail.currency_code || process.env.NEXT_PUBLIC_LOCAL_CURRENCY_CODE || "NIO", emphasize: true },
               ]}
             />
@@ -1919,7 +1941,27 @@ function InvoicesHistory() {
  }
 
  // Subcomponente UI para gestionar múltiples formas de pago
- function PaymentsSectionUI({ payments, setPayments, serviceEnabled, setServiceEnabled, applyVAT, setApplyVAT, vatRate, serviceToggleDisabled }: { payments: Payment[]; setPayments: (p: Payment[]) => void; serviceEnabled: boolean; setServiceEnabled: (v: boolean) => void; applyVAT: boolean; setApplyVAT: (v: boolean) => void; vatRate: number; serviceToggleDisabled: boolean }) {
+function PaymentsSectionUI({
+  payments,
+  setPayments,
+  serviceEnabled,
+  setServiceEnabled,
+  applyVAT,
+  setApplyVAT,
+  vatRate,
+  serviceToggleDisabled,
+  showServiceToggle,
+}: {
+  payments: Payment[];
+  setPayments: (p: Payment[]) => void;
+  serviceEnabled: boolean;
+  setServiceEnabled: (v: boolean) => void;
+  applyVAT: boolean;
+  setApplyVAT: (v: boolean) => void;
+  vatRate: number;
+  serviceToggleDisabled: boolean;
+  showServiceToggle: boolean;
+}) {
    const addPayment = () => setPayments([...payments, { method: "CARD", amount: "", reference: "" }]);
   const removePayment = (idx: number) => {
     if (payments.length === 1) return;
@@ -2000,10 +2042,12 @@ function InvoicesHistory() {
         })}
        </div>
       <div className="flex flex-wrap items-center gap-8">
-        <div className="flex items-center gap-2">
-          <span className="text-xs uppercase text-muted-foreground">Servicio</span>
-          <Switch checked={serviceEnabled} onChange={setServiceEnabled} aria-label="Servicio" disabled={serviceToggleDisabled} />
-        </div>
+        {showServiceToggle ? (
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase text-muted-foreground">Servicio</span>
+            <Switch checked={serviceEnabled} onChange={setServiceEnabled} aria-label="Servicio" disabled={serviceToggleDisabled} />
+          </div>
+        ) : null}
         <div className="flex items-center gap-2">
           <span className="text-xs uppercase text-muted-foreground">IVA</span>
           <Switch
@@ -2036,6 +2080,9 @@ function FacturacionWorkspace({
 }) {
   const vatRate = VAT_RATE;
   const serviceRate = SERVICE_RATE;
+  const isRestaurantMode = publicFeatures.isRestaurant;
+  const showTableSelector = !(mode === "sin-pedido" && !isRestaurantMode);
+  const serviceFeatureDefault = isRestaurantMode && serviceRate > 0;
   const router = useRouter();
   const session = useSession();
   const modeTitle = mode === "sin-pedido" ? "Facturación sin pedido" : "Facturación con pedido";
@@ -2046,7 +2093,7 @@ function FacturacionWorkspace({
   const [manualPriceListCode, setManualPriceListCode] = useState(defaultPriceListCode);
   const [payments, setPayments] = useState<Payment[]>(() => createInitialPaymentsState());
   const [amountReceived, setAmountReceived] = useState("0");
-  const [serviceEnabled, setServiceEnabled] = useState(() => serviceRate > 0);
+  const [serviceEnabled, setServiceEnabled] = useState(() => serviceFeatureDefault);
   const [applyVAT, setApplyVAT] = useState(() => vatRate > 0);
   const [invoiceDate, setInvoiceDate] = useState<string>(() => new Date().toISOString().slice(0,10));
   const [customerName, setCustomerName] = useState(() => (mode === "sin-pedido" ? DEFAULT_MANUAL_CUSTOMER_NAME : ""));
@@ -2214,10 +2261,10 @@ function FacturacionWorkspace({
   }, [selectedCustomerId]);
 
   useEffect(() => {
-    if (serviceRate === 0) {
+    if (!isRestaurantMode || serviceRate === 0) {
       setServiceEnabled(false);
     }
-  }, [serviceRate]);
+  }, [isRestaurantMode, serviceRate]);
 
   useEffect(() => {
     if (mode === "sin-pedido" && selectedTableId === NEW_INVOICE_ID && !draftInvoice.items.length) {
@@ -3199,8 +3246,9 @@ function FacturacionWorkspace({
 
     const serviceChargeComputed = useMemo(() => {
       const baseSubtotal = itemsForSummary.reduce((acc, item) => acc + item.qty * item.unitPrice, 0);
-      return serviceEnabled ? baseSubtotal * serviceRate : 0;
-    }, [serviceEnabled, serviceRate, itemsForSummary]);
+      const allowServiceCharge = isRestaurantMode && serviceEnabled && serviceRate > 0;
+      return allowServiceCharge ? baseSubtotal * serviceRate : 0;
+    }, [isRestaurantMode, serviceEnabled, serviceRate, itemsForSummary]);
 
     const summary = useMemo(() => {
       if (!isDraft && !selectedOrder) return null;
@@ -3482,7 +3530,7 @@ function FacturacionWorkspace({
       }
       await refreshOrders();
       setPayments(createInitialPaymentsState());
-      setServiceEnabled(serviceRate > 0);
+      setServiceEnabled(serviceFeatureDefault);
       setApplyVAT(vatRate > 0);
       setAddItemModalOpen(false);
       toast({ variant: "success", title: "Pedido anulado", description: `${selectedOrder.tableLabel} quedó libre.` });
@@ -3495,7 +3543,7 @@ function FacturacionWorkspace({
       });
       return false;
     }
-  }, [mode, refreshOrders, selectedOrder, serviceRate, toast, vatRate]);
+  }, [mode, refreshOrders, selectedOrder, serviceFeatureDefault, toast, vatRate]);
 
    useEffect(() => {
      // sincroniza monto recibido con suma de pagos
@@ -3529,7 +3577,7 @@ function FacturacionWorkspace({
       return fallback.id;
     });
     setPayments(createInitialPaymentsState());
-    setServiceEnabled(serviceRate > 0);
+    setServiceEnabled(serviceFeatureDefault);
     setApplyVAT(vatRate > 0);
     setCustomerName(mode === "sin-pedido" ? DEFAULT_MANUAL_CUSTOMER_NAME : "");
     setCustomerNameEdited(false);
@@ -3542,7 +3590,7 @@ function FacturacionWorkspace({
       setPaymentModeEdited(false);
       setSelectedPaymentTermCode(defaultCashTermCode);
     }
-  }, [defaultCashTermCode, defaultPriceListCode, mode, priceLists, retailManualFlow, retailCustomers, serviceRate, vatRate]);
+  }, [defaultCashTermCode, defaultPriceListCode, mode, priceLists, retailManualFlow, retailCustomers, serviceFeatureDefault, vatRate]);
 
   type SaveInvoiceResult = { id: number | null; invoiceNumber: string | null };
 
@@ -3779,6 +3827,10 @@ function FacturacionWorkspace({
       .filter(Boolean)
       .join("\n        ");
 
+    const serviceRowMarkup = isRestaurantMode
+      ? `<div class="row"><span>Servicio</span><span>${formatCurrency(invoiceSummary.serviceCharge, { currency: "local" })}</span></div>`
+      : "";
+
     const html = `
       <div class="ticket">
         ${headerMarkup}
@@ -3786,7 +3838,7 @@ function FacturacionWorkspace({
         ${itemsMarkup}
         <p class="separator"></p>
         <div class="row"><span>Subtotal</span><span>${formatCurrency(invoiceSummary.subtotal, { currency: "local" })}</span></div>
-        <div class="row"><span>Servicio</span><span>${formatCurrency(invoiceSummary.serviceCharge, { currency: "local" })}</span></div>
+        ${serviceRowMarkup}
         <div class="row"><span>IVA</span><span>${formatCurrency(invoiceSummary.taxAmount, { currency: "local" })}</span></div>
         <div class="row total"><span>Total</span><span>${formatCurrency(invoiceSummary.total, { currency: "local" })}</span></div>
         <p class="separator"></p>
@@ -3813,7 +3865,7 @@ function FacturacionWorkspace({
       resetManualInvoice();
     } else {
       setPayments(createInitialPaymentsState());
-      setServiceEnabled(serviceRate > 0);
+      setServiceEnabled(serviceFeatureDefault);
       setApplyVAT(vatRate > 0);
       setCustomerName("");
       setCustomerNameEdited(false);
@@ -3893,9 +3945,6 @@ function FacturacionWorkspace({
                   <span className="text-sm font-medium">
                     {selectedRetailCustomer ? `${selectedRetailCustomer.code} • ${selectedRetailCustomer.name}` : "Sin cliente"}
                   </span>
-                  {paymentMode === "CREDITO" ? (
-                    <span className="text-[11px] text-muted-foreground">Vence: {retailDueDateLabel}</span>
-                  ) : null}
                 </div>
                 <Button
                   type="button"
@@ -4264,18 +4313,20 @@ function FacturacionWorkspace({
                <CardTitle className="text-lg font-semibold leading-tight">Detalle de consumo</CardTitle>
                
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:gap-3 lg:ml-auto lg:-translate-x-4">
-                <div className="min-w-[220px] lg:min-w-[210px]">
-                  <Combobox<string>
-                    value={selectedTableId ?? ""}
-                    onChange={(value) => setSelectedTableId(value)}
-                    options={tableOptions}
-                    placeholder={mode === "sin-pedido" ? "Selecciona flujo manual o mesa" : "Selecciona una mesa ocupada"}
-                    label="Mesa / estado"
-                    ariaLabel="Seleccionar mesa"
-                    className="w-full"
-                    disabled={tableOptions.length === 0}
-                  />
-                </div>
+                {showTableSelector ? (
+                  <div className="min-w-[220px] lg:min-w-[210px]">
+                    <Combobox<string>
+                      value={selectedTableId ?? ""}
+                      onChange={(value) => setSelectedTableId(value)}
+                      options={tableOptions}
+                      placeholder={mode === "sin-pedido" ? "Selecciona flujo manual o mesa" : "Selecciona una mesa ocupada"}
+                      label="Mesa / estado"
+                      ariaLabel="Seleccionar mesa"
+                      className="w-full"
+                      disabled={tableOptions.length === 0}
+                    />
+                  </div>
+                ) : null}
                 {mode === "sin-pedido" && selectedTableId === NEW_INVOICE_ID ? (
                   <Combobox<string>
                     value={manualPriceListCode}
@@ -4559,7 +4610,8 @@ function FacturacionWorkspace({
                setPayments={setPayments}
                serviceEnabled={serviceEnabled}
                setServiceEnabled={setServiceEnabled}
-                serviceToggleDisabled={serviceRate === 0}
+                serviceToggleDisabled={!isRestaurantMode || serviceRate === 0}
+                showServiceToggle={isRestaurantMode}
                applyVAT={applyVAT}
                setApplyVAT={setApplyVAT}
                vatRate={vatRate}
@@ -4570,7 +4622,9 @@ function FacturacionWorkspace({
 
              <div className="space-y-1 text-sm text-muted-foreground">
                <div className="flex justify-between"><span>Subtotal</span><span>{formatCurrency(summary?.subtotal ?? 0, { currency: "local" })}</span></div>
-               <div className="flex justify-between"><span>Servicio</span><span>{formatCurrency(summary?.serviceCharge ?? 0, { currency: "local" })}</span></div>
+               {isRestaurantMode ? (
+                 <div className="flex justify-between"><span>Servicio</span><span>{formatCurrency(summary?.serviceCharge ?? 0, { currency: "local" })}</span></div>
+               ) : null}
                <div className="flex justify-between"><span>IVA {applyVAT ? "" : "(exento)"}</span><span>{formatCurrency(summary?.taxAmount ?? 0, { currency: "local" })}</span></div>
              </div>
 

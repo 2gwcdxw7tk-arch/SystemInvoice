@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { SESSION_COOKIE_NAME, parseSessionCookie } from "@/lib/auth/session";
-import { invoiceService } from "@/lib/services/InvoiceService";
+import { invoiceService, InvoiceCancellationError } from "@/lib/services/InvoiceService";
 
 export async function GET(_request: NextRequest, context: { params: Promise<{ invoiceId: string }> }) {
   const { invoiceId } = await context.params;
@@ -57,6 +57,10 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error(`PATCH /api/invoices/${id} error`, error);
-    return NextResponse.json({ success: false, message: "No se pudo anular la factura" }, { status: 500 });
+    if (error instanceof InvoiceCancellationError) {
+      return NextResponse.json({ success: false, message: error.message }, { status: error.status ?? 409 });
+    }
+    const message = error instanceof Error ? error.message : "No se pudo anular la factura";
+    return NextResponse.json({ success: false, message }, { status: 500 });
   }
 }

@@ -1666,6 +1666,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
     session: CashRegisterSessionRecord;
     payments: ExpectedPayment[];
     totalInvoices: number;
+    creditTotals?: CashRegisterCreditTotals | null;
   } | null> {
     const normalizedId = normalizeSessionId(sessionId);
     const session = await this.getCashRegisterSessionById(normalizedId.toString());

@@ -3,12 +3,13 @@ import { toCentralClosedDate } from "@/lib/utils/date";
 import { inventoryService } from "@/lib/services/InventoryService";
 import { customerService } from "@/lib/services/cxc/CustomerService";
 import { customerDocumentService } from "@/lib/services/cxc/CustomerDocumentService";
+import { customerDocumentApplicationService } from "@/lib/services/cxc/CustomerDocumentApplicationService";
 import { customerCreditLineService } from "@/lib/services/cxc/CustomerCreditLineService";
 import { paymentTermService } from "@/lib/services/cxc/PaymentTermService";
 import { cashRegisterService } from "@/lib/services/CashRegisterService";
 import { sequenceService } from "@/lib/services/SequenceService";
 import type { InvoiceConsumptionLineInput } from "@/lib/types/inventory";
-import type { PaymentTermDTO } from "@/lib/types/cxc";
+import type { CustomerDocumentDTO, PaymentTermDTO } from "@/lib/types/cxc";
 import type {
   IInvoiceRepository,
   InvoiceInsertInput,
@@ -75,6 +76,35 @@ const mockItems: { invoice_id: number; line_number: number; description: string;
 
 const MAX_SEQUENCE_LOOKUP_ATTEMPTS = 2500;
 const MAX_INVOICE_PERSISTENCE_RETRIES = 3;
+
+export class InvoiceCancellationError extends Error {
+  constructor(message: string, public readonly status: number = 400) {
+    super(message);
+    this.name = "InvoiceCancellationError";
+  }
+}
+
+const SALE_TYPE_METADATA_KEY = "saleType";
+
+const getLinkedDocumentSaleType = (document: CustomerDocumentDTO | null): string | null => {
+  if (!document || !document.metadata) {
+    return null;
+  }
+  const metadata = document.metadata as Record<string, unknown> & { saleType?: unknown };
+  const raw = metadata[SALE_TYPE_METADATA_KEY];
+  return typeof raw === "string" ? raw.toUpperCase() : null;
+};
+
+const isCreditLinkedDocument = (document: CustomerDocumentDTO | null): boolean => {
+  if (!document) {
+    return false;
+  }
+  const saleType = getLinkedDocumentSaleType(document);
+  if (saleType === "CREDITO") {
+    return true;
+  }
+  return document.status === "PENDIENTE" || Math.abs(document.balanceAmount) > 0.0001;
+};
 
 export class InvoiceService {
   constructor(
@@ -346,21 +376,55 @@ export class InvoiceService {
   async cancelInvoice(invoiceId: number): Promise<void> {
     if (env.useMockData) {
       const rec = mockInvoices.find((i) => i.id === invoiceId);
-      if (rec && rec.status !== "ANULADA") {
+      if (!rec) {
+        throw new Error("Factura no encontrada");
+      }
+      await this.handleLinkedCustomerDocument(invoiceId);
+      if (rec.status !== "ANULADA") {
         rec.status = "ANULADA";
         rec.cancelled_at = toCentralClosedDate(new Date()).toISOString();
       }
       return;
     }
+
     const basic = await this.invoiceRepository.getInvoiceBasicById(invoiceId);
     if (!basic) {
       throw new Error("Factura no encontrada");
     }
+
+    await this.handleLinkedCustomerDocument(invoiceId);
+
     // Revertir movimientos de inventario referenciados por el número de factura
     await inventoryService.reverseInvoiceMovements({ invoiceNumber: basic.invoice_number });
     // Marcar factura como ANULADA (soft-cancel)
     const cancellationDate = toCentralClosedDate(new Date());
     await this.invoiceRepository.updateInvoiceStatus(invoiceId, "ANULADA", cancellationDate);
+  }
+
+  private async handleLinkedCustomerDocument(invoiceId: number): Promise<void> {
+    const linkedDocument = await customerDocumentService.getByInvoiceId(invoiceId);
+    if (!linkedDocument) {
+      return;
+    }
+
+    if (isCreditLinkedDocument(linkedDocument)) {
+      const [applied, received] = await Promise.all([
+        customerDocumentApplicationService.list({ appliedDocumentId: linkedDocument.id }),
+        customerDocumentApplicationService.list({ targetDocumentId: linkedDocument.id }),
+      ]);
+
+      if (applied.length > 0 || received.length > 0) {
+        throw new InvoiceCancellationError(
+          "No puedes anular esta factura porque su documento de CxC tiene pagos aplicados. Desaplica los pagos antes de continuar.",
+          409,
+        );
+      }
+    }
+
+    const alreadyCancelled = linkedDocument.status === "CANCELADO" && Math.abs(linkedDocument.balanceAmount) <= 0.0001;
+    if (!alreadyCancelled) {
+      await customerDocumentService.update(linkedDocument.id, { status: "CANCELADO", balanceAmount: 0 });
+    }
   }
 
   private async createInvoiceMock(

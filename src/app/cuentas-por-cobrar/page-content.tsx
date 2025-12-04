@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type ComponentType, type FormEvent } from "react";
-import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, CheckCircle2, CircleAlert, Clock3, FileSpreadsheet, HandCoins, LayoutDashboard, Loader2, Pencil, Plus, RefreshCw, Search, Users2, Ban } from "lucide-react";
+import { ArrowLeft, ArrowRight, BarChart3, CheckCircle2, CircleAlert, Clock3, FileSpreadsheet, HandCoins, Loader2, Pencil, Plus, Search, Users2, Ban, RefreshCw, Undo2 } from "lucide-react";
 
 import { FeatureGuardNotice } from "@/components/layout/feature-guard-notice";
 import { useSession } from "@/components/providers/session-provider";
@@ -49,10 +49,24 @@ type CustomerDocumentEntry = CustomerDocumentDTO;
 
 type DocumentApplicationEntry = CustomerDocumentApplicationDTO;
 
+type CancelDocumentState = {
+  open: boolean;
+  document: CustomerDocumentEntry | null;
+  loading: boolean;
+  submitting: boolean;
+  error: string | null;
+};
+
+const createInitialCancelState = (): CancelDocumentState => ({
+  open: false,
+  document: null,
+  loading: false,
+  submitting: false,
+  error: null,
+});
+
 const DATE_FORMATTER = new Intl.DateTimeFormat("es-MX", { dateStyle: "medium" });
 const DATETIME_FORMATTER = new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" });
-const PERCENT_FORMATTER = new Intl.NumberFormat("es-MX", { style: "percent", maximumFractionDigits: 0 });
-
 const formatDate = (value: string | null | undefined): string => {
   if (!value) {
     return "Sin registro";
@@ -81,12 +95,11 @@ const CREDIT_STATUS_LABELS: Record<CustomerEntry["creditStatus"], { label: strin
   BLOCKED: { label: "Bloqueado", tone: "text-destructive" },
 };
 
-type CxcMode = "menu" | "resumen" | "clientes" | "documentos" | "reportes";
+type CxcMode = "menu" | "clientes" | "documentos" | "reportes";
 type ModeCardKey = Exclude<CxcMode, "menu">;
 type LinkHref = Parameters<typeof Link>[0]["href"];
 
 const MODE_TITLES: Record<ModeCardKey, string> = {
-  resumen: "Panel general",
   clientes: "Control de clientes",
   documentos: "Documentos",
   reportes: "Reportes",
@@ -116,7 +129,7 @@ const cardIconClasses = "flex h-12 w-12 items-center justify-center rounded-2xl 
 function normalizeMode(value: string | null): CxcMode {
   if (!value) return "menu";
   if (value === "menu") return "menu";
-  return ["resumen", "clientes", "documentos", "reportes"].includes(value)
+  return ["clientes", "documentos", "reportes"].includes(value)
     ? (value as CxcMode)
     : "menu";
 }
@@ -156,14 +169,6 @@ export default function AccountsReceivablePage(): JSX.Element {
   const cards: ModeCardDefinition[] = useMemo(() => {
     return [
       {
-        key: "resumen",
-        title: "Panel general",
-        description: "Indicadores rápidos y seguimiento de cartera.",
-        icon: LayoutDashboard,
-        enabled: hasAccess,
-        href: buildModeHref("resumen"),
-      },
-      {
         key: "clientes",
         title: "Catálogo de clientes",
         description: "Altas, edición y líneas de crédito.",
@@ -201,7 +206,7 @@ export default function AccountsReceivablePage(): JSX.Element {
           <p className="text-sm font-semibold uppercase tracking-wide text-primary">Cartera de clientes</p>
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">Cuentas por Cobrar</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
-            Accede a los módulos de clientes, documentos, aplicaciones y reportes de cuentas por cobrar. Las opciones disponibles respetan tus permisos de sesión.
+            Accede a los módulos de clientes, documentos y reportes de cuentas por cobrar. Las opciones disponibles respetan tus permisos de sesión.
           </p>
         </header>
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
@@ -240,9 +245,6 @@ export default function AccountsReceivablePage(): JSX.Element {
 
   let content: JSX.Element | null = null;
   switch (mode) {
-    case "resumen":
-      content = <AccountsReceivableDashboardPage />;
-      break;
     case "clientes":
       content = (
         <CustomersCrudPage
@@ -503,12 +505,12 @@ type DocumentFilterState = {
 type DocumentStatusFilter = "ALL" | CustomerDocumentStatus;
 type SearchParamsLike = Pick<URLSearchParams, "get">;
 
-const DOCUMENT_FILTER_DEFAULTS: DocumentFilterState = {
+const createDocumentFilterDefaults = (): DocumentFilterState => ({
   customerId: null,
   documentType: "ALL",
-  dateFrom: null,
-  dateTo: null,
-};
+  dateFrom: getTodayIsoDate(),
+  dateTo: getTodayIsoDate(),
+});
 
 const parseNumericParam = (value: string | null): number | null => {
   if (!value) return null;
@@ -517,8 +519,11 @@ const parseNumericParam = (value: string | null): number | null => {
 };
 
 const parseDateParam = (value: string | null): string | null => {
-  if (!value) return null;
+  if (!value) return getTodayIsoDate();
   const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
 };
 
@@ -534,7 +539,7 @@ const parseDocumentTypeFilter = (value: string | null): FilterDocumentType => {
 };
 
 const parseDocumentFiltersFromParams = (params: SearchParamsLike): DocumentFilterState => ({
-  ...DOCUMENT_FILTER_DEFAULTS,
+  ...createDocumentFilterDefaults(),
   customerId: parseNumericParam(params.get("customerId")),
   documentType: parseDocumentTypeFilter(params.get("documentType")),
   dateFrom: parseDateParam(params.get("dateFrom")),
@@ -667,6 +672,7 @@ type ViewApplicationsState = {
   applied: DocumentApplicationEntry[];
   received: DocumentApplicationEntry[];
   lookup: Record<number, CustomerDocumentEntry>;
+  reversingId: number | null;
 };
 
 const createInitialViewState = (): ViewApplicationsState => ({
@@ -677,6 +683,7 @@ const createInitialViewState = (): ViewApplicationsState => ({
   applied: [],
   received: [],
   lookup: {},
+  reversingId: null,
 });
 
 const normalizeApplicationRecord = (record: Record<string, unknown>): DocumentApplicationEntry | null => {
@@ -1469,13 +1476,12 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
 
   const [filterDraft, setFilterDraft] = useState<DocumentFilterState>(() => parseDocumentFiltersFromParams(searchParams));
   const [activeFilters, setActiveFilters] = useState<DocumentFilterState>(() => parseDocumentFiltersFromParams(searchParams));
-  const [filterCustomers, setFilterCustomers] = useState<ComboboxOption<string>[]>([]);
+  const [filterCustomers, setFilterCustomers] = useState<CustomerDTO[]>([]);
   const [filterCustomersLoading, setFilterCustomersLoading] = useState(false);
   const [documents, setDocuments] = useState<CustomerDocumentEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<DocumentStatusFilter>(() => parseStatusFilterFromParams(searchParams));
-  const [search, setSearch] = useState("");
   const [viewState, setViewState] = useState<ViewApplicationsState>(() => createInitialViewState());
   const [applyState, setApplyState] = useState<ApplyModalState>(() => createInitialApplyState());
   const [pendingPromptId, setPendingPromptId] = useState<number | null>(() => {
@@ -1484,6 +1490,7 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   });
   const [createState, setCreateState] = useState<CreateDocumentState>(() => createInitialCreateState());
+  const [cancelState, setCancelState] = useState<CancelDocumentState>(() => createInitialCancelState());
   // Removed refs to force reload on every open to avoid stale data
   // const createCustomersLoadedRef = useRef(false);
   // const createPaymentTermsLoadedRef = useRef(false);
@@ -1556,7 +1563,7 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
   }, [filterDraft, statusFilter, syncDocumentsQuery, toast]);
 
   const handleClearFilters = useCallback(() => {
-    const nextFilters: DocumentFilterState = { ...DOCUMENT_FILTER_DEFAULTS };
+    const nextFilters: DocumentFilterState = createDocumentFilterDefaults();
     setFilterDraft(nextFilters);
     setActiveFilters(nextFilters);
     syncDocumentsQuery(nextFilters, statusFilter);
@@ -1713,12 +1720,13 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
         .map((record) => normalizeCustomerRecord(record as Record<string, unknown>))
         .filter((item): item is CustomerDTO => item !== null)
         .sort((a, b) => a.name.localeCompare(b.name, "es"));
-      const options: ComboboxOption<string>[] = normalized.map((customer) => ({
-        value: String(customer.id),
-        label: `${customer.code} • ${customer.name}`,
-        description: customer.paymentTermCode ? `Condición ${customer.paymentTermCode}` : undefined,
-      }));
-      setFilterCustomers(options);
+      const eligibleCustomers = normalized.filter((customer) => {
+        const code = customer.code.trim().toUpperCase();
+        const paymentTerm = customer.paymentTermCode?.trim().toUpperCase();
+        return code !== "CONTADO" && paymentTerm !== "CONTADO";
+      });
+      // Solo mostramos clientes distintos de contado para los filtros de documentos
+      setFilterCustomers(eligibleCustomers);
     } catch (err) {
       const message = err instanceof Error ? err.message : "No se pudieron obtener los clientes";
       toast({ variant: "warning", title: "Documentos", description: message });
@@ -1930,21 +1938,10 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
   }, [documents]);
 
   const filteredDocuments = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return documents
-      .filter((doc) => (statusFilter === "ALL" ? true : doc.status === statusFilter))
-      .filter((doc) => {
-        if (!term) return true;
-        const haystack = `${doc.documentNumber} ${doc.customerName} ${doc.reference ?? ""}`.toLowerCase();
-        return haystack.includes(term);
-      });
-  }, [documents, search, statusFilter]);
+    return documents.filter((doc) => (statusFilter === "ALL" ? true : doc.status === statusFilter));
+  }, [documents, statusFilter]);
 
   const filtersDirty = useMemo(() => !areDocumentFiltersEqual(filterDraft, activeFilters), [activeFilters, filterDraft]);
-
-  const handleRefresh = useCallback(() => {
-    void loadDocuments();
-  }, [loadDocuments]);
 
   const handleOpenApplications = useCallback(
     async (document: CustomerDocumentEntry) => {
@@ -1960,6 +1957,7 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
         applied: [],
         received: [],
         lookup: baseLookup,
+        reversingId: null,
       });
 
       const fetchApplications = async (url: string): Promise<DocumentApplicationEntry[]> => {
@@ -2037,6 +2035,37 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
   const handleCloseApplications = useCallback(() => {
     setViewState(createInitialViewState());
   }, []);
+
+  const handleReverseApplication = useCallback(async (application: DocumentApplicationEntry) => {
+    if (!canApplyDocuments) {
+      toast({ variant: "warning", title: "Aplicaciones", description: "No tienes permisos para revertir aplicaciones." });
+      return;
+    }
+    setViewState((prev) => (prev.open ? { ...prev, reversingId: application.id } : prev));
+    try {
+      const response = await fetch(`/api/cxc/documentos/aplicaciones/${application.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload?.message ?? "No se pudo revertir la aplicación";
+        throw new Error(message);
+      }
+      setViewState((prev) => ({
+        ...prev,
+        reversingId: null,
+        applied: prev.applied.filter((entry) => entry.id !== application.id),
+        received: prev.received.filter((entry) => entry.id !== application.id),
+      }));
+      toast({ variant: "success", title: "Aplicaciones", description: "Aplicación revertida correctamente." });
+      void loadDocuments();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo revertir la aplicación";
+      setViewState((prev) => ({ ...prev, reversingId: null }));
+      toast({ variant: "error", title: "Aplicaciones", description: message });
+    }
+  }, [canApplyDocuments, loadDocuments, toast]);
 
   const handleOpenApplyModal = useCallback(
     async (document: CustomerDocumentEntry) => {
@@ -2121,6 +2150,10 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
     setApplyState(createInitialApplyState());
   }, []);
 
+  const handleCloseCancelModal = useCallback(() => {
+    setCancelState(createInitialCancelState());
+  }, []);
+
   const handleApplyAmountChange = useCallback((targetId: number, value: string) => {
     const normalized = value.replace(/,/g, ".");
     setApplyState((prev) => ({
@@ -2137,6 +2170,59 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
       [field]: value,
     }));
   }, []);
+
+  const handleOpenCancelDocument = useCallback(async (document: CustomerDocumentEntry) => {
+    if (!canManageDocuments) {
+      toast({ variant: "warning", title: "Documentos", description: "No tienes permisos para anular documentos." });
+      return;
+    }
+    if (document.relatedInvoiceId) {
+      toast({
+        variant: "info",
+        title: "Documentos",
+        description: "Esta factura proviene del módulo de facturación. Anúlala desde su módulo de origen.",
+      });
+      return;
+    }
+
+    setCancelState({ open: true, document, loading: true, submitting: false, error: null });
+
+    const fetchApplicationCount = async (search: string): Promise<number> => {
+      const response = await fetch(`/api/cxc/documentos/aplicaciones?${search}`, {
+        cache: "no-store",
+        credentials: "include",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload?.message ?? "No se pudieron validar las aplicaciones del documento";
+        throw new Error(message);
+      }
+      const items: unknown[] = Array.isArray(payload?.items) ? payload.items : [];
+      return items.length;
+    };
+
+    try {
+      const [appliedCount, receivedCount] = await Promise.all([
+        fetchApplicationCount(`appliedDocumentId=${document.id}`),
+        fetchApplicationCount(`targetDocumentId=${document.id}`),
+      ]);
+
+      if (appliedCount > 0 || receivedCount > 0) {
+        setCancelState(createInitialCancelState());
+        toast({
+          variant: "warning",
+          title: "Documentos",
+          description: "No puedes anular un documento con aplicaciones activas. Reviértelas antes de continuar.",
+        });
+        return;
+      }
+
+      setCancelState((prev) => ({ ...prev, loading: false }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo validar las aplicaciones del documento";
+      setCancelState((prev) => ({ ...prev, loading: false, error: message }));
+    }
+  }, [canManageDocuments, toast]);
 
   const handleApplyFillMax = useCallback((targetId: number) => {
     setApplyState((prev) => {
@@ -2249,6 +2335,31 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
     }
   }, [applyState, loadDocuments, toast]);
 
+    const handleConfirmCancelDocument = useCallback(async () => {
+      if (!cancelState.document || cancelState.loading || cancelState.submitting) {
+        return;
+      }
+      setCancelState((prev) => ({ ...prev, submitting: true, error: null }));
+      try {
+        const response = await fetch(`/api/cxc/documentos/${cancelState.document.id}/cancel`, {
+          method: "POST",
+          credentials: "include",
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          const message = payload?.message ?? "No se pudo anular el documento";
+          throw new Error(message);
+        }
+        toast({ variant: "success", title: "Documentos", description: "Documento anulado correctamente." });
+        setCancelState(createInitialCancelState());
+        void loadDocuments();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "No se pudo anular el documento";
+        setCancelState((prev) => ({ ...prev, submitting: false, error: message }));
+        toast({ variant: "error", title: "Documentos", description: message });
+      }
+    }, [cancelState.document, cancelState.loading, cancelState.submitting, loadDocuments, toast]);
+
   useEffect(() => {
     if (pendingPromptId === null || loading) {
       return;
@@ -2284,31 +2395,26 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
-        <Button type="button" variant="outline" className="rounded-2xl" onClick={handleRefresh} disabled={loading}>
-          <RefreshCw className="mr-2 h-4 w-4" /> Refrescar
-        </Button>
-      </div>
       <DocumentsPanel
         documents={filteredDocuments}
         stats={stats}
         loading={loading}
         error={error}
-        search={search}
-        onSearchChange={setSearch}
         statusFilter={statusFilter}
         onStatusChange={handleStatusFilterChange}
         onRetry={loadDocuments}
         onViewApplications={handleOpenApplications}
         onApplyDocument={canApplyDocuments ? handleOpenApplyModal : undefined}
         canApply={canApplyDocuments}
+        onCancelDocument={canManageDocuments ? handleOpenCancelDocument : undefined}
+        canCancel={canManageDocuments}
         onCreateDocument={handleOpenCreateDocument}
         filterDraft={filterDraft}
         onFilterFieldChange={handleFilterFieldChange}
         onApplyFilters={handleApplyFilters}
         onClearFilters={handleClearFilters}
         filtersDirty={filtersDirty}
-        filterCustomerOptions={filterCustomers}
+        filterCustomers={filterCustomers}
         filterCustomersLoading={filterCustomersLoading}
       />
       <CreateDocumentModal
@@ -2327,7 +2433,19 @@ function CxcDocumentsPage({ canViewDocuments, canManageDocuments, canApplyDocume
         onFillAmount={handleApplyFillMax}
         onSubmit={handleApplySubmit}
       />
-      <DocumentApplicationsModal state={viewState} onClose={handleCloseApplications} onReload={handleReloadApplications} />
+      <CancelDocumentModal
+        state={cancelState}
+        onClose={handleCloseCancelModal}
+        onConfirm={handleConfirmCancelDocument}
+      />
+      <DocumentApplicationsModal
+        state={viewState}
+        onClose={handleCloseApplications}
+        onReload={handleReloadApplications}
+        canReverse={canApplyDocuments}
+        reversingId={viewState.reversingId}
+        onReverse={handleReverseApplication}
+      />
     </div>
   );
 }
@@ -2437,8 +2555,6 @@ export function AccountsReceivableDashboardPage(): JSX.Element {
   const canManageCustomers = isAdmin || hasSessionPermission(session, "customers.manage");
   const canViewDocuments = isAdmin || canViewBase || hasSessionPermission(session, "customer.documents.manage") || hasSessionPermission(session, "customer.collections.manage");
   const canApplyDocuments = isAdmin || hasSessionPermission(session, "customer.documents.apply");
-  const canManageCollections = isAdmin || hasSessionPermission(session, "customer.collections.manage");
-  const canManageDisputes = isAdmin || hasSessionPermission(session, "customer.disputes.manage");
 
   const [activeTab, setActiveTab] = useState<TabKey>("customers");
 
@@ -2452,7 +2568,6 @@ export function AccountsReceivableDashboardPage(): JSX.Element {
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
   const [documentStatusFilter, setDocumentStatusFilter] = useState<"ALL" | CustomerDocumentEntry["status"]>("PENDIENTE");
-  const [documentSearch, setDocumentSearch] = useState("");
 
   const [applications, setApplications] = useState<DocumentApplicationEntry[]>([]);
   const [applicationsLoading, setApplicationsLoading] = useState(false);
@@ -2631,32 +2746,6 @@ export function AccountsReceivableDashboardPage(): JSX.Element {
     }
   }, [canApplyDocuments, canViewDocuments, hasAccess, isAdmin, loadApplications, loadCustomers, loadDocuments]);
 
-  const handleOpenGestiones = useCallback(() => {
-    if (!canManageCollections) {
-      toast({ variant: "warning", title: "Gestiones", description: "No cuentas con permisos para gestionar cobranzas." });
-      return;
-    }
-    setActiveTab("documents");
-    toast({
-      variant: "info",
-      title: "Gestiones de cobranza",
-      description: "El registro UI se liberará en la siguiente fase. Mientras tanto puedes operar mediante /api/cxc/gestiones o cargar gestiones desde el ERP.",
-    });
-  }, [canManageCollections, toast]);
-
-  const handleOpenDisputas = useCallback(() => {
-    if (!canManageDisputes) {
-      toast({ variant: "warning", title: "Disputas", description: "No cuentas con permisos para gestionar disputas." });
-      return;
-    }
-    setActiveTab("documents");
-    toast({
-      variant: "info",
-      title: "Disputas de clientes",
-      description: "Consulta y registra disputas por ahora mediante /api/cxc/disputas. La vista de seguimiento se integrará pronto.",
-    });
-  }, [canManageDisputes, toast]);
-
   useEffect(() => {
     if (!hasAccess) {
       return;
@@ -2712,82 +2801,12 @@ export function AccountsReceivableDashboardPage(): JSX.Element {
     return { total, pending: pending.length, pendingAmount, overdue: overdue.length, overdueAmount, collected };
   }, [documents, todayIso]);
 
-  const documentAging = useMemo(() => {
-    const bucketTemplates = [
-      { key: "current", label: "Al corriente", description: "No vencidos", amount: 0, count: 0 },
-      { key: "d0_30", label: "0-30 días", description: "1-30 días vencidos", amount: 0, count: 0 },
-      { key: "d31_60", label: "31-60 días", description: "31-60 días vencidos", amount: 0, count: 0 },
-      { key: "d61_90", label: "61-90 días", description: "61-90 días vencidos", amount: 0, count: 0 },
-      { key: "d90_plus", label: "90+ días", description: "Más de 90 días vencidos", amount: 0, count: 0 },
-    ];
-
-    const now = new Date(todayIso);
-    const msPerDay = 1000 * 60 * 60 * 24;
-    let totalAmount = 0;
-    let overdueAmount = 0;
-
-    for (const doc of documents) {
-      if (doc.status !== "PENDIENTE") continue;
-      const amount = Math.max(0, doc.balanceAmount);
-      totalAmount += amount;
-      let daysOverdue = 0;
-      if (doc.dueDate) {
-        const due = new Date(doc.dueDate);
-        daysOverdue = Math.floor((now.getTime() - due.getTime()) / msPerDay);
-      }
-      let bucketIndex = 0;
-      if (doc.dueDate && daysOverdue > 0) {
-        overdueAmount += amount;
-        if (daysOverdue <= 30) bucketIndex = 1;
-        else if (daysOverdue <= 60) bucketIndex = 2;
-        else if (daysOverdue <= 90) bucketIndex = 3;
-        else bucketIndex = 4;
-      }
-      bucketTemplates[bucketIndex].amount += amount;
-      bucketTemplates[bucketIndex].count += 1;
-    }
-
-    return {
-      totalAmount,
-      overdueAmount,
-      buckets: bucketTemplates.map((bucket) => ({
-        key: bucket.key,
-        label: bucket.label,
-        description: bucket.description,
-        amount: bucket.amount,
-        count: bucket.count,
-        percentage: totalAmount > 0 ? bucket.amount / totalAmount : 0,
-      })),
-    };
-  }, [documents, todayIso]);
-
   const applicationsStats = useMemo(() => {
     const total = applications.length;
     const amount = applications.reduce((acc, item) => acc + item.amount, 0);
     const lastDate = applications[0]?.applicationDate ?? null;
     return { total, amount, lastDate };
   }, [applications]);
-
-  const highUsageCustomers = useMemo(() => {
-    return customers
-      .filter((customer) => customer.creditLimit > 0)
-      .map((customer) => {
-        const used = customer.creditUsed + customer.creditOnHold;
-        const usage = customer.creditLimit > 0 ? used / customer.creditLimit : 0;
-        return {
-          id: customer.id,
-          code: customer.code,
-          name: customer.name,
-          usage,
-          creditLimit: customer.creditLimit,
-          availableCredit: customer.availableCredit,
-          creditStatus: customer.creditStatus,
-        };
-      })
-      .filter((entry) => entry.usage >= 0.8)
-      .sort((a, b) => b.usage - a.usage)
-      .slice(0, 6);
-  }, [customers]);
 
   const filteredCustomers = useMemo(() => {
     const term = customerSearch.trim().toLowerCase();
@@ -2801,15 +2820,8 @@ export function AccountsReceivableDashboardPage(): JSX.Element {
   }, [customers, customerSearch, showInactiveCustomers]);
 
   const filteredDocuments = useMemo(() => {
-    const term = documentSearch.trim().toLowerCase();
-    return documents
-      .filter((doc) => (documentStatusFilter === "ALL" ? true : doc.status === documentStatusFilter))
-      .filter((doc) => {
-        if (!term) return true;
-        const haystack = `${doc.documentNumber} ${doc.customerName} ${doc.reference ?? ""}`.toLowerCase();
-        return haystack.includes(term);
-      });
-  }, [documents, documentSearch, documentStatusFilter]);
+    return documents.filter((doc) => (documentStatusFilter === "ALL" ? true : doc.status === documentStatusFilter));
+  }, [documents, documentStatusFilter]);
 
   const documentLookup = useMemo(() => {
     const map = new Map<number, CustomerDocumentEntry>();
@@ -2851,295 +2863,92 @@ export function AccountsReceivableDashboardPage(): JSX.Element {
     return guardContent;
   }
 
+  let activePanel: JSX.Element | null = null;
+  if (activeTab === "customers") {
+    activePanel = (
+      <CustomersPanel
+        customers={filteredCustomers}
+        stats={customerStats}
+        loading={customersLoading}
+        error={customersError}
+        search={customerSearch}
+        onSearchChange={setCustomerSearch}
+        showInactive={showInactiveCustomers}
+        onToggleInactive={() => setShowInactiveCustomers((prev) => !prev)}
+        onRetry={loadCustomers}
+        canManage={canManageCustomers}
+      />
+    );
+  } else if (activeTab === "documents") {
+    activePanel = (
+      <DocumentsPanel
+        documents={filteredDocuments}
+        stats={documentStats}
+        loading={documentsLoading}
+        error={documentsError}
+        statusFilter={documentStatusFilter}
+        onStatusChange={setDocumentStatusFilter}
+        onRetry={loadDocuments}
+      />
+    );
+  } else if (activeTab === "applications") {
+    activePanel = (
+      <ApplicationsPanel
+        applications={filteredApplications}
+        stats={applicationsStats}
+        loading={applicationsLoading}
+        error={applicationsError}
+        search={applicationSearch}
+        onSearchChange={setApplicationSearch}
+        onRetry={loadApplications}
+        lookup={documentLookup}
+      />
+    );
+  }
+
   return (
-    <section className="space-y-10 pb-16">
-      <header className="space-y-3">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div className="space-y-2">
-            <p className="text-sm font-semibold uppercase tracking-wide text-primary">Cartera de clientes</p>
-            <h1 className="text-3xl font-semibold tracking-tight text-foreground">Cuentas por Cobrar</h1>
-            <p className="max-w-2xl text-sm text-muted-foreground">
-              Consulta clientes, documentos y aplicaciones en un solo lugar. Los datos se sincronizan con las APIs CxC y respetan tus permisos.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
+    <section className="space-y-6 pb-16">
+      <header className="space-y-2">
+        <p className="text-sm font-semibold uppercase tracking-wide text-primary">Cartera de clientes</p>
+        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Cuentas por Cobrar</h1>
+        <p className="max-w-2xl text-sm text-muted-foreground">
+          Consulta clientes, documentos y aplicaciones en un solo lugar. Los datos se sincronizan con las APIs CxC y respetan tus permisos.
+        </p>
+      </header>
+
+      <Card className="rounded-3xl border bg-background/95 shadow-sm">
+        <CardContent className="space-y-6 p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-1 flex-wrap gap-2 rounded-3xl border border-muted bg-background/80 p-2">
+              {tabDefinitions.map(({ key, label, description, icon: Icon, enabled }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => enabled && setActiveTab(key)}
+                  className={cn(
+                    "flex min-w-[160px] flex-1 flex-col rounded-2xl px-4 py-3 text-left transition",
+                    enabled ? "cursor-pointer" : "cursor-not-allowed opacity-40",
+                    activeTab === key ? "bg-primary text-primary-foreground shadow-lg" : "bg-transparent text-foreground hover:bg-muted"
+                  )}
+                >
+                  <span className="flex items-center gap-2 text-sm font-semibold"><Icon className="h-4 w-4" /> {label}</span>
+                  <span className={cn("text-xs", activeTab === key ? "text-primary-foreground/80" : "text-muted-foreground")}>{description}</span>
+                </button>
+              ))}
+            </div>
             <Button type="button" variant="outline" className="rounded-2xl px-4" onClick={() => refreshAll()}>
               <RefreshCw className="mr-2 h-4 w-4" /> Refrescar datos
             </Button>
           </div>
-        </div>
-        <div className="flex flex-wrap gap-2 rounded-3xl border border-muted bg-background/80 p-2">
-          {tabDefinitions.map(({ key, label, description, icon: Icon, enabled }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => enabled && setActiveTab(key)}
-              className={cn(
-                "flex min-w-[160px] flex-1 flex-col rounded-2xl px-4 py-3 text-left transition",
-                enabled ? "cursor-pointer" : "cursor-not-allowed opacity-40",
-                activeTab === key ? "bg-primary text-primary-foreground shadow-lg" : "bg-transparent text-foreground hover:bg-muted"
-              )}
-            >
-              <span className="flex items-center gap-2 text-sm font-semibold"><Icon className="h-4 w-4" /> {label}</span>
-              <span className={cn("text-xs", activeTab === key ? "text-primary-foreground/80" : "text-muted-foreground")}>{description}</span>
-            </button>
-          ))}
-        </div>
-      </header>
 
-      <DashboardOverview
-        aging={documentAging}
-        highUsage={highUsageCustomers}
-        pendingAmount={documentStats.pendingAmount}
-        overdueAmount={documentStats.overdueAmount}
-        canManageCollections={canManageCollections}
-        canManageDisputes={canManageDisputes}
-        onOpenGestiones={handleOpenGestiones}
-        onOpenDisputas={handleOpenDisputas}
-      />
-
-      {activeTab === "customers" ? (
-        <CustomersPanel
-          customers={filteredCustomers}
-          stats={customerStats}
-          loading={customersLoading}
-          error={customersError}
-          search={customerSearch}
-          onSearchChange={setCustomerSearch}
-          showInactive={showInactiveCustomers}
-          onToggleInactive={() => setShowInactiveCustomers((prev) => !prev)}
-          onRetry={loadCustomers}
-          canManage={canManageCustomers}
-        />
-      ) : null}
-
-      {activeTab === "documents" ? (
-        <DocumentsPanel
-          documents={filteredDocuments}
-          stats={documentStats}
-          loading={documentsLoading}
-          error={documentsError}
-          search={documentSearch}
-          onSearchChange={setDocumentSearch}
-          statusFilter={documentStatusFilter}
-          onStatusChange={setDocumentStatusFilter}
-          onRetry={loadDocuments}
-        />
-      ) : null}
-
-      {activeTab === "applications" ? (
-        <ApplicationsPanel
-          applications={filteredApplications}
-          stats={applicationsStats}
-          loading={applicationsLoading}
-          error={applicationsError}
-          search={applicationSearch}
-          onSearchChange={setApplicationSearch}
-          onRetry={loadApplications}
-          lookup={documentLookup}
-        />
-      ) : null}
-    </section>
-  );
-}
-
-type AgingSummary = {
-  totalAmount: number;
-  overdueAmount: number;
-  buckets: Array<{
-    key: string;
-    label: string;
-    description: string;
-    amount: number;
-    count: number;
-    percentage: number;
-  }>;
-};
-
-type HighUsageEntry = {
-  id: number;
-  code: string;
-  name: string;
-  usage: number;
-  creditLimit: number;
-  availableCredit: number;
-  creditStatus: CustomerEntry["creditStatus"];
-};
-
-export function DashboardOverview({
-  aging,
-  highUsage,
-  pendingAmount,
-  overdueAmount,
-  canManageCollections,
-  canManageDisputes,
-  onOpenGestiones,
-  onOpenDisputas,
-}: {
-  aging: AgingSummary;
-  highUsage: HighUsageEntry[];
-  pendingAmount: number;
-  overdueAmount: number;
-  canManageCollections: boolean;
-  canManageDisputes: boolean;
-  onOpenGestiones: () => void;
-  onOpenDisputas: () => void;
-}) {
-  return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <AgingBreakdownCard aging={aging} />
-      <HighUsageCard items={highUsage} />
-      <QuickActionsCard
-        pendingAmount={pendingAmount}
-        overdueAmount={overdueAmount}
-        canManageCollections={canManageCollections}
-        canManageDisputes={canManageDisputes}
-        onOpenGestiones={onOpenGestiones}
-        onOpenDisputas={onOpenDisputas}
-      />
-    </div>
-  );
-}
-
-function AgingBreakdownCard({ aging }: { aging: AgingSummary }) {
-  return (
-    <Card className="rounded-3xl border bg-background/95 shadow-sm">
-      <CardHeader className="flex flex-row items-start justify-between pb-3">
-        <div>
-          <CardTitle className="text-lg font-semibold">Aging de cartera</CardTitle>
-          <CardDescription>Saldo pendiente agrupado por días de vencimiento.</CardDescription>
-        </div>
-        <div className="rounded-2xl bg-muted p-3 text-muted-foreground">
-          <Clock3 className="h-5 w-5" />
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {aging.buckets.map((bucket) => {
-          const percentageValue = Math.max(0, Math.min(100, Math.round(bucket.percentage * 100)));
-          return (
-            <div key={bucket.key} className="space-y-1.5 rounded-2xl border border-muted/60 bg-background/80 px-3 py-2">
-              <div className="flex items-center justify-between text-sm font-semibold text-foreground">
-                <span>{bucket.label}</span>
-                <span>{formatCurrency(bucket.amount, { currency: "local" })}</span>
-              </div>
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>{bucket.description}</span>
-                <span>
-                  {bucket.count} doc · {PERCENT_FORMATTER.format(bucket.percentage)}
-                </span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full bg-primary" style={{ width: `${percentageValue}%` }} />
-              </div>
+          {activePanel ?? (
+            <div className="rounded-2xl border border-dashed border-muted px-6 py-10 text-center text-sm text-muted-foreground">
+              Selecciona una pestaña disponible para continuar.
             </div>
-          );
-        })}
-        <div className="rounded-2xl border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary">
-          Saldo pendiente total: {formatCurrency(aging.totalAmount, { currency: "local" })} · Vencido: {formatCurrency(aging.overdueAmount, { currency: "local" })}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function HighUsageCard({ items }: { items: HighUsageEntry[] }) {
-  return (
-    <Card className="rounded-3xl border bg-background/95 shadow-sm">
-      <CardHeader className="flex flex-row items-start justify-between pb-3">
-        <div>
-          <CardTitle className="text-lg font-semibold">Clientes al límite</CardTitle>
-          <CardDescription>Alertas al superar el 80% del crédito autorizado.</CardDescription>
-        </div>
-        <div className="rounded-2xl bg-muted p-3 text-muted-foreground">
-          <AlertTriangle className="h-5 w-5" />
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {items.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-muted px-3 py-4 text-sm text-muted-foreground">
-            No hay clientes por arriba del 80% de su línea.
-          </div>
-        ) : (
-          items.map((item) => {
-            const usagePercent = Math.min(100, Math.round(item.usage * 100));
-            const statusMeta = CREDIT_STATUS_LABELS[item.creditStatus];
-            return (
-              <div key={item.id} className="space-y-1.5 rounded-2xl border border-destructive/40 bg-destructive/5 px-3 py-2">
-                <div className="flex items-center justify-between text-sm font-semibold text-destructive">
-                  <span>{item.code} • {item.name}</span>
-                  <span>{usagePercent}% usado</span>
-                </div>
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{statusMeta.label}</span>
-                  <span>Disponible: {formatCurrency(item.availableCredit, { currency: "local" })}</span>
-                </div>
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-destructive/20">
-                  <div className="h-full rounded-full bg-destructive" style={{ width: `${usagePercent}%` }} />
-                </div>
-              </div>
-            );
-          })
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function QuickActionsCard({
-  pendingAmount,
-  overdueAmount,
-  canManageCollections,
-  canManageDisputes,
-  onOpenGestiones,
-  onOpenDisputas,
-}: {
-  pendingAmount: number;
-  overdueAmount: number;
-  canManageCollections: boolean;
-  canManageDisputes: boolean;
-  onOpenGestiones: () => void;
-  onOpenDisputas: () => void;
-}) {
-  return (
-    <Card className="rounded-3xl border bg-background/95 shadow-sm">
-      <CardHeader className="flex flex-row items-start justify-between pb-3">
-        <div>
-          <CardTitle className="text-lg font-semibold">Gestiones rápidas</CardTitle>
-          <CardDescription>Da seguimiento a cobranza y reclamos.</CardDescription>
-        </div>
-        <div className="rounded-2xl bg-muted p-3 text-muted-foreground">
-          <HandCoins className="h-5 w-5" />
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="rounded-2xl border border-muted/60 bg-background/80 px-3 py-2 text-xs text-muted-foreground">
-          Saldo pendiente: {formatCurrency(pendingAmount, { currency: "local" })} · Vencido: {formatCurrency(overdueAmount, { currency: "local" })}
-        </div>
-        <div className="space-y-2">
-          <Button type="button" onClick={onOpenGestiones} className="flex w-full items-center justify-between rounded-2xl px-4 py-2" variant={canManageCollections ? "default" : "outline"}>
-            <span className="text-left">
-              <span className="block text-sm font-semibold">Gestiones de cobranza</span>
-              <span className="block text-xs opacity-80">Registrar recordatorios y compromisos</span>
-            </span>
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-          <Button type="button" onClick={onOpenDisputas} className="flex w-full items-center justify-between rounded-2xl px-4 py-2" variant={canManageDisputes ? "default" : "outline"}>
-            <span className="text-left">
-              <span className="block text-sm font-semibold">Disputas de clientes</span>
-              <span className="block text-xs opacity-80">Documentar reclamos y ajustes</span>
-            </span>
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-        </div>
-        <div className="rounded-2xl border border-muted/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-          Las capturas UI se publicarán pronto. Mientras tanto, utiliza los endpoints
-          {" "}
-          <code className="rounded bg-background px-1 py-0.5 text-[11px] font-semibold text-foreground">/api/cxc/gestiones</code>
-          {" y "}
-          <code className="rounded bg-background px-1 py-0.5 text-[11px] font-semibold text-foreground">/api/cxc/disputas</code>.
-        </div>
-      </CardContent>
-    </Card>
+          )}
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
@@ -3293,49 +3102,47 @@ export function DocumentsPanel({
   stats,
   loading,
   error,
-  search,
-  onSearchChange,
   statusFilter,
   onStatusChange,
   onRetry,
   onViewApplications,
   onApplyDocument,
   canApply,
+  onCancelDocument,
+  canCancel,
   onCreateDocument,
   filterDraft,
   onFilterFieldChange,
   onApplyFilters,
   onClearFilters,
   filtersDirty = false,
-  filterCustomerOptions = [],
+  filterCustomers = [],
   filterCustomersLoading = false,
 }: {
   documents: CustomerDocumentEntry[];
   stats: { total: number; pending: number; pendingAmount: number; overdue: number; overdueAmount: number; collected: number };
   loading: boolean;
   error: string | null;
-  search: string;
-  onSearchChange: (value: string) => void;
   statusFilter: DocumentStatusFilter;
   onStatusChange: (value: DocumentStatusFilter) => void;
   onRetry: () => void;
   onViewApplications?: (document: CustomerDocumentEntry) => void;
   onApplyDocument?: (document: CustomerDocumentEntry) => void;
   canApply?: boolean;
+  onCancelDocument?: (document: CustomerDocumentEntry) => void;
+  canCancel?: boolean;
   onCreateDocument?: () => void;
   filterDraft?: DocumentFilterState;
   onFilterFieldChange?: <K extends keyof DocumentFilterState>(field: K, value: DocumentFilterState[K]) => void;
   onApplyFilters?: () => void;
   onClearFilters?: () => void;
   filtersDirty?: boolean;
-  filterCustomerOptions?: ComboboxOption<string>[];
+  filterCustomers?: CustomerDTO[];
   filterCustomersLoading?: boolean;
 }) {
-  const showActions = Boolean(onViewApplications || (canApply && onApplyDocument));
-  const customerFilterOptionsWithAll = useMemo<ComboboxOption<string>[]>(
-    () => [{ value: "", label: "Todos los clientes" }, ...(filterCustomerOptions ?? [])],
-    [filterCustomerOptions],
-  );
+  const showActions = Boolean(onViewApplications || (canApply && onApplyDocument) || (canCancel && onCancelDocument));
+  const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const customerFilterList = filterCustomers ?? [];
   const filterSupport = filterDraft && onFilterFieldChange && onApplyFilters && onClearFilters
     ? {
         draft: filterDraft,
@@ -3345,6 +3152,33 @@ export function DocumentsPanel({
       }
     : null;
   const filtersAreDirty = Boolean(filterSupport && filtersDirty);
+  const selectedCustomer = filterSupport?.draft.customerId
+    ? customerFilterList.find((customer) => customer.id === filterSupport.draft.customerId) ?? null
+    : null;
+  const selectedCustomerLabel = filterCustomersLoading
+    ? "Cargando clientes…"
+    : selectedCustomer
+      ? `${selectedCustomer.code} • ${selectedCustomer.name}`
+      : filterSupport?.draft.customerId
+        ? `Cliente #${filterSupport.draft.customerId}`
+        : "Todos los clientes";
+  const customerPickerDisabled = !filterSupport;
+
+  const openCustomerPicker = (): void => {
+    if (customerPickerDisabled || !filterSupport) return;
+    setCustomerPickerOpen(true);
+  };
+
+  const handleFilterCustomerSelect = (customerId: number): void => {
+    if (!filterSupport) return;
+    filterSupport.onFieldChange("customerId", customerId);
+    setCustomerPickerOpen(false);
+  };
+
+  const handleClearCustomerFilter = (): void => {
+    if (!filterSupport) return;
+    filterSupport.onFieldChange("customerId", null);
+  };
 
   return (
     <div className="space-y-6">
@@ -3375,16 +3209,7 @@ export function DocumentsPanel({
               <CardTitle className="text-lg font-semibold">Documentos de clientes</CardTitle>
               <CardDescription>Facturas, recibos, notas y retenciones aplicadas.</CardDescription>
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div className="flex flex-1 items-center gap-2 rounded-2xl border border-muted bg-background px-3">
-                <Search className="h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(event) => onSearchChange(event.target.value)}
-                  placeholder="Buscar documento, cliente o referencia"
-                  className="h-9 border-none px-0"
-                />
-              </div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
               <div className="flex gap-2 rounded-2xl border border-muted bg-background px-2 py-1">
                 <Button
                   type="button"
@@ -3427,21 +3252,47 @@ export function DocumentsPanel({
         <CardContent className="space-y-4 pt-4">
           {filterSupport ? (
             <div className="space-y-3 rounded-3xl border border-muted/60 bg-muted/10 p-4">
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
                 <div className="space-y-1">
                   <Label className="text-xs uppercase text-muted-foreground">Cliente</Label>
-                  <Combobox<string>
-                    value={filterSupport.draft.customerId ? String(filterSupport.draft.customerId) : ""}
-                    onChange={(value) => {
-                      const numeric = value ? Number(value) : NaN;
-                      filterSupport.onFieldChange("customerId", Number.isFinite(numeric) && numeric > 0 ? numeric : null);
-                    }}
-                    options={customerFilterOptionsWithAll}
-                    placeholder={filterCustomersLoading ? "Cargando clientes" : "Todos los clientes"}
-                    emptyText={filterCustomersLoading ? "Cargando opciones" : "Sin coincidencias"}
-                    disabled={filterCustomersLoading}
-                    className="rounded-2xl"
-                  />
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <div
+                        className={cn(
+                          "flex-1 rounded-2xl border border-input bg-background px-3 py-2 text-sm shadow-sm transition",
+                          !customerPickerDisabled && filterSupport ? "cursor-pointer hover:border-primary" : "cursor-not-allowed opacity-70"
+                        )}
+                        role="button"
+                        tabIndex={customerPickerDisabled || !filterSupport ? -1 : 0}
+                        onClick={openCustomerPicker}
+                        onDoubleClick={openCustomerPicker}
+                        onKeyDown={(event) => {
+                          if (!customerPickerDisabled && filterSupport && (event.key === "Enter" || event.key === " ")) {
+                            event.preventDefault();
+                            openCustomerPicker();
+                          }
+                        }}
+                        title={customerPickerDisabled ? "Filtros inactivos" : "Doble clic para seleccionar cliente"}
+                      >
+                        <span className={cn(filterCustomersLoading ? "text-muted-foreground" : "text-foreground")}>{selectedCustomerLabel}</span>
+                      </div>
+                      {filterSupport.draft.customerId ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="rounded-2xl"
+                          onClick={handleClearCustomerFilter}
+                          title="Quitar filtro de cliente"
+                        >
+                          <Ban className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+                    </div>
+                    <p className="text-xs text-muted-foreground">Solo clientes con condiciones distintas a CONTADO.</p>
+                    {!filterCustomersLoading && customerFilterList.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No hay clientes con crédito disponibles.</p>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs uppercase text-muted-foreground">Tipo</Label>
@@ -3469,14 +3320,17 @@ export function DocumentsPanel({
                     className="rounded-2xl"
                   />
                 </div>
-              </div>
-              <div className="flex flex-wrap justify-end gap-2">
-                <Button type="button" variant="ghost" className="rounded-2xl" onClick={filterSupport.onClearFilters}>
-                  Limpiar
-                </Button>
-                <Button type="button" className="rounded-2xl" onClick={filterSupport.onApplyFilters} disabled={!filtersAreDirty}>
-                  Aplicar filtros
-                </Button>
+                <div className="space-y-1">
+                  <Label className="text-xs uppercase text-muted-foreground text-right block">Acciones</Label>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button type="button" variant="outline" className="rounded-2xl" onClick={filterSupport.onClearFilters}>
+                      Limpiar
+                    </Button>
+                    <Button type="button" className="rounded-2xl" onClick={filterSupport.onApplyFilters} disabled={!filtersAreDirty}>
+                      Aplicar filtros
+                    </Button>
+                  </div>
+                </div>
               </div>
             </div>
           ) : null}
@@ -3523,6 +3377,11 @@ export function DocumentsPanel({
                         isCreditDocumentType(doc.documentType) &&
                         doc.balanceAmount > 0,
                       );
+                      const allowCancel = Boolean(
+                        canCancel &&
+                        onCancelDocument &&
+                        doc.status !== "CANCELADO",
+                      );
                       return (
                         <tr key={doc.id} className="rounded-2xl border border-transparent bg-background/80 shadow-sm transition hover:border-primary/40">
                           <td className="px-3 py-3">
@@ -3562,6 +3421,16 @@ export function DocumentsPanel({
                                     Movimientos
                                   </Button>
                                 ) : null}
+                                {allowCancel ? (
+                                  <Button
+                                    type="button"
+                                    variant="destructive"
+                                    className="rounded-2xl"
+                                    onClick={() => onCancelDocument?.(doc)}
+                                  >
+                                    <Ban className="mr-2 h-4 w-4" /> Anular
+                                  </Button>
+                                ) : null}
                                 {allowApply ? (
                                   <Button type="button" className="rounded-2xl" onClick={() => onApplyDocument?.(doc)}>
                                     <HandCoins className="mr-2 h-4 w-4" /> Aplicar
@@ -3580,6 +3449,18 @@ export function DocumentsPanel({
           ) : null}
         </CardContent>
       </Card>
+      {filterSupport ? (
+        <CustomerSearchModal
+          open={customerPickerOpen}
+          onClose={() => setCustomerPickerOpen(false)}
+          customers={customerFilterList}
+          onSelect={handleFilterCustomerSelect}
+          title="Selecciona un cliente"
+          description="Filtra los documentos por clientes con crédito."
+          searchPlaceholder="Buscar por código, nombre o RUC…"
+          emptyMessage="No hay clientes con crédito disponibles."
+        />
+      ) : null}
     </div>
   );
 }
@@ -3592,14 +3473,33 @@ type CreateDocumentModalProps = {
   onReloadCatalogs: () => void;
 };
 
+type CancelDocumentModalProps = {
+  state: CancelDocumentState;
+  onClose: () => void;
+  onConfirm: () => void;
+};
+
 type CustomerSearchModalProps = {
   open: boolean;
   onClose: () => void;
   customers: CustomerDTO[];
   onSelect: (customerId: number) => void;
+  title?: string;
+  description?: string;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
 };
 
-function CustomerSearchModal({ open, onClose, customers, onSelect }: CustomerSearchModalProps) {
+function CustomerSearchModal({
+  open,
+  onClose,
+  customers,
+  onSelect,
+  title = "Buscar cliente",
+  description = "Selecciona un cliente para el documento.",
+  searchPlaceholder = "Buscar por código, nombre o RUC...",
+  emptyMessage = "No se encontraron clientes.",
+}: CustomerSearchModalProps) {
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
@@ -3618,29 +3518,33 @@ function CustomerSearchModal({ open, onClose, customers, onSelect }: CustomerSea
   if (!open) return null;
 
   return (
-    <Modal open={open} onClose={onClose} title="Buscar cliente" description="Selecciona un cliente para el documento.">
+    <Modal open={open} onClose={onClose} title={title} description={description}>
       <div className="space-y-4">
         <div className="flex items-center gap-2 rounded-2xl border border-muted px-3">
           <Search className="h-4 w-4 text-muted-foreground" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar por código, nombre o RUC..."
+            placeholder={searchPlaceholder}
             className="border-none shadow-none focus-visible:ring-0"
             autoFocus
           />
         </div>
         <div className="max-h-[300px] overflow-y-auto rounded-2xl border border-muted">
           {filtered.length === 0 ? (
-            <div className="p-4 text-center text-sm text-muted-foreground">No se encontraron clientes.</div>
+            <div className="p-4 text-center text-sm text-muted-foreground">{emptyMessage}</div>
           ) : (
             <div className="divide-y">
               {filtered.map((customer) => (
                 <button
                   key={customer.id}
                   type="button"
-                  className="w-full px-4 py-3 text-left hover:bg-muted/50"
+                  className="w-full px-4 py-3 text-left transition hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                   onClick={() => {
+                    onSelect(customer.id);
+                    onClose();
+                  }}
+                  onDoubleClick={() => {
                     onSelect(customer.id);
                     onClose();
                   }}
@@ -4083,13 +3987,70 @@ function ApplyDocumentModal({ state, summary, onClose, onAmountChange, onFillAmo
   );
 }
 
+function CancelDocumentModal({ state, onClose, onConfirm }: CancelDocumentModalProps): JSX.Element | null {
+  const { open, document, loading, submitting, error } = state;
+  if (!open || !document) {
+    return null;
+  }
+
+  const disableActions = loading || submitting;
+
+  return (
+    <Modal
+      open={open}
+      onClose={() => {
+        if (disableActions) return;
+        onClose();
+      }}
+      title="Anular documento"
+      description="Esta acción revertirá el saldo pendiente y marcará el documento como CANCELADO."
+    >
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-semibold">Documento</p>
+          <p>{document.documentType} • {document.documentNumber}</p>
+          <p className="mt-1 text-xs text-destructive/80">Cliente: {document.customerCode} • {document.customerName}</p>
+        </div>
+        {loading ? (
+          <div className="flex items-center gap-2 rounded-2xl border border-dashed border-muted p-4 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Validando aplicaciones…
+          </div>
+        ) : null}
+        {error ? (
+          <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>
+        ) : null}
+        <p className="text-sm text-muted-foreground">
+          Confirma si deseas anular el documento. Esta acción no se puede deshacer.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" className="rounded-2xl" onClick={onClose} disabled={submitting}>
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            className="rounded-2xl"
+            disabled={disableActions}
+            onClick={onConfirm}
+          >
+            {submitting ? "Anulando…" : "Anular documento"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 type DocumentApplicationsModalProps = {
   state: ViewApplicationsState;
   onClose: () => void;
   onReload: () => void;
+  canReverse: boolean;
+  reversingId: number | null;
+  onReverse: (entry: DocumentApplicationEntry) => void;
 };
 
-function DocumentApplicationsModal({ state, onClose, onReload }: DocumentApplicationsModalProps): JSX.Element | null {
+function DocumentApplicationsModal({ state, onClose, onReload, canReverse, reversingId, onReverse }: DocumentApplicationsModalProps): JSX.Element | null {
   if (!state.open || !state.document) {
     return null;
   }
@@ -4102,10 +4063,11 @@ function DocumentApplicationsModal({ state, onClose, onReload }: DocumentApplica
     getId: (entry: DocumentApplicationEntry) => number,
     emptyText: string,
   ) => {
+    const columns = canReverse ? 5 : 4;
     if (loading) {
       return (
         <tr>
-          <td colSpan={4} className="px-3 py-6 text-center text-sm text-muted-foreground">
+          <td colSpan={columns} className="px-3 py-6 text-center text-sm text-muted-foreground">
             <div className="flex items-center justify-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin" /> Cargando aplicaciones…
             </div>
@@ -4116,7 +4078,7 @@ function DocumentApplicationsModal({ state, onClose, onReload }: DocumentApplica
     if (entries.length === 0) {
       return (
         <tr>
-          <td colSpan={4} className="px-3 py-6 text-center text-sm text-muted-foreground">
+          <td colSpan={columns} className="px-3 py-6 text-center text-sm text-muted-foreground">
             {emptyText}
           </td>
         </tr>
@@ -4140,6 +4102,24 @@ function DocumentApplicationsModal({ state, onClose, onReload }: DocumentApplica
             {entry.notes ? <span className="block">Notas: {entry.notes}</span> : null}
             {!entry.reference && !entry.notes ? <span className="block">Sin detalles adicionales</span> : null}
           </td>
+          {canReverse ? (
+            <td className="px-3 py-3 text-right">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl"
+                onClick={() => onReverse(entry)}
+                disabled={reversingId === entry.id}
+              >
+                {reversingId === entry.id ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Undo2 className="mr-2 h-4 w-4" />
+                )}
+                Reversar
+              </Button>
+            </td>
+          ) : null}
         </tr>
       );
     });
@@ -4181,6 +4161,7 @@ function DocumentApplicationsModal({ state, onClose, onReload }: DocumentApplica
                   <th className="px-3 py-2">Aplicación</th>
                   <th className="px-3 py-2">Monto</th>
                   <th className="px-3 py-2">Detalles</th>
+                  {canReverse ? <th className="px-3 py-2 text-right">Acciones</th> : null}
                 </tr>
               </thead>
               <tbody>{renderApplicationRows(applied, (entry) => lookup[entry.targetDocumentId], (entry) => entry.targetDocumentId, "Sin aplicaciones registradas.")}</tbody>
@@ -4201,6 +4182,7 @@ function DocumentApplicationsModal({ state, onClose, onReload }: DocumentApplica
                   <th className="px-3 py-2">Aplicación</th>
                   <th className="px-3 py-2">Monto</th>
                   <th className="px-3 py-2">Detalles</th>
+                  {canReverse ? <th className="px-3 py-2 text-right">Acciones</th> : null}
                 </tr>
               </thead>
               <tbody>{renderApplicationRows(received, (entry) => lookup[entry.appliedDocumentId], (entry) => entry.appliedDocumentId, "Sin abonos registrados.")}</tbody>
