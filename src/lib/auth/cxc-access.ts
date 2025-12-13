@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
 import { forbiddenResponse, hasPermission, isAdministrator, requireSession } from "@/lib/auth/access";
+import { env } from "@/lib/env";
 
 export const CXC_PERMISSIONS = {
   MENU_VIEW: "menu.cxc.view",
@@ -22,10 +24,30 @@ type RequireCxCPermissionOptions = {
 
 type RequireResult = Awaited<ReturnType<typeof requireSession>>;
 
+/**
+ * Require CXC permissions for an API route.
+ * 
+ * IMPORTANT: This guard also verifies that the system is running in retail mode.
+ * CXC APIs are completely disabled in restaurant mode, regardless of user permissions.
+ */
 export async function requireCxCPermissions(
   request: NextRequest,
   options: RequireCxCPermissionOptions,
-): Promise<RequireResult> {
+): Promise<RequireResult | { response: NextResponse }> {
+  // First check: CXC is only available in retail mode
+  if (!env.features.retailModeEnabled) {
+    return {
+      response: NextResponse.json(
+        {
+          success: false,
+          message: "El módulo de Cuentas por Cobrar no está disponible en modo restaurante",
+          code: "FEATURE_DISABLED",
+        },
+        { status: 403 }
+      ),
+    };
+  }
+
   const sessionResult = await requireSession(request, { message: options.message });
   if ("response" in sessionResult) {
     return sessionResult;
@@ -41,3 +63,11 @@ export async function requireCxCPermissions(
 
   return sessionResult;
 }
+
+/**
+ * Check if CXC features are enabled (retail mode).
+ */
+export function isCxCEnabled(): boolean {
+  return env.features.retailModeEnabled;
+}
+

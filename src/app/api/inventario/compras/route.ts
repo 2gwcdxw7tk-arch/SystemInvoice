@@ -1,35 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 
 import { inventoryService } from "@/lib/services/InventoryService";
 import { requireAdministrator } from "@/lib/auth/access";
-
-const numericInput = z.union([z.number(), z.string().trim().min(1)]);
-const quantitySchema = numericInput.refine((value) => {
-  const num = typeof value === "number" ? value : Number(String(value).replace(/,/g, "."));
-  return Number.isFinite(num) && num > 0;
-}, { message: "La cantidad debe ser mayor a 0" });
-const costSchema = z.union([z.number(), z.string().trim()]).optional().refine((value) => {
-  if (value === undefined) return true;
-  const num = typeof value === "number" ? value : Number(String(value).replace(/,/g, "."));
-  return Number.isFinite(num) && num >= 0;
-}, { message: "Costo inválido" });
-
-const purchaseSchema = z.object({
-  document_number: z.string().trim().min(1).max(120),
-  supplier_name: z.string().trim().min(1).max(160),
-  occurred_at: z.string().trim().optional(),
-  status: z.enum(["PENDIENTE", "PARCIAL", "PAGADA"]).optional(),
-  warehouse_code: z.string().trim().min(1).max(20),
-  notes: z.string().trim().max(400).optional(),
-  lines: z.array(z.object({
-    article_code: z.string().trim().min(1).max(40),
-    quantity: quantitySchema,
-    unit: z.enum(["STORAGE", "RETAIL"]),
-    cost_per_unit: costSchema,
-    notes: z.string().trim().max(300).optional(),
-  })).min(1),
-});
+import { registerPurchaseSchema } from "@/lib/schemas/inventory";
 
 export async function GET(request: NextRequest) {
   const access = await requireAdministrator(request, "Solo un administrador puede consultar compras de inventario");
@@ -57,7 +30,7 @@ export async function POST(request: NextRequest) {
   if ("response" in access) return access.response;
 
   const body = await request.json().catch(() => null);
-  const parsed = purchaseSchema.safeParse(body);
+  const parsed = registerPurchaseSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
   }

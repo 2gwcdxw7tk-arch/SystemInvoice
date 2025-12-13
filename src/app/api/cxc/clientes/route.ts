@@ -1,54 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 
 import { CXC_PERMISSIONS, requireCxCPermissions } from "@/lib/auth/cxc-access";
 import { customerService } from "@/lib/services/cxc/CustomerService";
-
-const moneyField = (min: number) =>
-  z.preprocess((value) => {
-    if (typeof value === "number") {
-      return value;
-    }
-    if (typeof value === "string" && value.trim().length > 0) {
-      const parsed = Number(value.trim().replace(/,/g, "."));
-      return Number.isFinite(parsed) ? parsed : undefined;
-    }
-    return undefined;
-  }, z.number().min(min));
-
-const optionalNullableString = z
-  .union([z.string().trim().max(160), z.literal(""), z.null()])
-  .optional()
-  .transform((value) => {
-    if (typeof value === "undefined") return undefined;
-    if (value === null) return null;
-    const normalized = value.trim();
-    return normalized.length > 0 ? normalized : null;
-  });
-
-const createCustomerSchema = z.object({
-  code: z.string().trim().min(1).max(40),
-  name: z.string().trim().min(1).max(160),
-  tradeName: optionalNullableString,
-  taxId: optionalNullableString,
-  email: optionalNullableString,
-  phone: optionalNullableString,
-  mobilePhone: optionalNullableString,
-  billingAddress: optionalNullableString,
-  city: optionalNullableString,
-  state: optionalNullableString,
-  countryCode: z.string().trim().length(2).optional(),
-  postalCode: optionalNullableString,
-  paymentTermId: z.union([z.number().int().positive(), z.literal(null)]).optional(),
-  paymentTermCode: z.union([z.string().trim().max(32), z.literal(null)]).optional(),
-  creditLimit: moneyField(0).default(0),
-  creditUsed: moneyField(0).optional(),
-  creditOnHold: moneyField(0).optional(),
-  creditStatus: z.enum(["ACTIVE", "ON_HOLD", "BLOCKED"]).optional(),
-  creditHoldReason: optionalNullableString,
-  isActive: z.boolean().optional(),
-  notes: optionalNullableString,
-});
+import { createCustomerSchema } from "@/lib/schemas/cxc";
+import { handleApiError, zodErrorResponse, createdResponse, successResponse } from "@/lib/api";
 
 const viewPermissions = [
   CXC_PERMISSIONS.MENU_VIEW,
@@ -84,16 +39,12 @@ export async function GET(request: NextRequest) {
   try {
     if (summary) {
       const items = await customerService.listSummaries({ search: search ?? undefined, limit });
-      return NextResponse.json({ items });
+      return successResponse({ items });
     }
     const items = await customerService.list({ search: search ?? undefined, includeInactive, limit });
-    return NextResponse.json({ items });
+    return successResponse({ items });
   } catch (error) {
-    console.error("GET /api/cxc/clientes", error);
-    return NextResponse.json(
-      { success: false, message: "No se pudieron obtener los clientes" },
-      { status: 500 },
-    );
+    return handleApiError(error, { operation: "GET /api/cxc/clientes" });
   }
 }
 
@@ -109,10 +60,7 @@ export async function POST(request: NextRequest) {
   const payload = await request.json().catch(() => null);
   const parsed = createCustomerSchema.safeParse(payload);
   if (!parsed.success) {
-    return NextResponse.json(
-      { success: false, message: "Datos inválidos", errors: parsed.error.flatten() },
-      { status: 400 },
-    );
+    return zodErrorResponse(parsed.error, "Datos de cliente inválidos");
   }
 
   const data = parsed.data;
@@ -142,17 +90,18 @@ export async function POST(request: NextRequest) {
       isActive: data.isActive,
       notes: data.notes ?? null,
     });
-    return NextResponse.json({ customer }, { status: 201 });
+    return createdResponse({ customer }, "Cliente creado exitosamente");
   } catch (error) {
-    console.error("POST /api/cxc/clientes", error);
-    const message = error instanceof Error ? error.message : "No se pudo crear el cliente";
-    const normalized = message.toLowerCase();
-    let status = 500;
-    if (normalized.includes("condición de pago")) {
-      status = 400;
-    } else if (normalized.includes("ya existe") && normalized.includes("cliente")) {
-      status = 409;
+    // Handle specific business errors with appropriate status codes
+    if (error instanceof Error) {
+      const message = error.message.toLowerCase();
+      if (message.includes("condición de pago")) {
+        return NextResponse.json({ success: false, message: error.message }, { status: 400 });
+      }
+      if (message.includes("ya existe") && message.includes("cliente")) {
+        return NextResponse.json({ success: false, message: error.message }, { status: 409 });
+      }
     }
-    return NextResponse.json({ success: false, message }, { status });
+    return handleApiError(error, { operation: "POST /api/cxc/clientes" });
   }
 }

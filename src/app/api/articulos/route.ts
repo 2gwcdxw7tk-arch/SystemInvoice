@@ -1,26 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import { requireAdministrator, requireSession } from "@/lib/auth/access";
 import { ArticleService } from "@/lib/services/ArticleService";
 import { ArticleRepository } from "@/lib/repositories/ArticleRepository";
-import { unitService } from "@/lib/services/UnitService"; // reemplaza helpers legacy
+import { unitService } from "@/lib/services/UnitService";
 import { inventoryService } from "@/lib/services/InventoryService";
+import { articleInputSchema } from "@/lib/schemas/articles";
+import { handleApiError, zodErrorResponse, createdResponse, successResponse } from "@/lib/api";
+import { notFoundError } from "@/lib/errors";
 
 const articleService = new ArticleService(new ArticleRepository());
-
-const articleInputSchema = z.object({
-  article_code: z.string().trim().min(1).max(40),
-  name: z.string().trim().min(1).max(200),
-  classification_full_code: z.string().trim().max(24).nullable().optional(),
-  storage_unit_id: z.number().int().positive(),
-  retail_unit_id: z.number().int().positive(),
-  conversion_factor: z.number().positive(),
-  article_type: z.enum(["TERMINADO", "KIT"]),
-  default_warehouse_id: z.number().int().positive().nullable().optional(),
-  classification_level1_id: z.number().int().positive().nullable().optional(),
-  classification_level2_id: z.number().int().positive().nullable().optional(),
-  classification_level3_id: z.number().int().positive().nullable().optional(),
-});
 
 export async function GET(request: NextRequest) {
   const sessionResult = await requireSession(request);
@@ -34,13 +22,21 @@ export async function GET(request: NextRequest) {
   const include_units = searchParams.get("include_units") === "1";
   const search = searchParams.get("search") || undefined;
   const warehouse_code = searchParams.get("warehouse_code")?.trim()?.toUpperCase() || undefined;
+
   try {
+    // Single article lookup
     if (article_code) {
       const item = await articleService.getArticleByCode(article_code);
-      if (!item) return NextResponse.json({ success: false, message: "Artículo no encontrado" }, { status: 404 });
-      return NextResponse.json({ item });
+      if (!item) {
+        throw notFoundError("Artículo");
+      }
+      return successResponse({ item });
     }
+
+    // List articles
     const data = await articleService.getArticles({ price_list_code, unit, on_date, search });
+
+    // Optional stock lookup
     let stockMap: Record<string, number> | undefined;
     if (warehouse_code) {
       try {
@@ -55,17 +51,20 @@ export async function GET(request: NextRequest) {
           }, {});
         }
       } catch (error) {
+        // Log but don't fail the request
         console.error("GET /api/articulos stock lookup error", error);
       }
     }
+
+    // Include units if requested
     if (include_units) {
       const units = await unitService.listUnits();
-      return NextResponse.json(stockMap ? { items: data, units, stock: stockMap } : { items: data, units });
+      return successResponse(stockMap ? { items: data, units, stock: stockMap } : { items: data, units });
     }
-    return NextResponse.json(stockMap ? { items: data, stock: stockMap } : { items: data });
+
+    return successResponse(stockMap ? { items: data, stock: stockMap } : { items: data });
   } catch (error) {
-    console.error("GET /api/articulos error", error);
-    return NextResponse.json({ success: false, message: "No se pudo recuperar artículos" }, { status: 500 });
+    return handleApiError(error, { operation: "GET /api/articulos" });
   }
 }
 
@@ -76,14 +75,14 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
   const parsed = articleInputSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ success: false, message: "Datos inválidos", errors: parsed.error.flatten() }, { status: 400 });
+    return zodErrorResponse(parsed.error, "Datos de artículo inválidos");
   }
+
   try {
     const result = await articleService.upsertArticle(parsed.data);
-    return NextResponse.json({ id: result.id }, { status: 201 });
+    return createdResponse({ id: result.id }, "Artículo guardado exitosamente");
   } catch (error) {
-    console.error("POST /api/articulos error", error);
-    return NextResponse.json({ success: false, message: "No se pudo guardar artículo" }, { status: 500 });
+    return handleApiError(error, { operation: "POST /api/articulos" });
   }
 }
 
@@ -93,13 +92,18 @@ export async function DELETE(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const article_code = searchParams.get("article_code");
-  if (!article_code) return NextResponse.json({ success: false, message: "Falta article_code" }, { status: 400 });
+
+  if (!article_code) {
+    return NextResponse.json({ success: false, message: "Falta article_code" }, { status: 400 });
+  }
+
   try {
     const res = await articleService.deleteArticle(article_code);
-    if (!res.deleted) return NextResponse.json({ success: false, message: "Artículo no encontrado" }, { status: 404 });
-    return NextResponse.json({ success: true });
+    if (!res.deleted) {
+      throw notFoundError("Artículo");
+    }
+    return successResponse(undefined, "Artículo eliminado");
   } catch (error) {
-    console.error("DELETE /api/articulos error", error);
-    return NextResponse.json({ success: false, message: "No se pudo eliminar artículo" }, { status: 500 });
+    return handleApiError(error, { operation: "DELETE /api/articulos" });
   }
 }
