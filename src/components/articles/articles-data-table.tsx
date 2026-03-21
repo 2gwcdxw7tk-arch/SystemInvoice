@@ -144,10 +144,12 @@ export function ArticlesDataTable({ initialArticles, units, initialClassificatio
       }
 
       if (!res.ok) throw new Error("No se pudo cargar artículo");
-      const data = (await res.json()) as { item?: Article };
+      const json = (await res.json()) as { success?: boolean; data?: { item?: Article }; item?: Article };
 
-      if (data.item) {
-        await setupForm(data.item);
+      // Handle both response formats: { data: { item } } or { item }
+      const item = json.data?.item ?? json.item;
+      if (item) {
+        await setupForm(item);
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {

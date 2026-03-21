@@ -75,10 +75,10 @@ type CashRegisterCreateInputWithDefault = Prisma.cash_registersCreateInput & {
 
 type CashRegisterUpdateInputWithDefault = Prisma.cash_registersUpdateInput & {
   default_customer?:
-    | { disconnect: true }
-    | {
-        connect: { id: number | bigint };
-      };
+  | { disconnect: true }
+  | {
+    connect: { id: number | bigint };
+  };
 };
 
 const defaultCustomerSelect = {
@@ -364,11 +364,11 @@ function mapRegisterToRecord(register: CashRegisterWithWarehouse): CashRegisterR
     invoiceSequenceName: register.sequence_definitions?.name ?? null,
     defaultCustomer: register.default_customer
       ? {
-          id: Number(register.default_customer.id),
-          code: register.default_customer.code,
-          name: register.default_customer.name,
-          paymentTermCode: register.default_customer.payment_terms?.code ?? null,
-        }
+        id: Number(register.default_customer.id),
+        code: register.default_customer.code,
+        name: register.default_customer.name,
+        paymentTermCode: register.default_customer.payment_terms?.code ?? null,
+      }
       : null,
   } satisfies CashRegisterRecord;
 }
@@ -419,11 +419,11 @@ function mapSessionToRecord(session: CashRegisterSessionWithRelations & { is_def
       isDefault: !!session.is_default,
       defaultCustomer: session.cash_registers?.default_customer
         ? {
-            id: Number(session.cash_registers.default_customer.id),
-            code: session.cash_registers.default_customer.code,
-            name: session.cash_registers.default_customer.name,
-            paymentTermCode: session.cash_registers.default_customer.payment_terms?.code ?? null,
-          }
+          id: Number(session.cash_registers.default_customer.id),
+          code: session.cash_registers.default_customer.code,
+          name: session.cash_registers.default_customer.name,
+          paymentTermCode: session.cash_registers.default_customer.payment_terms?.code ?? null,
+        }
         : null,
     },
     invoiceSequenceStart: session.invoice_sequence_start ?? null,
@@ -951,11 +951,11 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           isDefault: assignment.is_default,
           defaultCustomer: assignment.cash_registers!.default_customer
             ? {
-                id: Number(assignment.cash_registers!.default_customer!.id),
-                code: assignment.cash_registers!.default_customer!.code,
-                name: assignment.cash_registers!.default_customer!.name,
-                paymentTermCode: assignment.cash_registers!.default_customer!.payment_terms?.code ?? null,
-              }
+              id: Number(assignment.cash_registers!.default_customer!.id),
+              code: assignment.cash_registers!.default_customer!.code,
+              name: assignment.cash_registers!.default_customer!.name,
+              paymentTermCode: assignment.cash_registers!.default_customer!.payment_terms?.code ?? null,
+            }
             : null,
         }));
     } catch (error) {
@@ -996,7 +996,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
           },
         },
         orderBy: [{ admin_user_id: "asc" }, { is_default: "desc" }, { cash_registers: { code: "asc" } }],
-      });
+      }) as unknown as CashRegisterUserWithRelations[];
 
       if (shouldIncludeDefault) {
         this.defaultCustomerRelationSupported = true;
@@ -1024,11 +1024,11 @@ export class CashRegisterRepository implements ICashRegisterRepository {
         isDefault: assignment.is_default,
         defaultCustomer: assignment.cash_registers.default_customer
           ? {
-              id: Number(assignment.cash_registers.default_customer.id),
-              code: assignment.cash_registers.default_customer.code,
-              name: assignment.cash_registers.default_customer.name,
-              paymentTermCode: assignment.cash_registers.default_customer.payment_terms?.code ?? null,
-            }
+            id: Number(assignment.cash_registers.default_customer.id),
+            code: assignment.cash_registers.default_customer.code,
+            name: assignment.cash_registers.default_customer.name,
+            paymentTermCode: assignment.cash_registers.default_customer.payment_terms?.code ?? null,
+          }
           : null,
       };
 
@@ -1516,7 +1516,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
                 ),
               },
             },
-          });
+          }) as unknown as CashRegisterSessionWithRelations | null;
         } else {
           sessionToClose = await tx.cash_register_sessions.findFirst({
             where: { admin_user_id: adminUserId, status: "OPEN" },
@@ -1533,7 +1533,7 @@ export class CashRegisterRepository implements ICashRegisterRepository {
               },
             },
             orderBy: { opening_at: "desc" },
-          });
+          }) as unknown as CashRegisterSessionWithRelations | null;
         }
 
         if (sessionToClose && !shouldIncludeDefault && sessionToClose.cash_registers) {
